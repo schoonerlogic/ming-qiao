@@ -354,6 +354,14 @@ impl Indexer {
             .collect()
     }
 
+    /// Get all messages sent to an agent.
+    pub fn get_messages_to_agent(&self, agent_id: &str) -> Vec<&Message> {
+        self.messages
+            .values()
+            .filter(|m| &m.to == agent_id || m.to == "all")
+            .collect()
+    }
+
     /// Get all decisions.
     pub fn get_decisions(&self) -> Vec<&Decision> {
         self.decisions.values().collect()
@@ -367,5 +375,30 @@ impl Indexer {
     /// Get an agent by ID.
     pub fn get_agent(&self, id: &str) -> Option<&Agent> {
         self.agents.get(id)
+    }
+
+    /// Get all threads.
+    pub fn get_all_threads(&self) -> Vec<&Thread> {
+        self.threads.values().collect()
+    }
+
+    /// Get a message by ID.
+    pub fn get_message(&self, id: &str) -> Option<&Message> {
+        self.messages.get(id)
+    }
+
+    /// Get a decision by ID.
+    pub fn get_decision(&self, id: &str) -> Option<&Decision> {
+        self.decisions.get(id)
+    }
+
+    /// Get an artifact by ID.
+    pub fn get_artifact(&self, id: &str) -> Option<&Artifact> {
+        self.artifacts.get(id)
+    }
+
+    /// Get all artifacts.
+    pub fn get_all_artifacts(&self) -> Vec<&Artifact> {
+        self.artifacts.values().collect()
     }
 }

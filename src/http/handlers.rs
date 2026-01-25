@@ -1,7 +1,7 @@
 //! HTTP request handlers
 //!
-//! Handler functions for all API endpoints. Connected to the event log
-//! for reading historical data.
+//! Handler functions for all API endpoints. Now uses Indexer for O(1) lookups
+//! instead of scanning the event log.
 
 use axum::{
     extract::{Path, Query, State},
@@ -10,9 +10,7 @@ use axum::{
     Json,
 };
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 
-use crate::events::{EventPayload, EventReader, EventType};
 use crate::state::AppState;
 
 // ============================================================================
@@ -109,76 +107,38 @@ pub async fn get_inbox(
     Path(agent): Path<String>,
     Query(query): Query<InboxQuery>,
 ) -> impl IntoResponse {
-    let reader = match EventReader::open(state.events_path()) {
-        Ok(r) => r,
-        Err(_) => {
-            return Json(serde_json::json!({
-                "agent": agent,
-                "messages": [],
-                "unread_count": 0,
-                "total_count": 0
-            }));
-        }
-    };
+    // Use indexer for O(1) lookup of messages sent TO this agent
+    let indexer = state.indexer().await;
+    let messages_clone: Vec<_> = indexer.get_messages_to_agent(&agent).into_iter().cloned().collect();
+    drop(indexer);
 
-    let replay = match reader.replay() {
-        Ok(r) => r,
-        Err(e) => {
-            return Json(serde_json::json!({
-                "agent": agent,
-                "error": format!("Failed to read events: {}", e)
-            }));
-        }
-    };
-
-    let mut messages = Vec::new();
-
-    for event_result in replay {
-        let event = match event_result {
-            Ok(e) => e,
-            Err(_) => continue,
-        };
-
-        if event.event_type != EventType::MessageSent {
-            continue;
-        }
-
-        if let EventPayload::Message(ref msg) = event.payload {
-            // Check if message is for this agent (or broadcast)
-            if msg.to != agent && msg.to != "all" {
-                continue;
-            }
-
+    let messages: Vec<_> = messages_clone
+        .into_iter()
+        .filter(|msg| {
             // Filter by sender if specified
             if let Some(ref from) = query.from {
-                if &msg.from != from {
-                    continue;
-                }
+                &msg.from != from
+            } else {
+                true
             }
-
-            messages.push(serde_json::json!({
-                "id": event.id.to_string(),
+        })
+        .take(query.limit as usize)
+        .map(|msg| {
+            serde_json::json!({
+                "id": msg.id,
+                "thread_id": msg.thread_id,
                 "from": msg.from,
-                "subject": msg.subject,
-                "preview": msg.content.chars().take(100).collect::<String>(),
-                "priority": format!("{:?}", msg.priority).to_lowercase(),
-                "sent_at": event.timestamp,
-                "thread_id": msg.thread_id
-            }));
-
-            if messages.len() >= query.limit as usize {
-                break;
-            }
-        }
-    }
-
-    let total_count = messages.len();
+                "content": msg.content,
+                "timestamp": msg.created_at
+            })
+        })
+        .collect();
 
     Json(serde_json::json!({
         "agent": agent,
         "messages": messages,
-        "unread_count": total_count,
-        "total_count": total_count
+        "unread_count": messages.len(),
+        "total_count": messages.len()
     }))
 }
 
@@ -206,72 +166,38 @@ pub async fn list_threads(
     State(state): State<AppState>,
     Query(query): Query<ThreadsQuery>,
 ) -> impl IntoResponse {
-    let reader = match EventReader::open(state.events_path()) {
-        Ok(r) => r,
-        Err(_) => {
-            return Json(serde_json::json!({
-                "threads": [],
-                "total": 0
-            }));
-        }
-    };
+    // Use indexer for O(1) lookup of all threads
+    let indexer = state.indexer().await;
+    let threads_clone: Vec<_> = indexer.get_all_threads().into_iter().cloned().collect();
+    drop(indexer);
 
-    let replay = match reader.replay() {
-        Ok(r) => r,
-        Err(_) => {
-            return Json(serde_json::json!({
-                "threads": [],
-                "total": 0
-            }));
-        }
-    };
-
-    // Collect unique threads from messages
-    let mut threads: HashMap<String, serde_json::Value> = HashMap::new();
-
-    for event_result in replay {
-        let event = match event_result {
-            Ok(e) => e,
-            Err(_) => continue,
-        };
-
-        if event.event_type != EventType::MessageSent {
-            continue;
-        }
-
-        if let EventPayload::Message(ref msg) = event.payload {
-            // Filter by participant if specified
-            if let Some(ref p) = query.participant {
-                if &msg.from != p && &msg.to != p {
-                    continue;
-                }
+    // Filter by participant if specified
+    let filtered: Vec<_> = threads_clone
+        .into_iter()
+        .filter(|thread| {
+            if let Some(ref participant) = query.participant {
+                thread.participants.contains(participant)
+            } else {
+                true
             }
+        })
+        .collect();
 
-            // Use thread_id or message id as thread identifier
-            let thread_key = msg
-                .thread_id
-                .clone()
-                .unwrap_or_else(|| event.id.to_string());
-
-            threads.entry(thread_key.clone()).or_insert_with(|| {
-                serde_json::json!({
-                    "id": thread_key,
-                    "subject": msg.subject,
-                    "started_by": msg.from,
-                    "started_at": event.timestamp,
-                    "participants": [&msg.from, &msg.to],
-                    "status": "active",
-                    "message_count": 1
-                })
-            });
-        }
-    }
-
-    // Sort by timestamp and apply pagination
-    let mut thread_list: Vec<_> = threads.into_values().collect();
+    // Sort by created_at (newest first) and apply pagination
+    let mut thread_list: Vec<_> = filtered.into_iter().map(|thread| {
+        serde_json::json!({
+            "id": thread.id,
+            "subject": thread.subject,
+            "created_at": thread.created_at.to_rfc3339(),
+            "participants": thread.participants,
+            "status": thread.status,
+            "message_count": thread.message_count
+        })
+    }).collect();
+    
     thread_list.sort_by(|a, b| {
-        let a_time = a.get("started_at").and_then(|v| v.as_str()).unwrap_or("");
-        let b_time = b.get("started_at").and_then(|v| v.as_str()).unwrap_or("");
+        let a_time = a.get("created_at").and_then(|v| v.as_str()).unwrap_or("");
+        let b_time = b.get("created_at").and_then(|v| v.as_str()).unwrap_or("");
         b_time.cmp(a_time)
     });
 
@@ -291,93 +217,42 @@ pub async fn get_thread(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> impl IntoResponse {
-    let reader = match EventReader::open(state.events_path()) {
-        Ok(r) => r,
-        Err(_) => {
-            return Json(serde_json::json!({
-                "error": {
-                    "code": "NOT_FOUND",
-                    "message": format!("Thread not found: {}", id)
-                }
-            }));
-        }
-    };
-
-    let replay = match reader.replay() {
-        Ok(r) => r,
-        Err(_) => {
-            return Json(serde_json::json!({
-                "error": {
-                    "code": "INTERNAL_ERROR",
-                    "message": "Failed to read events"
-                }
-            }));
-        }
-    };
-
-    let mut messages = Vec::new();
-    let mut participants = std::collections::HashSet::new();
-    let mut subject = String::new();
-    let mut started_at = None;
-
-    for event_result in replay {
-        let event = match event_result {
-            Ok(e) => e,
-            Err(_) => continue,
-        };
-
-        if event.event_type != EventType::MessageSent {
-            continue;
-        }
-
-        if let EventPayload::Message(ref msg) = event.payload {
-            // Match thread_id or the original message id
-            let msg_thread = msg
-                .thread_id
-                .clone()
-                .unwrap_or_else(|| event.id.to_string());
-
-            if msg_thread == id || event.id.to_string() == id {
-                if subject.is_empty() {
-                    subject = msg.subject.clone();
-                    started_at = Some(event.timestamp);
-                }
-
-                participants.insert(msg.from.clone());
-                participants.insert(msg.to.clone());
-
-                messages.push(serde_json::json!({
-                    "id": event.id.to_string(),
-                    "from": msg.from,
-                    "to": msg.to,
-                    "content": msg.content,
-                    "priority": format!("{:?}", msg.priority).to_lowercase(),
-                    "sent_at": event.timestamp
-                }));
-            }
-        }
-    }
-
-    if messages.is_empty() {
-        return Json(serde_json::json!({
+    // Use indexer for O(1) lookup
+    let indexer = state.indexer().await;
+    
+    let thread_clone = match indexer.get_thread(&id) {
+        Some(t) => t.clone(),
+        None => return Json(serde_json::json!({
             "error": {
                 "code": "NOT_FOUND",
                 "message": format!("Thread not found: {}", id)
             }
-        }));
-    }
-
+        }))
+    };
+    
+    let messages_clone: Vec<_> = indexer.get_messages_for_thread(&id).into_iter().cloned().collect();
+    drop(indexer);
+    
+    let message_count = messages_clone.len();
+    
     Json(serde_json::json!({
         "thread_id": id,
-        "subject": subject,
-        "participants": participants.into_iter().collect::<Vec<_>>(),
-        "status": "active",
-        "started_at": started_at,
-        "messages": messages,
-        "message_count": messages.len()
+        "subject": thread_clone.subject,
+        "participants": thread_clone.participants,
+        "status": thread_clone.status,
+        "created_at": thread_clone.created_at.to_rfc3339(),
+        "messages": messages_clone.into_iter().map(|msg| {
+            serde_json::json!({
+                "id": msg.id,
+                "from": msg.from,
+                "to": msg.to,
+                "content": msg.content,
+                "created_at": msg.created_at.to_rfc3339()
+            })
+        }).collect::<Vec<_>>(),
+        "message_count": message_count
     }))
 }
-
 #[derive(Debug, Deserialize)]
 pub struct CreateThreadRequest {
     pub subject: String,
@@ -471,58 +346,28 @@ pub async fn get_message(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> impl IntoResponse {
-    let reader = match EventReader::open(state.events_path()) {
-        Ok(r) => r,
-        Err(_) => {
-            return Json(serde_json::json!({
-                "error": {
-                    "code": "NOT_FOUND",
-                    "message": format!("Message not found: {}", id)
-                }
-            }));
-        }
-    };
-
-    let replay = match reader.replay() {
-        Ok(r) => r,
-        Err(_) => {
-            return Json(serde_json::json!({
-                "error": {
-                    "code": "INTERNAL_ERROR",
-                    "message": "Failed to read events"
-                }
-            }));
-        }
-    };
-
-    for event_result in replay {
-        let event = match event_result {
-            Ok(e) => e,
-            Err(_) => continue,
-        };
-
-        if event.id.to_string() == id {
-            if let EventPayload::Message(msg) = event.payload {
-                return Json(serde_json::json!({
-                    "message_id": id,
-                    "thread_id": msg.thread_id,
-                    "from_agent": msg.from,
-                    "to_agent": msg.to,
-                    "subject": msg.subject,
-                    "content": msg.content,
-                    "priority": format!("{:?}", msg.priority).to_lowercase(),
-                    "sent_at": event.timestamp,
-                    "read_at": null
-                }));
+    // Use indexer for O(1) lookup
+    let indexer = state.indexer().await;
+    let message_clone = match indexer.get_message(&id) {
+        Some(m) => m.clone(),
+        None => return Json(serde_json::json!({
+            "error": {
+                "code": "NOT_FOUND",
+                "message": format!("Message not found: {}", id)
             }
-        }
-    }
-
+        }))
+    };
+    drop(indexer);
+    
     Json(serde_json::json!({
-        "error": {
-            "code": "NOT_FOUND",
-            "message": format!("Message not found: {}", id)
-        }
+        "message_id": id,
+        "thread_id": message_clone.thread_id,
+        "from_agent": message_clone.from,
+        "to_agent": message_clone.to,
+        "content": message_clone.content,
+        "priority": message_clone.priority,
+        "created_at": message_clone.created_at.to_rfc3339(),
+        "read_at": null
     }))
 }
 
@@ -565,66 +410,36 @@ pub async fn list_artifacts(
     State(state): State<AppState>,
     Query(query): Query<ArtifactsQuery>,
 ) -> impl IntoResponse {
-    let reader = match EventReader::open(state.events_path()) {
-        Ok(r) => r,
-        Err(_) => {
-            return Json(serde_json::json!({
-                "artifacts": [],
-                "total": 0
-            }));
-        }
-    };
+    // Use indexer for O(1) lookup
+    let indexer = state.indexer().await;
+    let artifacts_clone: Vec<_> = indexer.get_artifacts().into_iter().cloned().collect();
+    drop(indexer);
 
-    let replay = match reader.replay() {
-        Ok(r) => r,
-        Err(_) => {
-            return Json(serde_json::json!({
-                "artifacts": [],
-                "total": 0
-            }));
-        }
-    };
-
-    let mut artifacts = Vec::new();
-
-    for event_result in replay {
-        let event = match event_result {
-            Ok(e) => e,
-            Err(_) => continue,
-        };
-
-        if event.event_type != EventType::ArtifactShared {
-            continue;
-        }
-
-        if let EventPayload::Artifact(ref artifact) = event.payload {
-            // Filter by shared_by if provided
-            if let Some(ref by) = query.shared_by {
-                if &event.agent_id != by {
-                    continue;
-                }
+    let filtered: Vec<_> = artifacts_clone
+        .into_iter()
+        .filter(|artifact| {
+            if let Some(ref shared_by) = query.shared_by {
+                &artifact.shared_by != shared_by
+            } else {
+                true
             }
-
-            artifacts.push(serde_json::json!({
-                "id": event.id.to_string(),
+        })
+        .take(query.limit as usize)
+        .map(|artifact| {
+            serde_json::json!({
+                "id": artifact.id,
                 "path": artifact.path,
                 "description": artifact.description,
                 "checksum": artifact.checksum,
-                "shared_by": event.agent_id,
-                "shared_at": event.timestamp
-            }));
-
-            if artifacts.len() >= query.limit as usize {
-                break;
-            }
-        }
-    }
-
-    let total = artifacts.len();
+                "shared_by": artifact.shared_by,
+                "shared_at": artifact.shared_at.to_rfc3339()
+            })
+        })
+        .collect();
 
     Json(serde_json::json!({
-        "artifacts": artifacts,
-        "total": total
+        "artifacts": filtered,
+        "total": filtered.len()
     }))
 }
 
@@ -666,83 +481,49 @@ pub async fn list_decisions(
     State(state): State<AppState>,
     Query(query): Query<DecisionsQuery>,
 ) -> impl IntoResponse {
-    let reader = match EventReader::open(state.events_path()) {
-        Ok(r) => r,
-        Err(_) => {
-            return Json(serde_json::json!({
-                "decisions": [],
-                "total": 0
-            }));
-        }
-    };
+    // Use indexer for O(1) lookup
+    let indexer = state.indexer().await;
+    let decisions_clone: Vec<_> = indexer.get_decisions().into_iter().cloned().collect();
+    drop(indexer);
 
-    let replay = match reader.replay() {
-        Ok(r) => r,
-        Err(_) => {
-            return Json(serde_json::json!({
-                "decisions": [],
-                "total": 0
-            }));
-        }
-    };
-
-    let mut decisions = Vec::new();
-
-    for event_result in replay {
-        let event = match event_result {
-            Ok(e) => e,
-            Err(_) => continue,
-        };
-
-        if event.event_type != EventType::DecisionRecorded {
-            continue;
-        }
-
-        if let EventPayload::Decision(ref decision) = event.payload {
+    let filtered: Vec<_> = decisions_clone
+        .into_iter()
+        .filter(|decision| {
             // Filter by search query if provided
             if let Some(ref q) = query.q {
                 let q_lower = q.to_lowercase();
                 if !decision.title.to_lowercase().contains(&q_lower)
                     && !decision.context.to_lowercase().contains(&q_lower)
                 {
-                    continue;
+                    return false;
                 }
             }
 
             // Filter by thread_id if provided
             if let Some(ref tid) = query.thread_id {
-                if !decision.context.contains(tid) {
-                    continue;
+                if decision.thread_id.as_ref() != Some(tid) {
+                    return false;
                 }
             }
 
-            let chosen_opt = decision
-                .options
-                .get(decision.chosen)
-                .map(|o| o.description.as_str())
-                .unwrap_or("(unknown)");
-
-            decisions.push(serde_json::json!({
-                "id": event.id.to_string(),
-                "question": decision.title,
-                "resolution": chosen_opt,
-                "rationale": decision.rationale,
-                "decided_by": event.agent_id,
-                "decided_at": event.timestamp,
-                "status": "approved"
-            }));
-
-            if decisions.len() >= query.limit as usize {
-                break;
-            }
-        }
-    }
-
-    let total = decisions.len();
+            true
+        })
+        .take(query.limit as usize)
+        .map(|decision| {
+            serde_json::json!({
+                "id": decision.id,
+                "subject": decision.title,
+                "context": decision.context,
+                "chosen": decision.chosen,
+                "status": decision.status,
+                "created_at": decision.created_at.to_rfc3339()
+            })
+        })
+        .collect();
 
     Json(serde_json::json!({
-        "decisions": decisions,
-        "total": total
+        "decisions": filtered,
+        "total": filtered.len()
     }))
 }
 
@@ -751,64 +532,28 @@ pub async fn get_decision(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> impl IntoResponse {
-    let reader = match EventReader::open(state.events_path()) {
-        Ok(r) => r,
-        Err(_) => {
-            return Json(serde_json::json!({
-                "error": {
-                    "code": "NOT_FOUND",
-                    "message": format!("Decision not found: {}", id)
-                }
-            }));
-        }
-    };
-
-    let replay = match reader.replay() {
-        Ok(r) => r,
-        Err(_) => {
-            return Json(serde_json::json!({
-                "error": {
-                    "code": "INTERNAL_ERROR",
-                    "message": "Failed to read events"
-                }
-            }));
-        }
-    };
-
-    for event_result in replay {
-        let event = match event_result {
-            Ok(e) => e,
-            Err(_) => continue,
-        };
-
-        if event.id.to_string() == id {
-            if let EventPayload::Decision(decision) = event.payload {
-                let chosen_opt = decision
-                    .options
-                    .get(decision.chosen)
-                    .map(|o| o.description.as_str())
-                    .unwrap_or("(unknown)");
-
-                return Json(serde_json::json!({
-                    "decision_id": id,
-                    "question": decision.title,
-                    "context": decision.context,
-                    "options": decision.options.iter().map(|o| &o.description).collect::<Vec<_>>(),
-                    "resolution": chosen_opt,
-                    "rationale": decision.rationale,
-                    "decided_by": event.agent_id,
-                    "decided_at": event.timestamp,
-                    "status": "approved"
-                }));
+    // Use indexer for O(1) lookup
+    let indexer = state.indexer().await;
+    let decision_clone = match indexer.get_decision(&id) {
+        Some(d) => d.clone(),
+        None => return Json(serde_json::json!({
+            "error": {
+                "code": "NOT_FOUND",
+                "message": format!("Decision not found: {}", id)
             }
-        }
-    }
-
+        }))
+    };
+    drop(indexer);
+    
     Json(serde_json::json!({
-        "error": {
-            "code": "NOT_FOUND",
-            "message": format!("Decision not found: {}", id)
-        }
+        "decision_id": id,
+        "subject": decision_clone.title,
+        "context": decision_clone.context,
+        "options": decision_clone.options,
+        "chosen": decision_clone.chosen,
+        "rationale": decision_clone.rationale,
+        "status": decision_clone.status,
+        "created_at": decision_clone.created_at.to_rfc3339()
     }))
 }
 

@@ -1,0 +1,31 @@
+# Ming-Qiao Configuration
+# Copy this file to ming-qiao.toml and customize as needed.
+
+# Observation mode for Merlin oversight
+# Options: "passive", "advisory", "gated"
+#   passive  - All messages flow freely. Events logged. Merlin reviews async.
+#   advisory - Merlin notified on triggers (keywords, priority, decision type). No blocking.
+#   gated    - Certain actions require Merlin approval before proceeding.
+mode = "passive"
+
+# Data directory for event log and artifacts
+data_dir = "data"
+
+# HTTP server port
+port = 7777
+
+# Notification triggers for advisory mode
+[notify_on]
+# Priority levels that trigger notification
+priority = ["high", "critical"]
+
+# Keywords in messages that trigger notification
+keywords = ["breaking change", "security", "blocked"]
+
+# Decision types that trigger notification
+decision_type = ["architectural"]
+
+# Gating rules for gated mode
+[gate]
+# Decision types that require Merlin approval
+decision_type = ["architectural", "external"]

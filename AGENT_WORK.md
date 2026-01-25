@@ -1,6 +1,6 @@
 # Agent Work Coordination — Ming-Qiao
 
-**Last Updated:** 2026-01-25T12:30:00Z  
+**Last Updated:** 2026-01-25T13:45:00Z  
 **Updated By:** aleph
 
 ---
@@ -9,21 +9,23 @@
 
 ### Aleph
 
-- **Task:** Integration — MCP and HTTP connected to event persistence
+- **Task:** Waiting on Luban's Task 005, then end-to-end testing
 - **Branch:** main
-- **Files:** src/mcp/tools.rs, src/http/handlers.rs
-- **Status:** Completed — All tools and handlers connected to event log
-- **Completed:** 2026-01-25T12:30:00Z
-- **Next:** WebSocket real-time updates or database indexer
+- **Files:** —
+- **Status:** Blocked — Build fails until Luban completes indexer integration
+- **Blocked on:** Luban's Task 005 (indexer field not initialized in AppState)
+- **Next:** Test MCP server end-to-end once build passes
 
 ### Luban
 
-- **Task:** Database Indexer
-- **Branch:** agent/luban/main/database-indexer
-- **Files:** src/db/indexer.rs, src/db/state.rs, src/db/error.rs
-- **Status:** Blocked — compilation errors, needs fixes
-- **Assignment:** See tasks/004-database-indexer.md
-- **Previous:** Task 003 (Event Persistence) — ✅ APPROVED
+- **Task:** Indexer Integration
+- **Branch:** agent/luban/main/indexer-integration
+- **Files:** src/state/app_state.rs, src/http/handlers.rs, src/db/indexer.rs
+- **Status:** In progress — partial implementation (field added, constructor incomplete)
+- **Assignment:** See tasks/005-indexer-integration.md
+- **Questions asked:** Indexer initialization, error handling, state path, refresh frequency ✅ Answered
+- **Note:** Posted compilation error guidance to COUNCIL_CHAT.md at 13:45
+- **Previous:** Task 004 (Database Indexer) — ✅ APPROVED
 
 ### Thales
 

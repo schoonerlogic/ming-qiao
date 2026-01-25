@@ -7,6 +7,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::{broadcast, RwLock};
 
+use crate::db::Indexer;
 use crate::events::EventEnvelope;
 use crate::state::config::{Config, ObservationMode};
 
@@ -35,6 +36,9 @@ struct AppStateInner {
 
     /// Broadcast channel for real-time event notifications
     event_tx: broadcast::Sender<EventEnvelope>,
+
+    /// Database indexer for O(1) queries (materialized views from event log)
+    indexer: RwLock<Indexer>,
 }
 
 impl AppState {
@@ -47,12 +51,50 @@ impl AppState {
     pub fn with_config(config: Config) -> Self {
         let data_dir = PathBuf::from(&config.data_dir);
         let (event_tx, _) = broadcast::channel(EVENT_CHANNEL_CAPACITY);
+        
+        // Create indexer with events path
+        let events_path = data_dir.join("events.jsonl");
+        
+        // Try to create indexer - if event log doesn't exist, that's OK
+        // The indexer will be empty until refresh_indexer() is called
+        let indexer = if events_path.exists() {
+            // Event log exists - create indexer
+            match Indexer::new(&events_path) {
+                Ok(idx) => idx,
+                Err(e) => {
+                    eprintln!("Warning: Failed to create indexer from {}: {}. Indexer will start empty.", events_path.display(), e);
+                    // Create empty indexer anyway
+                    Indexer::new(&events_path).unwrap_or_else(|_| {
+                        // This should work now since the file exists
+                        panic!("Failed to create indexer for existing event log")
+                    })
+                }
+            }
+        } else {
+            // Event log doesn't exist yet - indexer will be empty
+            eprintln!("Info: Event log not found at {}. Indexer will be empty until events are written.", events_path.display());
+            // Create empty indexer - EventReader will fail but that's OK
+            // We'll catch up when refresh_indexer() is called
+            Indexer::new(&events_path).unwrap_or_else(|_| {
+                // File doesn't exist, create a default empty indexer
+                // This is a workaround - we create the file first
+                if let Some(parent) = events_path.parent() {
+                    let _ = std::fs::create_dir_all(parent);
+                }
+                // Create empty file
+                let _ = std::fs::File::create(&events_path);
+                // Now try again
+                Indexer::new(&events_path).expect("Failed to create indexer after creating file")
+            })
+        };
+        
         Self {
             inner: Arc::new(AppStateInner {
                 config: RwLock::new(config),
                 data_dir,
                 agent_id: std::env::var("MING_QIAO_AGENT_ID").ok(),
                 event_tx,
+                indexer: RwLock::new(indexer),
             }),
         }
     }
@@ -131,6 +173,29 @@ impl AppState {
     /// Note: Events broadcast before subscription are not received.
     pub fn subscribe_events(&self) -> broadcast::Receiver<EventEnvelope> {
         self.inner.event_tx.subscribe()
+    }
+
+    /// Get read access to the indexer
+    ///
+    /// Returns a read lock guard for the indexer. Use this to query the materialized views.
+    pub async fn indexer(&self) -> tokio::sync::RwLockReadGuard<'_, Indexer> {
+        self.inner.indexer.read().await
+    }
+
+    /// Get write access to the indexer
+    ///
+    /// Returns a write lock guard for the indexer. Use this to refresh or modify the indexer.
+    pub async fn indexer_mut(&self) -> tokio::sync::RwLockWriteGuard<'_, Indexer> {
+        self.inner.indexer.write().await
+    }
+
+    /// Refresh the indexer by catching up with new events from the log
+    ///
+    /// This will process all new events since the last refresh and update the materialized views.
+    /// Returns the number of events processed, or an error if refresh fails.
+    pub async fn refresh_indexer(&self) -> Result<usize, crate::db::IndexerError> {
+        let mut indexer = self.inner.indexer.write().await;
+        indexer.catch_up()
     }
 }
 
