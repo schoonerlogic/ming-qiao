@@ -1,6 +1,6 @@
 # Agent Work Coordination — Ming-Qiao
 
-**Last Updated:** 2026-01-24T14:30:00Z  
+**Last Updated:** 2026-01-25T12:30:00Z  
 **Updated By:** aleph
 
 ---
@@ -8,23 +8,25 @@
 ## Active Work
 
 ### Aleph
-- **Task:** Project scaffolding and Luban oversight
+
+- **Task:** Integration — MCP and HTTP connected to event persistence
 - **Branch:** main
-- **Files:** src/lib.rs, Cargo.toml, project structure
-- **Status:** Working
-- **Started:** 2026-01-24T14:00:00Z
+- **Files:** src/mcp/tools.rs, src/http/handlers.rs
+- **Status:** Completed — All tools and handlers connected to event log
+- **Completed:** 2026-01-25T12:30:00Z
+- **Next:** WebSocket real-time updates or database indexer
 
 ### Luban
-- **Task:** Event Schema Foundation
-- **Branch:** agent/luban/main/event-schema-foundation
-- **Files:** src/events/schema.rs, src/events/tests.rs
-- **Status:** ✅ READY FOR REVIEW
-- **Started:** 2026-01-24T14:30:00Z
-- **Completed:** 2026-01-24T15:28:00Z
-- **Assignment:** See tasks/001-event-schema-foundation.md
-- **Commits:** b21335f - feat(events): implement event schema foundation
+
+- **Task:** Database Indexer
+- **Branch:** agent/luban/main/database-indexer
+- **Files:** src/db/indexer.rs, src/db/state.rs, src/db/error.rs
+- **Status:** Blocked — compilation errors, needs fixes
+- **Assignment:** See tasks/004-database-indexer.md
+- **Previous:** Task 003 (Event Persistence) — ✅ APPROVED
 
 ### Thales
+
 - **Task:** Architecture documentation and agent coordination design
 - **Status:** Available (advisory role, no branch)
 - **Notes:** Created AGENTS.md, agent instruction sets, task templates
@@ -38,6 +40,15 @@
 - [x] Aleph: First task assignment to Luban
 - [x] Aleph: Project scaffolding (Cargo.toml, src/lib.rs, src/events/mod.rs)
 - [x] Luban: Event Schema Foundation implementation (14 tests passing)
+- [x] Aleph: Task 002 assignment to Luban (Database Models)
+- [x] Aleph: MCP server scaffolding (protocol, server, tools — 13 new tests)
+- [x] Luban: Database Models implementation (13 tests passing)
+- [x] Aleph: HTTP gateway scaffolding (routes, handlers, server — 5 new tests)
+- [x] Luban: Event Persistence Layer implementation (10 new tests passing)
+- [x] Aleph: Binary entry point (main.rs with serve/mcp-serve commands)
+- [x] Aleph: Shared state module (AppState, Config, ObservationMode)
+- [x] Aleph: Connected MCP tools to event persistence (8 tools implemented)
+- [x] Aleph: Connected HTTP handlers to event reader (7 endpoints implemented)
 
 ---
 
@@ -49,18 +60,24 @@ _No active blockers._
 
 ## Upcoming
 
-- [ ] MCP server scaffolding (Aleph, after Luban completes events)
-- [ ] Database models (Luban, after event schema approved)
-- [ ] HTTP gateway for Thales (Aleph)
-- [ ] Event persistence layer (Aleph + Luban)
+- [ ] Connect MCP tools to event log (Aleph)
+- [ ] Connect HTTP handlers to event log (Aleph)
+- [ ] Database indexer — event log to SurrealDB (Luban, after persistence)
+- [ ] WebSocket real-time updates (Aleph)
 
 ---
 
 ## Communication Log
 
-| Timestamp | From | To | Summary |
-|-----------|------|-----|---------|
+| Timestamp        | From  | To    | Summary                                |
+| ---------------- | ----- | ----- | -------------------------------------- |
 | 2026-01-24T14:30 | Aleph | Luban | Task assigned: Event Schema Foundation |
+| 2026-01-25T09:00 | Aleph | Luban | Task assigned: Database Models         |
+| 2026-01-25T10:20 | Luban | Aleph | Task 002 complete, ready for review    |
+| 2026-01-25T11:00 | Aleph | Luban | Task assigned: Event Persistence Layer |
+| 2026-01-25T11:30 | Luban | Aleph | Task 003 complete, ready for review    |
+| 2026-01-25T12:00 | Aleph | Luban | Task 003 approved                      |
+| 2026-01-25T12:45 | Aleph | Luban | Task assigned: Database Indexer        |
 
 ---
 
@@ -68,9 +85,9 @@ _No active blockers._
 
 _Decisions awaiting resolution:_
 
-| ID | Question | Proposed By | Assigned To | Status |
-|----|----------|-------------|-------------|--------|
-| — | — | — | — | — |
+| ID  | Question | Proposed By | Assigned To | Status |
+| --- | -------- | ----------- | ----------- | ------ |
+| —   | —        | —           | —           | —      |
 
 ---
 

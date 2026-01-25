@@ -1,0 +1,95 @@
+# Council Decision Trace - Reflection Extension
+#
+# Design principles:
+#   1. Light by default, detailed when needed
+#   2. Required fields force minimum useful signal
+#   3. Structure enables querying across traces
+
+reflection:
+  # REQUIRED
+  decisions_made:
+    required: true
+    min_items: 1
+    items:
+      choice:
+        type: string
+        description: "What was decided"
+      reasoning:
+        type: string
+        description: "Why this choice"
+      alternatives_considered:
+        type: array
+        items:
+          type: string
+
+  confidence:
+    required: true
+    properties:
+      level:
+        type: string
+        enum: [low, medium, high]
+      score:
+        type: integer
+        minimum: 0
+        maximum: 100
+      rationale:
+        type: string
+
+  # OPTIONAL - Detailed reflection
+  tensions_discovered:
+    required: false
+    items:
+      tension:
+        type: string
+      resolution:
+        type: string
+        enum: [resolved, workaround, accepted, deferred, unresolved]
+      details:
+        type: string
+      affects:
+        type: array
+        items:
+          type: string
+
+  layer_coverage:
+    required: false
+    properties:
+      unit:
+        type: string
+      component:
+        type: string
+      integration:
+        type: string
+      e2e:
+        type: string
+      gaps:
+        type: array
+        items:
+          type: string
+
+  unknowns_remaining:
+    required: false
+    items:
+      unknown:
+        type: string
+      impact:
+        type: string
+        enum: [blocking, degraded, cosmetic]
+      suggested_action:
+        type: string
+
+  assumptions_made:
+    required: false
+    items:
+      assumption:
+        type: string
+      validated:
+        type: boolean
+      risk_if_wrong:
+        type: string
+
+  # META
+  reflection_depth:
+    type: string
+    enum: [minimal, standard, detailed]
+    default: standard

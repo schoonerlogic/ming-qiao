@@ -1,0 +1,96 @@
+# Ming-Qiao Configuration
+# Copy to ming-qiao.toml and customize
+
+[server]
+# HTTP server settings
+host = "127.0.0.1"
+port = 7777
+
+# Path to static UI files (built Svelte app)
+ui_path = "ui/dist"
+
+[data]
+# Directory for all data files
+dir = "data"
+
+# Event log file (relative to data dir)
+events_file = "events.jsonl"
+
+# Artifacts directory (relative to data dir)
+artifacts_dir = "artifacts"
+
+# SurrealDB directory (relative to data dir)
+surreal_dir = "surreal"
+
+[agents]
+# Define known agents and their properties
+[agents.aleph]
+name = "Aleph"
+kind = "builder"
+color = "#22c55e"  # green
+
+[agents.thales]
+name = "Thales"
+kind = "architect"
+color = "#3b82f6"  # blue
+
+[agents.merlin]
+name = "Merlin"
+kind = "human"
+color = "#a855f7"  # purple
+
+[observation]
+# Observation mode: "passive", "advisory", or "gated"
+mode = "advisory"
+
+# Notification triggers (advisory and gated modes)
+[observation.notify_on]
+# Priority levels that trigger notification
+priority = ["high", "critical"]
+
+# Keywords in messages that trigger notification
+keywords = [
+    "breaking change",
+    "security",
+    "cost",
+    "deadline",
+    "blocked",
+    "help",
+    "urgent"
+]
+
+# Decision types that trigger notification
+decision_type = ["architectural"]
+
+# Gating rules (gated mode only)
+[observation.gate]
+# Decision types that require approval
+decision_type = ["architectural", "external"]
+
+# Actions that require approval
+actions = ["deploy", "delete", "publish"]
+
+[mediator]
+# Local LLM settings (optional)
+enabled = false
+
+# Ollama connection
+ollama_url = "http://localhost:11434"
+model = "llama3.1:8b"
+
+# Features to enable
+[mediator.features]
+summarize = true       # Summarize long threads
+extract_tags = true    # Extract keywords/tags
+classify_priority = true  # Suggest priority
+extract_decisions = false  # Auto-extract decisions (experimental)
+
+[logging]
+# Log level: "trace", "debug", "info", "warn", "error"
+level = "info"
+
+# Log to file (in addition to stdout)
+file = "logs/ming-qiao.log"
+
+# JSON format for structured logging
+json = false

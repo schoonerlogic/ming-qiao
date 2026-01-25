@@ -1,0 +1,42 @@
+# Council Configuration for ming-qiao
+
+version: "1.0.0"
+
+project:
+  name: "ming-qiao"
+  repo: "local:ming-qiao"
+
+domains:
+  - development
+  - research
+  - operations
+  - planning
+  - review
+
+defaults:
+  domain: development
+  reflection_depth: standard
+
+observability:
+  phoenix_enabled: false
+  phoenix_host: "http://localhost:6006"
+  otel_enabled: false
+  otel_endpoint: "http://localhost:4317"
+
+detailed_triggers:
+  - "New component or system"
+  - "Architectural decision"
+  - "Non-obvious debugging (>30 min)"
+  - "Work that will be handed off"
+  - "Cross-repo coordination"
+
+agents:
+  aleph:
+    role: builder
+    traces: detailed
+  luban:
+    role: assistant
+    traces: standard
+  thales:
+    role: architect
+    traces: detailed

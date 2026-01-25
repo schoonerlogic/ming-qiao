@@ -328,4 +328,426 @@ mod tests {
         assert!(json.contains("read_by"), "Should have read_by field");
         assert!(json.contains("created_at"), "Should have created_at field");
     }
+
+    // ========================================================================
+    // Indexer Tests
+    // ========================================================================
+
+    use crate::db::{Indexer, IndexerState};
+    use crate::events::{EventEnvelope, EventPayload, EventType};
+    use std::fs;
+    use tempfile::TempDir;
+
+    /// Helper: Create a test event log
+    fn create_test_log(events: &[EventEnvelope]) -> TempDir {
+        let temp_dir = TempDir::new().unwrap();
+        let log_path = temp_dir.path().join("events.jsonl");
+
+        let mut file = fs::File::create(&log_path).unwrap();
+        for event in events {
+            let json = serde_json::to_string(event).unwrap();
+            use std::io::Write;
+            writeln!(file, "{}", json).unwrap();
+        }
+
+        temp_dir
+    }
+
+    #[test]
+    fn test_indexer_new_empty_log() {
+        let temp_dir = TempDir::new().unwrap();
+        let log_path = temp_dir.path().join("events.jsonl");
+
+        // Create empty log
+        fs::File::create(&log_path).unwrap();
+
+        // Create indexer
+        let indexer = Indexer::new(&log_path).unwrap();
+
+        // Verify initial state
+        assert!(indexer.get_thread("test").is_none());
+        assert!(indexer.get_messages_for_thread("test").is_empty());
+        assert_eq!(indexer.state().events_processed, 0);
+    }
+
+    #[test]
+    fn test_indexer_process_message_event() {
+        use uuid::Uuid;
+
+        let event_id = Uuid::now_v7();
+        let event = EventEnvelope {
+            id: event_id,
+            timestamp: Utc::now(),
+            event_type: EventType::MessageSent,
+            agent_id: "aleph".to_string(),
+            payload: EventPayload::Message(crate::events::MessageEvent {
+                from: "aleph".to_string(),
+                to: "thales".to_string(),
+                subject: "Test Subject".to_string(),
+                content: "Test message".to_string(),
+                thread_id: None,
+                priority: Priority::Normal,
+            }),
+        };
+
+        let temp_dir = create_test_log(&[event.clone()]);
+        let log_path = temp_dir.path().join("events.jsonl");
+
+        let mut indexer = Indexer::new(&log_path).unwrap();
+        indexer.catch_up().unwrap();
+
+        // Verify thread was created
+        let thread = indexer.get_thread(&event_id.to_string());
+        assert!(thread.is_some());
+        let thread = thread.unwrap();
+        assert_eq!(thread.id, event_id.to_string());
+        assert_eq!(thread.subject, "Test Subject");
+        assert_eq!(thread.status, crate::db::ThreadStatus::Active);
+        assert_eq!(thread.message_count, 1);
+        assert!(thread.participants.contains(&"aleph".to_string()));
+        assert!(thread.participants.contains(&"thales".to_string()));
+
+        // Verify message was created
+        let messages = indexer.get_messages_for_thread(&event_id.to_string());
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].id, event_id.to_string());
+        assert_eq!(messages[0].from, "aleph");
+
+        // Verify agents were created
+        let aleph = indexer.get_agent("aleph");
+        assert!(aleph.is_some());
+        assert_eq!(aleph.unwrap().status, crate::events::AgentStatus::Available);
+    }
+
+    #[test]
+    fn test_indexer_process_artifact_event() {
+        use uuid::Uuid;
+
+        let event_id = Uuid::now_v7();
+        let event = EventEnvelope {
+            id: event_id,
+            timestamp: Utc::now(),
+            event_type: EventType::ArtifactShared,
+            agent_id: "luban".to_string(),
+            payload: EventPayload::Artifact(crate::events::ArtifactEvent {
+                path: "/files/design.pdf".to_string(),
+                description: "Architecture diagram".to_string(),
+                checksum: "abc123".to_string(),
+            }),
+        };
+
+        let temp_dir = create_test_log(&[event]);
+        let log_path = temp_dir.path().join("events.jsonl");
+
+        let mut indexer = Indexer::new(&log_path).unwrap();
+        indexer.catch_up().unwrap();
+
+        // Verify artifact was created
+        let artifacts = indexer.get_artifacts();
+        assert_eq!(artifacts.len(), 1);
+        assert_eq!(artifacts[0].id, event_id.to_string());
+        assert_eq!(artifacts[0].path, "/files/design.pdf");
+        assert_eq!(artifacts[0].description, "Architecture diagram");
+        assert_eq!(artifacts[0].shared_by, "luban");
+    }
+
+    #[test]
+    fn test_indexer_process_decision_event() {
+        use uuid::Uuid;
+
+        let event_id = Uuid::now_v7();
+        let event = EventEnvelope {
+            id: event_id,
+            timestamp: Utc::now(),
+            event_type: EventType::DecisionRecorded,
+            agent_id: "thales".to_string(),
+            payload: EventPayload::Decision(crate::events::DecisionEvent {
+                title: "Use Rust for implementation".to_string(),
+                context: "Performance and safety requirements".to_string(),
+                options: vec![crate::events::DecisionOption {
+                    description: "Rust".to_string(),
+                    pros: vec!["Performance".to_string()],
+                    cons: vec!["Learning curve".to_string()],
+                }],
+                chosen: 0,
+                rationale: "Best choice for performance".to_string(),
+            }),
+        };
+
+        let temp_dir = create_test_log(&[event]);
+        let log_path = temp_dir.path().join("events.jsonl");
+
+        let mut indexer = Indexer::new(&log_path).unwrap();
+        indexer.catch_up().unwrap();
+
+        // Verify decision was created
+        let decisions = indexer.get_decisions();
+        assert_eq!(decisions.len(), 1);
+        assert_eq!(decisions[0].id, event_id.to_string());
+        assert_eq!(decisions[0].title, "Use Rust for implementation");
+        assert_eq!(decisions[0].options.len(), 1);
+        assert_eq!(decisions[0].chosen, 0);
+        assert_eq!(decisions[0].status, crate::db::DecisionStatus::Pending);
+        assert_eq!(decisions[0].recorded_by, "thales");
+    }
+
+    #[test]
+    fn test_indexer_catch_up() {
+        use uuid::Uuid;
+
+        let event1_id = Uuid::now_v7();
+        let event2_id = Uuid::now_v7();
+        let events = vec![
+            EventEnvelope {
+                id: event1_id,
+                timestamp: Utc::now(),
+                event_type: EventType::MessageSent,
+                agent_id: "aleph".to_string(),
+                payload: EventPayload::Message(crate::events::MessageEvent {
+                    from: "aleph".to_string(),
+                    to: "luban".to_string(),
+                    subject: "Thread 1".to_string(),
+                    content: "First message".to_string(),
+                    thread_id: None,
+                    priority: Priority::Normal,
+                }),
+            },
+            EventEnvelope {
+                id: event2_id,
+                timestamp: Utc::now(),
+                event_type: EventType::ArtifactShared,
+                agent_id: "aleph".to_string(),
+                payload: EventPayload::Artifact(crate::events::ArtifactEvent {
+                    path: "/files/doc.txt".to_string(),
+                    description: "A document".to_string(),
+                    checksum: "xyz789".to_string(),
+                }),
+            },
+        ];
+
+        let temp_dir = create_test_log(&events);
+        let log_path = temp_dir.path().join("events.jsonl");
+
+        let mut indexer = Indexer::new(&log_path).unwrap();
+        let processed = indexer.catch_up().unwrap();
+
+        // Verify both events were processed
+        assert_eq!(processed, 2);
+        assert_eq!(indexer.state().events_processed, 2);
+        assert_eq!(indexer.get_thread(&event1_id.to_string()).is_some(), true);
+        assert_eq!(indexer.get_artifacts().len(), 1);
+    }
+
+    #[test]
+    fn test_indexer_state_persistence() {
+        let temp_dir = TempDir::new().unwrap();
+        let state_path = temp_dir.path().join("indexer_state.json");
+
+        let state = IndexerState {
+            last_event_id: Some("event-123".to_string()),
+            last_timestamp: Some(Utc::now()),
+            events_processed: 42,
+        };
+
+        // Save state
+        state.save(&state_path).unwrap();
+
+        // Load state
+        let loaded = IndexerState::load(&state_path).unwrap();
+
+        assert_eq!(loaded.last_event_id, state.last_event_id);
+        assert_eq!(loaded.events_processed, 42);
+    }
+
+    #[test]
+    fn test_indexer_resume_from_state() {
+        use uuid::Uuid;
+
+        let event1_id = Uuid::now_v7();
+        let event2_id = Uuid::now_v7();
+        let events = vec![
+            EventEnvelope {
+                id: event1_id,
+                timestamp: Utc::now(),
+                event_type: EventType::MessageSent,
+                agent_id: "aleph".to_string(),
+                payload: EventPayload::Message(crate::events::MessageEvent {
+                    from: "aleph".to_string(),
+                    to: "luban".to_string(),
+                    subject: "Message".to_string(),
+                    content: "Message 1".to_string(),
+                    thread_id: None,
+                    priority: Priority::Normal,
+                }),
+            },
+            EventEnvelope {
+                id: event2_id,
+                timestamp: Utc::now(),
+                event_type: EventType::TaskAssigned,
+                agent_id: "aleph".to_string(),
+                payload: EventPayload::Task(crate::events::TaskEvent {
+                    task_id: "task-001".to_string(),
+                    title: "Build indexer".to_string(),
+                    assigned_to: "luban".to_string(),
+                    assigned_by: "aleph".to_string(),
+                    status: crate::events::TaskStatus::Assigned,
+                }),
+            },
+        ];
+
+        let temp_dir = create_test_log(&events);
+        let log_path = temp_dir.path().join("events.jsonl");
+        let state_path = temp_dir.path().join("indexer_state.json");
+
+        // Process first event
+        let mut indexer = Indexer::new(&log_path).unwrap();
+        indexer.catch_up().unwrap();
+        assert_eq!(indexer.state().events_processed, 2);
+
+        // Save state
+        indexer.save_state(&state_path).unwrap();
+
+        // Create new indexer with saved state
+        let loaded_state = IndexerState::load(&state_path).unwrap();
+        let mut indexer2 = Indexer::with_state(&log_path, loaded_state).unwrap();
+        indexer2.catch_up().unwrap();
+
+        // Should have processed 0 new events (already processed all)
+        assert_eq!(indexer2.state().events_processed, 2);
+    }
+
+    #[test]
+    fn test_indexer_query_messages_for_agent() {
+        use uuid::Uuid;
+
+        let msg1_id = Uuid::now_v7();
+        let msg2_id = Uuid::now_v7();
+        let msg3_id = Uuid::now_v7();
+        let events = vec![
+            EventEnvelope {
+                id: msg1_id,
+                timestamp: Utc::now(),
+                event_type: EventType::MessageSent,
+                agent_id: "aleph".to_string(),
+                payload: EventPayload::Message(crate::events::MessageEvent {
+                    from: "aleph".to_string(),
+                    to: "luban".to_string(),
+                    subject: "Test".to_string(),
+                    content: "Message from Aleph".to_string(),
+                    thread_id: None,
+                    priority: Priority::Normal,
+                }),
+            },
+            EventEnvelope {
+                id: msg2_id,
+                timestamp: Utc::now(),
+                event_type: EventType::MessageSent,
+                agent_id: "thales".to_string(),
+                payload: EventPayload::Message(crate::events::MessageEvent {
+                    from: "thales".to_string(),
+                    to: "luban".to_string(),
+                    subject: "Test".to_string(),
+                    content: "Message from Thales".to_string(),
+                    thread_id: None,
+                    priority: Priority::Normal,
+                }),
+            },
+            EventEnvelope {
+                id: msg3_id,
+                timestamp: Utc::now(),
+                event_type: EventType::MessageSent,
+                agent_id: "aleph".to_string(),
+                payload: EventPayload::Message(crate::events::MessageEvent {
+                    from: "aleph".to_string(),
+                    to: "thales".to_string(),
+                    subject: "Test".to_string(),
+                    content: "Another message from Aleph".to_string(),
+                    thread_id: None,
+                    priority: Priority::Normal,
+                }),
+            },
+        ];
+
+        let temp_dir = create_test_log(&events);
+        let log_path = temp_dir.path().join("events.jsonl");
+
+        let mut indexer = Indexer::new(&log_path).unwrap();
+        indexer.catch_up().unwrap();
+
+        // Query messages by agent
+        let aleph_messages = indexer.get_messages_for_agent("aleph");
+        assert_eq!(aleph_messages.len(), 2);
+
+        let thales_messages = indexer.get_messages_for_agent("thales");
+        assert_eq!(thales_messages.len(), 1);
+
+        let luban_messages = indexer.get_messages_for_agent("luban");
+        assert_eq!(luban_messages.len(), 0); // luban is recipient, not sender
+    }
+
+    #[test]
+    fn test_indexer_process_task_assigned() {
+        use uuid::Uuid;
+
+        let event_id = Uuid::now_v7();
+        let event = EventEnvelope {
+            id: event_id,
+            timestamp: Utc::now(),
+            event_type: EventType::TaskAssigned,
+            agent_id: "aleph".to_string(),
+            payload: EventPayload::Task(crate::events::TaskEvent {
+                task_id: "task-001".to_string(),
+                title: "Build database indexer".to_string(),
+                assigned_to: "luban".to_string(),
+                assigned_by: "aleph".to_string(),
+                status: crate::events::TaskStatus::Assigned,
+            }),
+        };
+
+        let temp_dir = create_test_log(&[event]);
+        let log_path = temp_dir.path().join("events.jsonl");
+
+        let mut indexer = Indexer::new(&log_path).unwrap();
+        indexer.catch_up().unwrap();
+
+        // Verify agent has current_task
+        let agent = indexer.get_agent("luban");
+        assert!(agent.is_some());
+        let agent = agent.unwrap();
+        assert_eq!(
+            agent.current_task,
+            Some("Build database indexer".to_string())
+        );
+    }
+
+    #[test]
+    fn test_indexer_process_status_changed() {
+        use uuid::Uuid;
+
+        let event_id = Uuid::now_v7();
+        let event = EventEnvelope {
+            id: event_id,
+            timestamp: Utc::now(),
+            event_type: EventType::StatusChanged,
+            agent_id: "luban".to_string(),
+            payload: EventPayload::Status(crate::events::StatusEvent {
+                agent_id: "luban".to_string(),
+                previous: crate::events::AgentStatus::Available,
+                current: crate::events::AgentStatus::Working,
+                reason: Some("Working on indexer".to_string()),
+            }),
+        };
+
+        let temp_dir = create_test_log(&[event]);
+        let log_path = temp_dir.path().join("events.jsonl");
+
+        let mut indexer = Indexer::new(&log_path).unwrap();
+        indexer.catch_up().unwrap();
+
+        // Verify agent status was updated
+        let agent = indexer.get_agent("luban");
+        assert!(agent.is_some());
+        assert_eq!(agent.unwrap().status, crate::events::AgentStatus::Working);
+    }
 }
+
