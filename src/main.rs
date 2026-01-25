@@ -80,6 +80,12 @@ async fn run_http_server() -> Result<(), Box<dyn std::error::Error>> {
     // Ensure data directories exist
     state.ensure_dirs()?;
 
+    // Auto-refresh indexer with event log
+    if let Err(e) = state.refresh_indexer().await {
+        info!("Indexer refresh failed: {}", e);
+        info!("Server will start with empty indexer");
+    }
+ 
     let server = HttpServer::new(state);
     info!("Starting HTTP server at http://{}", server.address());
 
