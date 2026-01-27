@@ -14,7 +14,102 @@ use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use tracing::info;
 
-use crate::state::AppState;
+use crate::events::{EventEnvelope, EventPayload, EventType, MessageEvent, Priority};
+use crate::state::{AppState, ObservationMode};
+use uuid::Uuid;
+
+/// Process a Merlin intervention
+///
+/// Handles all intervention types from Merlin (inject messages, approve/reject decisions, change mode).
+async fn process_intervention(
+    intervention: MerlinIntervention,
+    state: &AppState,
+) -> Result<String, String> {
+    match intervention {
+        MerlinIntervention::InjectMessage {
+            thread_id,
+            from,
+            content,
+        } => {
+            // Create message event from Merlin
+            let message_event = MessageEvent {
+                from: from.clone(),
+                to: String::new(), // Will be populated from thread
+                subject: format!("Merlin intervention"),
+                content,
+                thread_id: Some(thread_id.clone()),
+                priority: Priority::High,
+            };
+
+            let event = EventEnvelope {
+                id: Uuid::now_v7(),
+                timestamp: chrono::Utc::now(),
+                event_type: EventType::MessageSent,
+                agent_id: "merlin".to_string(),
+                payload: EventPayload::Message(message_event),
+            };
+
+            // Write to event log
+            state
+                .event_writer()
+                .append(&event)
+                .map_err(|e| format!("Failed to write event: {}", e))?;
+
+            // Broadcast and notify
+            state.broadcast_event(event.clone());
+            state.merlin_notifier().notify(event.clone(), state);
+
+            // Refresh indexer
+            let _ = state.refresh_indexer().await;
+
+            Ok(format!("Message injected into thread {}", thread_id))
+        }
+
+        MerlinIntervention::ApproveDecision {
+            decision_id,
+            reason,
+        } => {
+            // TODO: Implement decision approval
+            // For now, just log it
+            info!(
+                decision_id = %decision_id,
+                reason = ?reason,
+                "Decision approved"
+            );
+            Ok(format!("Decision {} approved", decision_id))
+        }
+
+        MerlinIntervention::RejectDecision {
+            decision_id,
+            reason,
+        } => {
+            // TODO: Implement decision rejection
+            // For now, just log it
+            info!(
+                decision_id = %decision_id,
+                reason = ?reason,
+                "Decision rejected"
+            );
+            Ok(format!("Decision {} rejected", decision_id))
+        }
+
+        MerlinIntervention::SetMode { mode } => {
+            // Parse mode
+            let new_mode = match mode.as_str() {
+                "passive" => ObservationMode::Passive,
+                "advisory" => ObservationMode::Advisory,
+                "gated" => ObservationMode::Gated,
+                _ => return Err(format!("Invalid mode: {}", mode)),
+            };
+
+            // Update mode
+            state.set_mode(new_mode).await;
+
+            info!(mode = %mode, "Observation mode changed");
+            Ok(format!("Mode changed to {}", mode))
+        }
+    }
+}
 
 /// WebSocket upgrade handler for Merlin notifications
 ///
@@ -50,6 +145,7 @@ async fn handle_merlin_socket(socket: WebSocket, state: AppState) {
     }
 
     // Spawn task to handle incoming messages (Merlin interventions)
+    let state_clone = state.clone();
     let mut recv_task = tokio::spawn(async move {
         while let Some(msg) = receiver.next().await {
             match msg {
@@ -61,7 +157,12 @@ async fn handle_merlin_socket(socket: WebSocket, state: AppState) {
                     // Handle Merlin intervention messages
                     if let Ok(intervention) = serde_json::from_str::<MerlinIntervention>(&text) {
                         info!(intervention = ?intervention, "Received Merlin intervention");
-                        // TODO: Process intervention (inject message, approve decision, etc.)
+
+                        // Process the intervention
+                        match process_intervention(intervention, &state_clone).await {
+                            Ok(msg) => info!(result = %msg, "Intervention succeeded"),
+                            Err(e) => tracing::error!(error = %e, "Intervention failed"),
+                        }
                     }
                 }
                 Err(e) => {
