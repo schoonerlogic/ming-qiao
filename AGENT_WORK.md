@@ -9,21 +9,27 @@
 
 ### Aleph
 
-- **Task:** Merlin intervention system integration testing
+- **Task:** Backend verification for Luban's UI testing
 - **Branch:** agent/luban/main/merlin-ui-notifications
-- **Status:** Complete — Integration testing finished
+- **Status:** Complete — Backend ready and verified
 - **Completed:**
   - Task 009: Merlin intervention processing backend
   - Integration testing of injectMessage, setMode, approve/reject
   - Added comprehensive logging to merlin.rs
   - Created integration test report (docs/INTEGRATION_TEST_REPORT.md)
+  - Verified backend for UI testing
+- **Backend Status:**
+  - ✅ Server running on http://localhost:7777
+  - ✅ 16 threads available for testing
+  - ✅ 18 messages in event log
+  - ✅ WebSocket endpoints working
+  - ✅ Sample thread: 019c00c8-129d-77f2-ac1c-a6a9ff098d15
 - **Test Results:**
   - ✅ injectMessage: Full end-to-end flow working
   - ✅ setMode: In-memory state updates working
   - ⚠️ approve/reject: Logging only, events pending (TODO)
-  - 18 events in log (including 1 Merlin intervention)
   - 82 tests passing
-- **Note:** Ready for Luban's Task 010 UI integration
+- **Note:** Backend verified, ready for Luban's UI testing
 
 ### Luban
 

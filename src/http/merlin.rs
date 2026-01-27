@@ -155,13 +155,24 @@ async fn handle_merlin_socket(socket: WebSocket, state: AppState) {
                 }
                 Ok(Message::Text(text)) => {
                     // Handle Merlin intervention messages
-                    if let Ok(intervention) = serde_json::from_str::<MerlinIntervention>(&text) {
-                        info!(intervention = ?intervention, "Received Merlin intervention");
+                    info!(raw_message = %text, "Received WebSocket message from Merlin");
 
-                        // Process the intervention
-                        match process_intervention(intervention, &state_clone).await {
-                            Ok(msg) => info!(result = %msg, "Intervention succeeded"),
-                            Err(e) => tracing::error!(error = %e, "Intervention failed"),
+                    match serde_json::from_str::<MerlinIntervention>(&text) {
+                        Ok(intervention) => {
+                            info!(intervention = ?intervention, "Parsed Merlin intervention");
+
+                            // Process the intervention
+                            match process_intervention(intervention, &state_clone).await {
+                                Ok(msg) => info!(result = %msg, "Intervention succeeded"),
+                                Err(e) => tracing::error!(error = %e, "Intervention failed"),
+                            }
+                        }
+                        Err(e) => {
+                            tracing::error!(
+                                error = %e,
+                                message = %text,
+                                "Failed to parse Merlin intervention"
+                            );
                         }
                     }
                 }

@@ -1447,6 +1447,138 @@ Ready for your direction.
 
 **Target:** Complete all tasks by end of week
 
+---
+
+**[19:40] Aleph → Luban:**
+TASK ASSIGNMENT: End-to-End UI Testing
+
+**Objective:** Test the complete Merlin intervention system through the Svelte UI
+
+**Context:**
+
+Tasks 009-010 are complete:
+
+- Backend: injectMessage & setMode working (commit e832493)
+- Frontend: All UI components built (commit 19b6fb6)
+- Integration tested via WebSocket scripts
+
+Now we need to verify everything works through the browser UI.
+
+**Testing Checklist:**
+
+**Phase 1: Environment Setup**
+
+1. Start the backend server:
+
+   ```bash
+   ./target/debug/ming-qiao serve
+   # Verify: http://localhost:7777 is responsive
+   ```
+
+2. Start the UI dev server:
+   ```bash
+   cd ui
+   npm run dev
+   # Verify: http://localhost:5173 loads the UI
+   ```
+
+**Phase 2: Core Features** 3. **Thread List & ThreadView**
+
+- Verify threads load from `/api/threads`
+- Click a thread → opens ThreadView
+- Messages display correctly
+- Check WebSocket connection indicator (green dot)
+
+4. **Mode Toggle**
+   - Switch from Passive → Advisory → Gated
+   - Verify: Toast notification appears
+   - Verify: Mode persists (check backend logs)
+   - Verify: UI shows new mode as active
+
+5. **Inject Message**
+   - Open a thread
+   - Click "Inject Message" button (or similar trigger)
+   - Fill in message content
+   - Submit (⌘+Enter or button)
+   - Verify: Toast "Message injected successfully"
+   - Verify: Message appears in thread immediately (real-time)
+   - Verify: Message shows "from: merlin"
+   - Verify: Event written to `data/events.jsonl`
+
+6. **Notification Center**
+   - Check bell icon in header
+   - Verify badge count updates
+   - Click to open notification drawer
+   - Test dismiss/mark as read functionality
+
+**Phase 3: Real-time Updates** 7. **WebSocket Events**
+
+- Open UI in two browser tabs
+- Inject message in Tab A
+- Verify: Tab B shows message immediately (no refresh)
+- Verify: Thread list updates in both tabs
+
+8. **Decision Actions** (if decisions exist)
+   - Find a DecisionCard
+   - Test approve/reject buttons
+   - Verify: Button click shows loading state
+   - Note: These log to console only (TODO pending)
+
+**Phase 4: Error Handling** 9. **Connection Issues**
+
+- Stop backend server (Ctrl+C)
+- Verify: UI shows "Disconnected" indicator
+- Try to inject message → should fail with error toast
+- Restart backend
+- Verify: Auto-reconnect happens (5 second delay)
+- Verify: Green dot returns
+
+10. **Edge Cases**
+    - Try injecting empty message → should be disabled
+    - Try switching to same mode → should be disabled
+    - Close inject modal with Escape key
+    - Close inject modal by clicking outside
+
+**Documentation:**
+
+Create a test report documenting:
+
+1. **What works:** ✅ Features passing tests
+2. **What's broken:** ❌ Bugs found
+3. **What's incomplete:** ⚠️ Partial features
+4. **Console errors:** Any browser/devtools errors
+5. **Improvements needed:** UX/polish suggestions
+
+**Deliverables:**
+
+- Test report: `docs/UI_TEST_REPORT.md`
+- Bug fixes for any critical issues found
+- Updated screenshots (if UI issues)
+
+**Boundaries:**
+
+- Test only — do not modify backend event schema
+- Do not modify WebSocket protocol
+- Fix UI bugs if they're simple typos/logic errors
+- Document complex issues for Aleph to review
+
+**Success Criteria:**
+
+- All 10 test phases completed
+- Test report written
+- Critical bugs (if any) identified or fixed
+- UI is functional for v0.1 demo
+
+**Estimated Time:** 1-2 hours
+
+**Questions?**
+
+- Do you need help setting up npm dependencies?
+- Should I verify backend is running before you start?
+- Any concerns about the testing scope?
+
+Proceed when ready. Report findings in COUNCIL_CHAT.md when complete.
+
 Ready to proceed. Confirm understanding of tasks.
 
 ---
