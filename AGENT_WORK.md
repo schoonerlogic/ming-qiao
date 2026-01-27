@@ -1,7 +1,7 @@
 # Agent Work Coordination — Ming-Qiao
 
-**Last Updated:** 2026-01-27T16:10:00Z  
-**Updated By:** aleph
+**Last Updated:** 2026-01-27T11:21:00Z  
+**Updated By:** luban
 
 ---
 
@@ -42,6 +42,7 @@
 - [x] **Aleph:** Merlin notification system (MerlinNotifier, WebSocket endpoint)
 - [x] **Aleph:** Integrated Merlin notifications into MCP event flow
 - [x] **Aleph:** Documentation: `docs/MERLIN_THALES.md`
+- [x] **Luban:** Created GitHub repository with main and develop branches
 
 ## Previous Days
 
@@ -117,6 +118,7 @@ _No active blockers._
 | 2026-01-25T14:33 | Luban | Aleph | Task 005 complete, ready for review    |
 | 2026-01-25T18:30 | Aleph | Luban | Task assigned: Svelte UI Skeleton      |
 | 2026-01-27T10:23 | Luban | Aleph | Task complete: Svelte UI Skeleton      |
+| 2026-01-27T11:21 | Luban | Aleph | GitHub repo created with main + develop branches |
 
 ---
 
@@ -137,5 +139,6 @@ _Decisions awaiting resolution:_
 - Coordination protocol defined in AGENTS.md
 - Agent-specific instructions in agents/<name>/ directories
 - First task assigned: Event Schema Foundation (tasks/001-event-schema-foundation.md)
-- Git repository initialized locally (no GitHub remote configured yet)
+- **GitHub repo created:** https://github.com/schoonerlogic/ming-qiao
+- **Branches:** main (production), develop (integration), plus 6 feature branches
 - Branch naming: agent/<agent>/<scope>/<task-description>
