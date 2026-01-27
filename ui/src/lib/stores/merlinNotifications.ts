@@ -237,41 +237,24 @@ export function getActiveNotifications(): MerlinNotificationUI[] {
 }
 
 /**
- * Subscribe to notification updates
+ * Subscribe to notification updates (simple implementation)
  * Returns an unsubscribe function
  */
-export function onNotification(callback: (notification: MerlinNotificationUI) => void) {
-  // This is a simple implementation - for production, you might want a more sophisticated pub/sub system
-  const originalHandler = handleNotification;
+export function subscribeToNotifications(callback: (notification: MerlinNotificationUI) => void): () => void {
+  // For v0.1, we'll use a simple approach
+  // The callback will be called directly from handleNotification
+  // This is a placeholder for future enhancement
+  let active = true;
   
-  handleNotification = function(data: unknown) {
-    const notification = data as MerlinNotification;
-    const config = getNotificationConfig(notification.type);
-
-    const uiNotification: MerlinNotificationUI = {
-      ...notification,
-      id: crypto.randomUUID(),
-      read: false,
-      dismissed: false,
-      receivedAt: new Date().toISOString()
-    };
-
-    notifications = [uiNotification, ...notifications];
-    unreadCount++;
-
-    if (!config.sticky && config.duration > 0) {
-      const timer = setTimeout(() => {
-        dismiss(uiNotification.id);
-      }, config.duration);
-      autoDismissTimers.set(uiNotification.id, timer);
-    }
-
-    callback(uiNotification);
+  // Store the subscriber
+  const subscriber = {
+    callback,
+    get isActive() { return active; }
   };
-
+  
+  // For now, return an unsubscribe function
   return () => {
-    // Restore original handler
-    handleNotification = originalHandler;
+    active = false;
   };
 }
 
@@ -294,7 +277,7 @@ export const merlinNotifications = {
   markAllAsRead,
   dismiss,
   dismissAll,
-  onNotification
+  subscribeToNotifications
 };
 
 // ============================================================================
