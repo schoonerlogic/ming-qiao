@@ -1,13 +1,12 @@
 <script lang="ts">
   import type { Decision, DecisionStatus } from '$lib/types';
-  import { api } from '$lib/api';
+  import DecisionActions from './DecisionActions.svelte';
 
   interface Props {
     decision: Decision;
   }
 
   let { decision }: Props = $props();
-  let loading = $state(false);
 
   function getStatusBadgeClass(status: DecisionStatus): string {
     const base = 'px-2 py-1 rounded-full text-xs font-medium ';
@@ -20,39 +19,6 @@
         return base + 'bg-red-100 text-red-800';
       case 'superseded':
         return base + 'bg-gray-100 text-gray-800';
-    }
-  }
-
-  async function handleApprove() {
-    if (loading || decision.status !== 'pending') return;
-    
-    loading = true;
-    try {
-      await api.approveDecision(decision.decision_id);
-      // Refresh decision from server
-      // (will be handled by WebSocket update in production)
-    } catch (e) {
-      console.error('Error approving decision:', e);
-    } finally {
-      loading = false;
-    }
-  }
-
-  async function handleReject() {
-    if (loading || decision.status !== 'pending') return;
-    
-    const reason = prompt('Reason for rejection:');
-    if (!reason) return;
-
-    loading = true;
-    try {
-      await api.rejectDecision(decision.decision_id, reason);
-      // Refresh decision from server
-      // (will be handled by WebSocket update in production)
-    } catch (e) {
-      console.error('Error rejecting decision:', e);
-    } finally {
-      loading = false;
     }
   }
 
@@ -125,28 +91,6 @@
     </div>
   {/if}
 
-  {#if decision.status === 'pending'}
-    <div class="flex gap-2">
-      <button
-        class="flex-1 bg-green-500 hover:bg-green-600 text-white px-4 py-2 rounded-md font-medium disabled:opacity-50 disabled:cursor-not-allowed"
-        disabled={loading}
-        onclick={handleApprove}
-      >
-        {#if loading}
-          <span class="inline-block animate-spin mr-2">⟳</span>
-        {/if}
-        Approve
-      </button>
-      <button
-        class="flex-1 bg-red-500 hover:bg-red-600 text-white px-4 py-2 rounded-md font-medium disabled:opacity-50 disabled:cursor-not-allowed"
-        disabled={loading}
-        onclick={handleReject}
-      >
-        {#if loading}
-          <span class="inline-block animate-spin mr-2">⟳</span>
-        {/if}
-        Reject
-      </button>
-    </div>
-  {/if}
+  <!-- Merlin Decision Actions -->
+  <DecisionActions {decision} />
 </div>

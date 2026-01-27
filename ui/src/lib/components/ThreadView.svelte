@@ -3,10 +3,21 @@
   import Message from './Message.svelte';
   import DecisionCard from './DecisionCard.svelte';
   import MerlinInput from './MerlinInput.svelte';
+  import InjectMessage from './InjectMessage.svelte';
+  
+  let showInjectModal = $state(false);
 
   function formatDate(dateStr: string): string {
     const date = new Date(dateStr);
     return date.toLocaleString();
+  }
+  
+  function openInjectModal() {
+    showInjectModal = true;
+  }
+  
+  function closeInjectModal() {
+    showInjectModal = false;
   }
 </script>
 
@@ -29,11 +40,29 @@
     <!-- Thread Header -->
     <div class="bg-white border-b border-gray-200 p-4 mb-4">
       <div class="flex items-start justify-between mb-2">
-        <h1 class="text-2xl font-bold text-gray-900">{threadsStore.currentThread.subject}
+        <h1 class="text-2xl font-bold text-gray-900 flex-1">
+          {threadsStore.currentThread.subject}
         </h1>
-        <span class="px-3 py-1 rounded-full text-sm font-medium bg-blue-100 text-blue-800">
-          {threadsStore.currentThread.status}
-        </span>
+        <div class="flex items-center gap-2">
+          <button
+            onclick={openInjectModal}
+            class="px-3 py-1.5 text-sm font-medium text-blue-700 bg-blue-50 hover:bg-blue-100 border border-blue-200 rounded-md transition-colors flex items-center gap-1.5"
+            title="Inject a message as Merlin"
+          >
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                stroke-width="2"
+                d="M13 10V3L4 14h7v7l9-11h-7z"
+              />
+            </svg>
+            Inject
+          </button>
+          <span class="px-3 py-1 rounded-full text-sm font-medium bg-blue-100 text-blue-800">
+            {threadsStore.currentThread.status}
+          </span>
+        </div>
       </div>
       <div class="flex items-center gap-4 text-sm text-gray-600">
         <span class="flex items-center gap-1">
@@ -86,4 +115,11 @@
     <!-- Merlin Input -->
     <MerlinInput threadId={threadsStore.currentThread.thread_id} />
   </div>
+  
+  <!-- Inject Message Modal -->
+  <InjectMessage 
+    open={showInjectModal}
+    thread={threadsStore.currentThread}
+    onClose={closeInjectModal}
+  />
 {/if}

@@ -3,7 +3,7 @@
  * Manages WebSocket connection to /merlin/notifications
  */
 
-import type { MerlinNotification, MerlinNotificationUI } from '$lib/types/notifications';
+import type { MerlinNotification, MerlinNotificationUI, MerlinIntervention, Toast } from '$lib/types/notifications';
 import { getNotificationConfig } from '$lib/types/notifications';
 
 // ============================================================================
@@ -259,6 +259,85 @@ export function subscribeToNotifications(callback: (notification: MerlinNotifica
 }
 
 // ============================================================================
+// Intervention & Toast System
+// ============================================================================
+
+let toasts = $state<Toast[]>([]);
+const toastTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+/**
+ * Send a Merlin intervention via WebSocket
+ */
+export function sendIntervention(intervention: MerlinIntervention): boolean {
+  if (!socket || socket.readyState !== WebSocket.OPEN) {
+    showToast({
+      type: 'error',
+      message: 'Not connected to server',
+      duration: 10000
+    });
+    return false;
+  }
+
+  try {
+    socket.send(JSON.stringify(intervention));
+    console.log('[MerlinNotifications] Sent intervention:', intervention);
+    return true;
+  } catch (error) {
+    console.error('[MerlinNotifications] Failed to send intervention:', error);
+    showToast({
+      type: 'error',
+      message: `Failed to send ${intervention.action}: ${error}`,
+      duration: 10000
+    });
+    return false;
+  }
+}
+
+/**
+ * Show a toast notification
+ */
+export function showToast(toast: Omit<Toast, 'id'>): string {
+  const id = crypto.randomUUID();
+  const newToast: Toast = {
+    ...toast,
+    id
+  };
+
+  // Add to toasts list
+  toasts = [...toasts, newToast];
+
+  // Set up auto-dismissal
+  if (toast.duration > 0) {
+    const timer = setTimeout(() => {
+      dismissToast(id);
+    }, toast.duration);
+    toastTimers.set(id, timer);
+  }
+
+  return id;
+}
+
+/**
+ * Dismiss a toast notification
+ */
+export function dismissToast(id: string) {
+  const timer = toastTimers.get(id);
+  if (timer) {
+    clearTimeout(timer);
+    toastTimers.delete(id);
+  }
+
+  toasts = toasts.filter((t) => t.id !== id);
+}
+
+/**
+ * Get all active toasts
+ */
+export function getActiveToasts(): Toast[] {
+  return toasts;
+}
+
+// ============================================================================
 // Store Export (reactive)
 // ============================================================================
 
@@ -268,16 +347,20 @@ export const merlinNotifications = {
   get connectionError() { return connectionError; },
   get notifications() { return getActiveNotifications(); },
   get unreadCount() { return unreadCount; },
+  get toasts() { return getActiveToasts(); },
 
   // Methods
   connect,
   disconnect,
   send,
+  sendIntervention,
   markAsRead,
   markAllAsRead,
   dismiss,
   dismissAll,
-  subscribeToNotifications
+  subscribeToNotifications,
+  showToast,
+  dismissToast
 };
 
 // ============================================================================

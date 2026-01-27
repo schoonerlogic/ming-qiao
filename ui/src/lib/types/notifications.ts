@@ -224,3 +224,71 @@ export function getNotificationColorClass(type: MerlinNotification['type']): str
   };
   return colorMap[color] || colorMap.gray;
 }
+
+// ============================================================================
+// Merlin Intervention Types
+// ============================================================================
+
+/**
+ * Intervention actions that Merlin can send via WebSocket
+ */
+export type MerlinIntervention =
+  | InjectMessageIntervention
+  | ApproveDecisionIntervention
+  | RejectDecisionIntervention
+  | SetModeIntervention;
+
+/**
+ * Inject a message into a thread
+ */
+export interface InjectMessageIntervention {
+  action: 'injectMessage';
+  threadId: string;
+  from: string; // Agent ID (usually "merlin")
+  content: string;
+}
+
+/**
+ * Approve a pending decision
+ */
+export interface ApproveDecisionIntervention {
+  action: 'approveDecision';
+  decisionId: string;
+  reason?: string;
+}
+
+/**
+ * Reject a pending decision
+ */
+export interface RejectDecisionIntervention {
+  action: 'rejectDecision';
+  decisionId: string;
+  reason?: string;
+}
+
+/**
+ * Change observation mode
+ */
+export interface SetModeIntervention {
+  action: 'setMode';
+  mode: 'passive' | 'advisory' | 'gated';
+}
+
+// ============================================================================
+// Toast Notification Types
+// ============================================================================
+
+/**
+ * Toast notification types for user feedback
+ */
+export type ToastType = 'success' | 'error' | 'warning' | 'info';
+
+/**
+ * Toast notification configuration
+ */
+export interface Toast {
+  id: string;
+  type: ToastType;
+  message: string;
+  duration: number; // milliseconds, 0 = sticky
+}

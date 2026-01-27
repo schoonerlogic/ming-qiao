@@ -1,15 +1,17 @@
 <script lang="ts">
-  import { configStore, setMode } from '$stores/config';
+  import { configStore, setMode, updateLocalMode } from '$stores/config';
+  import { merlinNotifications } from '$stores/merlinNotifications';
   import type { ObservationMode } from '$lib/types';
-
+  
   let loading = $state(false);
-
+  let previousMode = $state<ObservationMode | null>(null);
+  
   const modes: { value: ObservationMode; label: string; description: string }[] = [
     { value: 'passive', label: 'Passive', description: 'Observe only, no notifications' },
     { value: 'advisory', label: 'Advisory', description: 'Notify on important events' },
     { value: 'gated', label: 'Gated', description: 'Require approval for actions' },
   ];
-
+  
   function getModeColor(mode: ObservationMode): string {
     switch (mode) {
       case 'passive':
@@ -20,18 +22,55 @@
         return 'bg-purple-500';
     }
   }
-
+  
   async function handleModeChange(mode: ObservationMode) {
     if (loading || mode === configStore.mode) return;
-
+    
     loading = true;
+    previousMode = configStore.mode;
+    
+    // Optimistic update
+    const oldMode = configStore.mode;
+    updateLocalMode(mode);
+    
     try {
-      await setMode(mode);
+      // Send intervention via WebSocket
+      const success = merlinNotifications.sendIntervention({
+        action: 'setMode',
+        mode
+      });
+      
+      if (success) {
+        // Show success toast
+        merlinNotifications.showToast({
+          type: 'success',
+          message: `Mode changed to ${mode}`,
+          duration: 3000
+        });
+        
+        // Also update via API to keep in sync
+        await setMode(mode);
+      } else {
+        // Revert on failure
+        updateLocalMode(oldMode);
+        merlinNotifications.showToast({
+          type: 'error',
+          message: 'Failed to change mode: WebSocket disconnected',
+          duration: 10000
+        });
+      }
     } catch (e) {
+      // Revert on error
+      updateLocalMode(oldMode);
       console.error('Error changing mode:', e);
-      alert('Failed to change mode: ' + (e instanceof Error ? e.message : 'Unknown error'));
+      merlinNotifications.showToast({
+        type: 'error',
+        message: `Failed to change mode: ${e instanceof Error ? e.message : 'Unknown error'}`,
+        duration: 10000
+      });
     } finally {
       loading = false;
+      previousMode = null;
     }
   }
 </script>
