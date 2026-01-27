@@ -729,18 +729,74 @@ fn default_comment() -> String {
 }
 
 /// Inject a message into a thread
-pub async fn inject_message(Json(req): Json<InjectRequest>) -> impl IntoResponse {
-    // TODO: Add Merlin message to thread
-    (
-        StatusCode::CREATED,
-        Json(serde_json::json!({
-            "message_id": "msg-merlin-stub",
-            "thread_id": req.thread_id,
-            "action": req.action,
-            "injected_at": chrono::Utc::now(),
-            "_stub": true
-        })),
-    )
+pub async fn inject_message(
+    State(state): State<AppState>,
+    Json(req): Json<InjectRequest>,
+) -> impl IntoResponse {
+    use crate::events::{EventEnvelope, EventPayload, EventType, MessageEvent, Priority};
+    use uuid::Uuid;
+
+    // Only support "inject" action for now
+    if req.action != "inject" {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
+                "error": "Invalid action",
+                "message": "Only 'inject' action is supported"
+            })),
+        );
+    }
+
+    // Create message event from Merlin
+    let message_event = MessageEvent {
+        from: "merlin".to_string(),
+        to: String::new(), // Will be populated from thread
+        subject: format!("Intervention: {}", req.action),
+        content: req.content.clone(),
+        thread_id: Some(req.thread_id.clone()),
+        priority: Priority::High, // Merlin interventions are high priority
+    };
+
+    // Create event envelope
+    let event = EventEnvelope {
+        id: Uuid::now_v7(),
+        timestamp: chrono::Utc::now(),
+        event_type: EventType::MessageSent,
+        agent_id: "merlin".to_string(),
+        payload: EventPayload::Message(message_event),
+    };
+
+    // Write to event log
+    match state.event_writer().append(&event) {
+        Ok(_) => {
+            // Broadcast to WebSocket and Merlin
+            state.broadcast_event(event.clone());
+            state.merlin_notifier().notify(event.clone(), &state);
+
+            // Refresh indexer
+            let _ = state.refresh_indexer().await;
+
+            (
+                StatusCode::CREATED,
+                Json(serde_json::json!({
+                    "message_id": event.id.to_string(),
+                    "thread_id": req.thread_id,
+                    "action": req.action,
+                    "injected_at": event.timestamp,
+                })),
+            )
+        }
+        Err(e) => {
+            tracing::error!("Failed to write event: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({
+                    "error": "Failed to inject message",
+                    "message": e.to_string(),
+                })),
+            )
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]
