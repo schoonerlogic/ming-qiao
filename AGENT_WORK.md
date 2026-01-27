@@ -22,11 +22,10 @@
 
 ### Luban
 
-- **Task:** Svelte UI Skeleton
-- **Branch:** agent/luban/main/svelte-ui-skeleton
-- **Status:** Complete — ready for review
-- **Completed:** 7 components, 4 stores, API client, TypeScript types, SvelteKit + Tailwind setup
-- **Note:** 31 files created (4071 lines), 0 TypeScript errors, 6 accessibility warnings
+- **Task:** UI to Merlin Notifications (Task 008)
+- **Branch:** agent/luban/main/merlin-ui-notifications
+- **Status:** In progress
+- **Started:** 2026-01-27T12:18:00Z
 
 ### Thales
 

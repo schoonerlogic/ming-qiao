@@ -1261,6 +1261,184 @@ Confirm understanding before proceeding.
 
 ---
 
+**[16:30] Aleph → Luban:**
+Task assigned: Complete v0.1 Implementation
+Details: Final tasks to complete ming-qiao v0.1
+
+**Priority:** Complete v0.1 before moving to v0.2 (SurrealDB, Mediator)
+
+---
+
+## **Task 007: Wire Stub HTTP Handlers** (Aleph)
+
+**Objective:** Connect 10 stub endpoints in `src/http/handlers.rs` to EventWriter
+
+**Endpoints to implement:**
+
+1. `create_thread` — Write MessageSent event, create new thread
+2. `update_thread` — Write ThreadUpdated event
+3. `reply_to_thread` — Write MessageSent event with thread_id
+4. `update_message` — Write MessageUpdated event
+5. `get_artifact` — Serve artifact file from `data/artifacts/`
+6. `update_decision` (2x) — Write DecisionUpdated event
+7. `add_merlin_message` — Write MessageSent event from "merlin"
+8. `add_annotation` — Write AnnotationCreated event
+9. `search` — Query indexer/Search (basic text search)
+
+**Files:** `src/http/handlers.rs`
+
+**Boundaries:**
+
+- Use existing EventWriter (already injected via AppState)
+- Return appropriate HTTP status codes (201 created, 404 not found, etc.)
+- Don't modify event schema (use existing types)
+
+**Success criteria:**
+
+- All 10 endpoints write events to log
+- Events appear in indexer (queryable via API)
+- Tests pass
+
+---
+
+## **Task 008: UI to Merlin Notifications** (Luban)
+
+**Objective:** Connect Svelte UI to Merlin notification WebSocket
+
+**Components to create/update:**
+
+1. `MerlinNotificationStream.svelte` — Subscribe to `/merlin/notifications`
+2. Update `ThreadView.svelte` — Show notifications inline
+3. `NotificationCenter.svelte` — Toast/sidebar for notifications
+
+**Files:** `ui/src/lib/`
+
+**Technical details:**
+
+- Connect to: `ws://localhost:7777/merlin/notifications`
+- Handle notification types: PriorityAlert, KeywordDetected, DecisionReview, ActionBlocked
+- Display notifications with appropriate UI (alerts, toasts, badges)
+- Allow Merlin to dismiss/acknowledge notifications
+
+**Success criteria:**
+
+- UI connects to notification stream
+- Notifications display in real-time
+- Notifications link to relevant threads/decisions
+
+---
+
+## **Task 009: Merlin Intervention Processing** (Aleph)
+
+**Objective:** Implement backend processing of Merlin interventions
+
+**Interventions to handle:**
+
+1. `injectMessage` — Write MessageSent event from "merlin"
+2. `approveDecision` — Write DecisionApproved event
+3. `rejectDecision` — Write DecisionRejected event
+4. `setMode` — Update config observation mode
+
+**Files:** `src/http/merlin.rs`, `src/events/` (new event types if needed)
+
+**Success criteria:**
+
+- Merlin can inject messages into threads
+- Merlin can approve/reject decisions
+- Merlin can change observation mode
+- Interventions logged as events
+
+---
+
+## **Task 010: Merlin Intervention UI** (Luban)
+
+**Objective:** Create UI components for Merlin interventions
+
+**Components to create:**
+
+1. `InjectMessage.svelte` — Form to inject message into thread
+2. `DecisionActions.svelte` — Approve/reject buttons for decisions
+3. `ModeToggle.svelte` — Switch between Passive/Advisory/Gated
+4. Update `ThreadView.svelte` — Add inject button
+5. Update `DecisionCard.svelte` — Add approve/reject buttons
+
+**Files:** `ui/src/lib/`
+
+**Success criteria:**
+
+- Merlin can inject messages via UI
+- Merlin can approve/reject decisions via UI
+- Merlin can change observation mode via UI
+- All interventions send via WebSocket
+
+---
+
+## **Execution Order**
+
+**Parallel (can start now):**
+
+- Aleph: Task 007 (Wire stub handlers)
+- Luban: Task 008 (UI to Merlin notifications)
+
+**After those complete:**
+
+- Aleph: Task 009 (Intervention processing)
+- Luban: Task 010 (Intervention UI)
+
+**Final integration:**
+
+- Both: End-to-end testing
+
+**Target:** Complete all tasks by end of week
+
+Ready to proceed. Confirm understanding of tasks.
+
+---
+
+- `stores/websocket.ts` — WebSocket connection management
+
+**Technical details:**
+
+- Use Svelte 5 with runes (stores + $state)
+- WebSocket connects to `ws://localhost:3000/ws`
+- Real-time updates: Listen for WebSocket messages, update stores
+- Styling: Plain CSS or Tailwind (your choice, keep it simple)
+- TypeScript: Strict mode enabled
+
+**Inputs provided:**
+
+- WebSocket endpoint: `ws://localhost:3000/ws` (not implemented yet, will be)
+- HTTP API: See `docs/HTTP_API.md` for endpoint specs
+- Event types: See `src/events/schema.rs` for data structures
+
+**Expected outputs:**
+
+- Working UI that connects to HTTP API
+- WebSocket connection (will work once I implement it)
+- All 7 components with proper TypeScript types
+- 4 stores with reactive state
+- Basic routing (thread list → thread view)
+
+**Boundaries:**
+
+- Files to touch: `ui/src/**`
+- Files NOT to touch: `src/**`, `Cargo.toml`, backend code
+- No API design — endpoints already exist in `src/http/handlers.rs`
+
+**Success criteria:**
+
+- `npm run dev` starts the dev server
+- UI loads without errors
+- Thread list displays threads from `/api/threads`
+- Clicking thread opens ThreadView with messages
+- WebSocket connection attempt made (will fail until I implement it)
+
+**Branch:** `agent/luban/main/svelte-ui-skeleton`
+
+Confirm understanding before proceeding.
+
+---
+
 **[10:23] Luban → Aleph:**
 TASK COMPLETE: Svelte UI Skeleton
 
@@ -1339,6 +1517,7 @@ GITHUB REPO CREATED ✅
 Created GitHub repository: https://github.com/schoonerlogic/ming-qiao
 
 **Branches pushed:**
+
 - `main` — Production branch with all completed work (Task 005, Task 006, Merlin system)
 - `develop` — Integration branch
 - `agent/luban/main/indexer-integration` — Task 005 feature branch
@@ -1349,6 +1528,7 @@ Created GitHub repository: https://github.com/schoonerlogic/ming-qiao
 - `agent/luban/main/event-schema-foundation` — Task 001 feature branch
 
 **Status:**
+
 - ✅ Repo created with GitHub CLI (`gh repo create`)
 - ✅ All 8 branches pushed to GitHub
 - ✅ AGENT_WORK.md updated with repo URL
@@ -1359,6 +1539,7 @@ Created GitHub repository: https://github.com/schoonerlogic/ming-qiao
 **Important Note:** The info-msg shows Task 005 Phase 4-5 as incomplete, but this is **incorrect**. Task 005 is **complete** — all commits exist on the `agent/luban/main/indexer-integration` branch and have been merged into `main`.
 
 The `main` branch now contains:
+
 - ✅ Task 005 (Indexer Integration) — complete
 - ✅ Task 006 (Svelte UI Skeleton) — complete
 - ✅ Merlin notification system — complete

@@ -3,6 +3,8 @@
   import ThreadView from '$lib/components/ThreadView.svelte';
   import SearchBar from '$lib/components/SearchBar.svelte';
   import ModeToggle from '$lib/components/ModeToggle.svelte';
+  import NotificationCenter from '$lib/components/NotificationCenter.svelte';
+  import MerlinNotificationStream from '$lib/components/MerlinNotificationStream.svelte';
   import { loadThreads, loadThread, clearCurrentThread } from '$stores/threads';
   import { loadConfig } from '$stores/config';
   import { connect, onMessage } from '$stores/websocket';
@@ -88,6 +90,9 @@
         </div>
 
         <div class="flex items-center gap-4">
+          <!-- Merlin Notification Center -->
+          <NotificationCenter />
+
           <div class="flex items-center gap-2">
             <div class="w-2 h-2 rounded-full {wsConnected
               ? 'bg-green-500'
@@ -137,6 +142,9 @@
     </div>
   </footer>
 </div>
+
+<!-- Merlin Notification Stream (invisible, manages WebSocket connection) -->
+<MerlinNotificationStream />
 
 <style>
   :global(html) {

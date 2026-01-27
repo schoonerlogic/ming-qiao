@@ -8,7 +8,7 @@ use std::sync::Arc;
 use tokio::sync::{broadcast, RwLock};
 
 use crate::db::Indexer;
-use crate::events::EventEnvelope;
+use crate::events::{EventEnvelope, EventWriter};
 use crate::merlin::MerlinNotifier;
 use crate::state::config::{Config, ObservationMode};
 
@@ -43,6 +43,9 @@ struct AppStateInner {
 
     /// Merlin notification system
     merlin_notifier: Arc<MerlinNotifier>,
+
+    /// Event writer for append-only log
+    event_writer: Arc<EventWriter>,
 }
 
 impl AppState {
@@ -99,6 +102,25 @@ impl AppState {
             })
         };
 
+        // Create event writer
+        let event_writer = match EventWriter::new_with_path(&events_path) {
+            Ok(writer) => writer,
+            Err(e) => {
+                eprintln!(
+                    "Warning: Failed to create event writer for {}: {}. Using default path.",
+                    events_path.display(),
+                    e
+                );
+                // Fall back to default writer
+                match EventWriter::new() {
+                    Ok(w) => w,
+                    Err(e2) => {
+                        panic!("Failed to create event writer: {}", e2);
+                    }
+                }
+            }
+        };
+
         Self {
             inner: Arc::new(AppStateInner {
                 config: RwLock::new(config),
@@ -107,6 +129,7 @@ impl AppState {
                 event_tx,
                 indexer: RwLock::new(indexer),
                 merlin_notifier: Arc::new(MerlinNotifier::new()),
+                event_writer: Arc::new(event_writer),
             }),
         }
     }
@@ -184,6 +207,13 @@ impl AppState {
     /// Used for sending notifications to the human operator.
     pub fn merlin_notifier(&self) -> &Arc<MerlinNotifier> {
         &self.inner.merlin_notifier
+    }
+
+    /// Get the event writer
+    ///
+    /// Used for writing events to the append-only log.
+    pub fn event_writer(&self) -> &Arc<EventWriter> {
+        &self.inner.event_writer
     }
 
     /// Subscribe to the event broadcast channel
