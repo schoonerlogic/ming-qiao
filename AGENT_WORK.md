@@ -1,7 +1,7 @@
 # Agent Work Coordination — Ming-Qiao
 
-**Last Updated:** 2026-01-27T11:21:00Z  
-**Updated By:** luban
+**Last Updated:** 2026-01-27T19:15:00Z
+**Updated By:** aleph
 
 ---
 
@@ -9,16 +9,21 @@
 
 ### Aleph
 
-- **Task:** Merlin and Thales communication setup
-- **Branch:** main
-- **Status:** Complete — Merlin notification system implemented
+- **Task:** Merlin intervention system integration testing
+- **Branch:** agent/luban/main/merlin-ui-notifications
+- **Status:** Complete — Integration testing finished
 - **Completed:**
-  - WebSocket real-time updates (existing)
-  - MerlinNotifier module with observation mode logic
-  - Integrated notifications into MCP tool event flow
-  - Merlin notification WebSocket endpoint (`/merlin/notifications`)
-  - Documentation: `docs/MERLIN_THALES.md`
-- **Note:** 82 tests passing, server operational
+  - Task 009: Merlin intervention processing backend
+  - Integration testing of injectMessage, setMode, approve/reject
+  - Added comprehensive logging to merlin.rs
+  - Created integration test report (docs/INTEGRATION_TEST_REPORT.md)
+- **Test Results:**
+  - ✅ injectMessage: Full end-to-end flow working
+  - ✅ setMode: In-memory state updates working
+  - ⚠️ approve/reject: Logging only, events pending (TODO)
+  - 18 events in log (including 1 Merlin intervention)
+  - 82 tests passing
+- **Note:** Ready for Luban's Task 010 UI integration
 
 ### Luban
 
@@ -43,12 +48,14 @@
 
 ## Completed Today
 
-- [x] **Luban:** Svelte UI Skeleton (7 components, 4 stores, API client)
-- [x] **Aleph:** Merlin notification system (MerlinNotifier, WebSocket endpoint)
-- [x] **Aleph:** Integrated Merlin notifications into MCP event flow
-- [x] **Aleph:** Documentation: `docs/MERLIN_THALES.md`
-- [x] **Luban:** Created GitHub repository with main and develop branches
-- [x] **Luban:** UI to Merlin Notifications (4 files, 1,247 lines, 0 TypeScript errors)
+- [x] **Aleph:** Task 009 - Merlin intervention processing backend (e832493)
+- [x] **Aleph:** Integration testing of Merlin intervention system
+- [x] **Aleph:** Added comprehensive logging to merlin.rs
+- [x] **Aleph:** Created integration test report (docs/INTEGRATION_TEST_REPORT.md)
+- [x] **Luban:** Task 010 - Merlin Intervention UI (19b6fb6)
+- [x] **Verified:** injectMessage working (event → broadcast → indexer)
+- [x] **Verified:** setMode working (in-memory state updated)
+- [x] **Documented:** approve/reject decision TODO
 
 ## Previous Days
 
@@ -109,21 +116,21 @@ _No active blockers._
 
 ## Communication Log
 
-| Timestamp        | From  | To    | Summary                                |
-| ---------------- | ----- | ----- | -------------------------------------- |
-| 2026-01-24T14:30 | Aleph | Luban | Task assigned: Event Schema Foundation |
-| 2026-01-25T09:00 | Aleph | Luban | Task assigned: Database Models         |
-| 2026-01-25T10:20 | Luban | Aleph | Task 002 complete, ready for review    |
-| 2026-01-25T11:00 | Aleph | Luban | Task assigned: Event Persistence Layer |
-| 2026-01-25T11:30 | Luban | Aleph | Task 003 complete, ready for review    |
-| 2026-01-25T12:00 | Aleph | Luban | Task 003 approved                      |
-| 2026-01-25T12:45 | Aleph | Luban | Task assigned: Database Indexer        |
-| 2026-01-25T13:30 | Luban | Aleph | Task 004 complete, ready for review    |
-| 2026-01-25T13:35 | Aleph | Luban | Task 004 approved                      |
-| 2026-01-25T13:35 | Aleph | Luban | Task assigned: Indexer Integration     |
-| 2026-01-25T14:33 | Luban | Aleph | Task 005 complete, ready for review    |
-| 2026-01-25T18:30 | Aleph | Luban | Task assigned: Svelte UI Skeleton      |
-| 2026-01-27T10:23 | Luban | Aleph | Task complete: Svelte UI Skeleton      |
+| Timestamp        | From  | To    | Summary                                          |
+| ---------------- | ----- | ----- | ------------------------------------------------ |
+| 2026-01-24T14:30 | Aleph | Luban | Task assigned: Event Schema Foundation           |
+| 2026-01-25T09:00 | Aleph | Luban | Task assigned: Database Models                   |
+| 2026-01-25T10:20 | Luban | Aleph | Task 002 complete, ready for review              |
+| 2026-01-25T11:00 | Aleph | Luban | Task assigned: Event Persistence Layer           |
+| 2026-01-25T11:30 | Luban | Aleph | Task 003 complete, ready for review              |
+| 2026-01-25T12:00 | Aleph | Luban | Task 003 approved                                |
+| 2026-01-25T12:45 | Aleph | Luban | Task assigned: Database Indexer                  |
+| 2026-01-25T13:30 | Luban | Aleph | Task 004 complete, ready for review              |
+| 2026-01-25T13:35 | Aleph | Luban | Task 004 approved                                |
+| 2026-01-25T13:35 | Aleph | Luban | Task assigned: Indexer Integration               |
+| 2026-01-25T14:33 | Luban | Aleph | Task 005 complete, ready for review              |
+| 2026-01-25T18:30 | Aleph | Luban | Task assigned: Svelte UI Skeleton                |
+| 2026-01-27T10:23 | Luban | Aleph | Task complete: Svelte UI Skeleton                |
 | 2026-01-27T11:21 | Luban | Aleph | GitHub repo created with main + develop branches |
 
 ---

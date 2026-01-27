@@ -1313,6 +1313,62 @@ Details: Final tasks to complete ming-qiao v0.1
 
 **Files:** `ui/src/lib/`
 
+---
+
+**[19:15] Aleph → Proteus:**
+TASKS 009-010 COMPLETE: Merlin Intervention System
+
+Integration testing finished. Summary:
+
+**Task 009 (Backend):**
+
+- ✅ Merlin intervention processing implemented (commit e832493)
+- ✅ injectMessage: Full end-to-end working (WebSocket → event log → indexer)
+- ✅ setMode: Observation mode switching working (passive → advisory → gated)
+- ⚠️ approve/reject: Logging only, events pending (documented TODO)
+
+**Task 010 (Frontend):**
+
+- ✅ Merlin Intervention UI implemented by Luban (commit 19b6fb6)
+- Components: InjectMessage.svelte, DecisionActions.svelte, ModeToggle.svelte
+- Stores: merlinNotifications.ts with sendIntervention(), showToast()
+- Integrated into: ThreadView, DecisionCard
+
+**Integration Testing:**
+
+- Tested injectMessage with WebSocket client
+- Verified event written to data/events.jsonl
+- Confirmed indexer updated
+- Tested setMode (mode changes persist in memory)
+- Server logs show successful processing
+
+**Test Report:**
+
+- Created docs/INTEGRATION_TEST_REPORT.md
+- All test scripts in /tmp/test\_\*.js
+- 82 tests passing
+- 18 events in log (including 1 Merlin intervention)
+
+**Issues Found:**
+
+1. Client-side WebSocket error on normal close (cosmetic, low priority)
+2. approve/reject don't create events yet (medium priority, documented TODO)
+
+**Status:**
+
+- Backend: Ready for production use (injectMessage, setMode)
+- Frontend: Ready for integration testing with Luban's UI
+- v0.1 milestone: Nearly complete (decision approval events pending)
+
+**Next Steps:**
+
+1. Test end-to-end with Luban's UI components
+2. Add DecisionApproved/DecisionRejected event types
+3. Complete decision approval flow
+4. Prepare for v0.1 release
+
+Ready for your direction.
+
 **Technical details:**
 
 - Connect to: `ws://localhost:7777/merlin/notifications`
@@ -1557,12 +1613,14 @@ TASK COMPLETE: UI to Merlin Notifications (Task 008)
 **Deliverables:**
 
 4 new files created (1,247 total lines):
+
 - `ui/src/lib/types/notifications.ts` (209 lines) — All 6 notification types with config helpers
 - `ui/src/stores/merlinNotifications.ts` (287 lines) — WebSocket store with auto-reconnect
 - `ui/src/lib/components/MerlinNotificationStream.svelte` (69 lines) — Invisible connection manager
 - `ui/src/lib/components/NotificationCenter.svelte` (688 lines) — Bell icon + sidebar drawer
 
 1 file modified:
+
 - `ui/src/routes/+page.svelte` — Integrated NotificationCenter and MerlinNotificationStream
 
 **Implementation Highlights:**
@@ -1598,6 +1656,7 @@ TASK COMPLETE: UI to Merlin Notifications (Task 008)
    - Invisible component manages persistent connection
 
 **Visual Priority (as per spec):**
+
 - priorityAlert (high/critical): Red 🔔 sticky
 - priorityAlert (normal): Blue ℹ️ 30s
 - keywordDetected: Orange 🔍 30s
@@ -1606,17 +1665,20 @@ TASK COMPLETE: UI to Merlin Notifications (Task 008)
 - statusUpdate: Gray 📋 10s
 
 **Test Results:**
+
 - 0 TypeScript errors
 - 8 accessibility warnings (acceptable)
 - All components compile correctly
 - Svelte 5 runes syntax working
 
 **Commits:**
+
 - 38997f6: feat(v0.1): Task 007-008 in progress (combined with Aleph's Task 007 work)
 - 2ee581b: fix(ui): resolve TypeScript errors in Merlin notification system
 - 2be0158: docs(agent-work): mark Task 008 complete
 
 **Success Criteria:**
+
 - ✅ UI connects to notification stream
 - ✅ Notifications display in real-time
 - ✅ Notifications link to relevant threads/decisions (navigation hooks in place)
@@ -1627,6 +1689,7 @@ TASK COMPLETE: UI to Merlin Notifications (Task 008)
 - ✅ Components integrated into main page
 
 **Notes:**
+
 - Phase 5 (Update ThreadView) was skipped as optional for v0.1
 - Can be added in future iteration if inline thread notifications are needed
 - WebSocket endpoint must be implemented by backend (ws://localhost:7777/merlin/notifications)
