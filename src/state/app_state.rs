@@ -9,6 +9,7 @@ use tokio::sync::{broadcast, RwLock};
 
 use crate::db::Indexer;
 use crate::events::EventEnvelope;
+use crate::merlin::MerlinNotifier;
 use crate::state::config::{Config, ObservationMode};
 
 /// Broadcast channel capacity for event notifications
@@ -39,6 +40,9 @@ struct AppStateInner {
 
     /// Database indexer for O(1) queries (materialized views from event log)
     indexer: RwLock<Indexer>,
+
+    /// Merlin notification system
+    merlin_notifier: Arc<MerlinNotifier>,
 }
 
 impl AppState {
@@ -51,10 +55,10 @@ impl AppState {
     pub fn with_config(config: Config) -> Self {
         let data_dir = PathBuf::from(&config.data_dir);
         let (event_tx, _) = broadcast::channel(EVENT_CHANNEL_CAPACITY);
-        
+
         // Create indexer with events path
         let events_path = data_dir.join("events.jsonl");
-        
+
         // Try to create indexer - if event log doesn't exist, that's OK
         // The indexer will be empty until refresh_indexer() is called
         let indexer = if events_path.exists() {
@@ -62,7 +66,11 @@ impl AppState {
             match Indexer::new(&events_path) {
                 Ok(idx) => idx,
                 Err(e) => {
-                    eprintln!("Warning: Failed to create indexer from {}: {}. Indexer will start empty.", events_path.display(), e);
+                    eprintln!(
+                        "Warning: Failed to create indexer from {}: {}. Indexer will start empty.",
+                        events_path.display(),
+                        e
+                    );
                     // Create empty indexer anyway
                     Indexer::new(&events_path).unwrap_or_else(|_| {
                         // This should work now since the file exists
@@ -72,7 +80,10 @@ impl AppState {
             }
         } else {
             // Event log doesn't exist yet - indexer will be empty
-            eprintln!("Info: Event log not found at {}. Indexer will be empty until events are written.", events_path.display());
+            eprintln!(
+                "Info: Event log not found at {}. Indexer will be empty until events are written.",
+                events_path.display()
+            );
             // Create empty indexer - EventReader will fail but that's OK
             // We'll catch up when refresh_indexer() is called
             Indexer::new(&events_path).unwrap_or_else(|_| {
@@ -87,7 +98,7 @@ impl AppState {
                 Indexer::new(&events_path).expect("Failed to create indexer after creating file")
             })
         };
-        
+
         Self {
             inner: Arc::new(AppStateInner {
                 config: RwLock::new(config),
@@ -95,6 +106,7 @@ impl AppState {
                 agent_id: std::env::var("MING_QIAO_AGENT_ID").ok(),
                 event_tx,
                 indexer: RwLock::new(indexer),
+                merlin_notifier: Arc::new(MerlinNotifier::new()),
             }),
         }
     }
@@ -165,6 +177,13 @@ impl AppState {
     pub fn broadcast_event(&self, event: EventEnvelope) -> usize {
         // send() returns Err if there are no receivers, which is fine
         self.inner.event_tx.send(event).unwrap_or(0)
+    }
+
+    /// Get the Merlin notifier
+    ///
+    /// Used for sending notifications to the human operator.
+    pub fn merlin_notifier(&self) -> &Arc<MerlinNotifier> {
+        &self.inner.merlin_notifier
     }
 
     /// Subscribe to the event broadcast channel

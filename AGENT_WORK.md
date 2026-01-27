@@ -1,7 +1,7 @@
 # Agent Work Coordination — Ming-Qiao
 
-**Last Updated:** 2026-01-27T10:56:00Z  
-**Updated By:** luban
+**Last Updated:** 2026-01-27T16:10:00Z  
+**Updated By:** aleph
 
 ---
 
@@ -9,11 +9,16 @@
 
 ### Aleph
 
-- **Task:** Available
+- **Task:** Merlin and Thales communication setup
 - **Branch:** main
-- **Status:** Completed end-to-end testing
-- **Completed:** Fixed filter bug, tested MCP server (8 tools), tested HTTP server (indexer integration)
-- **Note:** Both servers operational, 80 tests passing
+- **Status:** Complete — Merlin notification system implemented
+- **Completed:**
+  - WebSocket real-time updates (existing)
+  - MerlinNotifier module with observation mode logic
+  - Integrated notifications into MCP tool event flow
+  - Merlin notification WebSocket endpoint (`/merlin/notifications`)
+  - Documentation: `docs/MERLIN_THALES.md`
+- **Note:** 82 tests passing, server operational
 
 ### Luban
 
@@ -32,6 +37,13 @@
 ---
 
 ## Completed Today
+
+- [x] **Luban:** Svelte UI Skeleton (7 components, 4 stores, API client)
+- [x] **Aleph:** Merlin notification system (MerlinNotifier, WebSocket endpoint)
+- [x] **Aleph:** Integrated Merlin notifications into MCP event flow
+- [x] **Aleph:** Documentation: `docs/MERLIN_THALES.md`
+
+## Previous Days
 
 - [x] Thales: Created coordination protocol (AGENTS.md)
 - [x] Thales: Created agent instruction sets (Aleph, Luban, Thales)
@@ -61,9 +73,30 @@ _No active blockers._
 
 ## Upcoming
 
-- [ ] End-to-end testing of HTTP server with Indexer (Aleph)
-- [ ] WebSocket real-time updates (Aleph)
+- [ ] Review Luban's Svelte UI implementation
+- [ ] Wire up 10 stub HTTP handlers to EventWriter
+- [ ] Implement Merlin intervention processing (inject, approve, reject)
 - [ ] SurrealDB integration (future)
+
+## System Status
+
+**Components Operational:**
+
+- ✅ Event persistence (JSONL append-only log)
+- ✅ Database indexer (in-memory materialized views)
+- ✅ MCP server (8 tools for Aleph)
+- ✅ HTTP gateway (7 endpoints for Thales)
+- ✅ WebSocket event stream (`/ws`)
+- ✅ Merlin notification system (`/merlin/notifications`)
+- ✅ Observation modes (Passive/Advisory/Gated)
+
+**Test Status:** 82/82 passing
+
+**Servers:**
+
+- HTTP: `http://localhost:7777`
+- WebSocket events: `ws://localhost:7777/ws`
+- Merlin notifications: `ws://localhost:7777/merlin/notifications`
 
 ---
 

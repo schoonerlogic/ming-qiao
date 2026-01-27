@@ -384,9 +384,10 @@ impl ToolRegistry {
             .append(event)
             .map_err(|e| McpError::Internal(format!("Failed to write event: {}", e)))?;
 
-        // Broadcast to WebSocket clients if app_state is available
+        // Broadcast to WebSocket clients and send Merlin notifications if app_state is available
         if let Some(ref state) = self.app_state {
             state.broadcast_event(event.clone());
+            state.merlin_notifier().notify(event.clone(), state);
         }
 
         Ok(event_id)

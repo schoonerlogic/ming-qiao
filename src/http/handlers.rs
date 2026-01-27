@@ -109,7 +109,11 @@ pub async fn get_inbox(
 ) -> impl IntoResponse {
     // Use indexer for O(1) lookup of messages sent TO this agent
     let indexer = state.indexer().await;
-    let messages_clone: Vec<_> = indexer.get_messages_to_agent(&agent).into_iter().cloned().collect();
+    let messages_clone: Vec<_> = indexer
+        .get_messages_to_agent(&agent)
+        .into_iter()
+        .cloned()
+        .collect();
     drop(indexer);
 
     let messages: Vec<_> = messages_clone
@@ -117,7 +121,7 @@ pub async fn get_inbox(
         .filter(|msg| {
             // Filter by sender if specified
             if let Some(ref from) = query.from {
-                &msg.from != from
+                &msg.from == from
             } else {
                 true
             }
@@ -184,17 +188,20 @@ pub async fn list_threads(
         .collect();
 
     // Sort by created_at (newest first) and apply pagination
-    let mut thread_list: Vec<_> = filtered.into_iter().map(|thread| {
-        serde_json::json!({
-            "id": thread.id,
-            "subject": thread.subject,
-            "created_at": thread.created_at.to_rfc3339(),
-            "participants": thread.participants,
-            "status": thread.status,
-            "message_count": thread.message_count
+    let mut thread_list: Vec<_> = filtered
+        .into_iter()
+        .map(|thread| {
+            serde_json::json!({
+                "id": thread.id,
+                "subject": thread.subject,
+                "created_at": thread.created_at.to_rfc3339(),
+                "participants": thread.participants,
+                "status": thread.status,
+                "message_count": thread.message_count
+            })
         })
-    }).collect();
-    
+        .collect();
+
     thread_list.sort_by(|a, b| {
         let a_time = a.get("created_at").and_then(|v| v.as_str()).unwrap_or("");
         let b_time = b.get("created_at").and_then(|v| v.as_str()).unwrap_or("");
@@ -219,22 +226,28 @@ pub async fn get_thread(
 ) -> impl IntoResponse {
     // Use indexer for O(1) lookup
     let indexer = state.indexer().await;
-    
+
     let thread_clone = match indexer.get_thread(&id) {
         Some(t) => t.clone(),
-        None => return Json(serde_json::json!({
-            "error": {
-                "code": "NOT_FOUND",
-                "message": format!("Thread not found: {}", id)
-            }
-        }))
+        None => {
+            return Json(serde_json::json!({
+                "error": {
+                    "code": "NOT_FOUND",
+                    "message": format!("Thread not found: {}", id)
+                }
+            }))
+        }
     };
-    
-    let messages_clone: Vec<_> = indexer.get_messages_for_thread(&id).into_iter().cloned().collect();
+
+    let messages_clone: Vec<_> = indexer
+        .get_messages_for_thread(&id)
+        .into_iter()
+        .cloned()
+        .collect();
     drop(indexer);
-    
+
     let message_count = messages_clone.len();
-    
+
     Json(serde_json::json!({
         "thread_id": id,
         "subject": thread_clone.subject,
@@ -350,15 +363,17 @@ pub async fn get_message(
     let indexer = state.indexer().await;
     let message_clone = match indexer.get_message(&id) {
         Some(m) => m.clone(),
-        None => return Json(serde_json::json!({
-            "error": {
-                "code": "NOT_FOUND",
-                "message": format!("Message not found: {}", id)
-            }
-        }))
+        None => {
+            return Json(serde_json::json!({
+                "error": {
+                    "code": "NOT_FOUND",
+                    "message": format!("Message not found: {}", id)
+                }
+            }))
+        }
     };
     drop(indexer);
-    
+
     Json(serde_json::json!({
         "message_id": id,
         "thread_id": message_clone.thread_id,
@@ -419,7 +434,7 @@ pub async fn list_artifacts(
         .into_iter()
         .filter(|artifact| {
             if let Some(ref shared_by) = query.shared_by {
-                &artifact.shared_by != shared_by
+                &artifact.shared_by == shared_by
             } else {
                 true
             }
@@ -536,15 +551,17 @@ pub async fn get_decision(
     let indexer = state.indexer().await;
     let decision_clone = match indexer.get_decision(&id) {
         Some(d) => d.clone(),
-        None => return Json(serde_json::json!({
-            "error": {
-                "code": "NOT_FOUND",
-                "message": format!("Decision not found: {}", id)
-            }
-        }))
+        None => {
+            return Json(serde_json::json!({
+                "error": {
+                    "code": "NOT_FOUND",
+                    "message": format!("Decision not found: {}", id)
+                }
+            }))
+        }
     };
     drop(indexer);
-    
+
     Json(serde_json::json!({
         "decision_id": id,
         "subject": decision_clone.title,

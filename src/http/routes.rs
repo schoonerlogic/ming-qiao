@@ -7,7 +7,7 @@ use axum::{
     Router,
 };
 
-use crate::http::{handlers, ws};
+use crate::http::{handlers, merlin, ws};
 use crate::state::AppState;
 
 /// Create the API router with all routes
@@ -17,6 +17,11 @@ pub fn api_routes() -> Router<AppState> {
         .route("/health", get(handlers::health_check))
         // WebSocket for real-time events
         .route("/ws", get(ws::ws_handler))
+        // Merlin notification stream
+        .route(
+            "/merlin/notifications",
+            get(merlin::merlin_notifications_ws),
+        )
         // Inbox
         .route("/api/inbox/:agent", get(handlers::get_inbox))
         // Threads

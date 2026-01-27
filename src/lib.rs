@@ -10,9 +10,11 @@
 //! - `db` - Database models for SurrealDB (materialized views)
 //! - `http` - HTTP/REST API for Thales and Merlin dashboard
 //! - `state` - Shared application state and configuration
+//! - `merlin` - Merlin (human operator) notification system
 
 pub mod db;
 pub mod events;
 pub mod http;
 pub mod mcp;
+pub mod merlin;
 pub mod state;
