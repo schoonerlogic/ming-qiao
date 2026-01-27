@@ -24,8 +24,14 @@
 
 - **Task:** UI to Merlin Notifications (Task 008)
 - **Branch:** agent/luban/main/merlin-ui-notifications
-- **Status:** In progress
-- **Started:** 2026-01-27T12:18:00Z
+- **Status:** Complete — ready for review
+- **Completed:**
+  - 4 new files: types, store, 2 components (1,247 lines total)
+  - NotificationCenter with bell icon, badge count, sidebar drawer
+  - MerlinNotificationStream for WebSocket connection
+  - Integration into main page
+  - All TypeScript errors resolved (0 errors, 8 warnings)
+- **Note:** 6/7 phases complete (Phase 5 optional, skipped)
 
 ### Thales
 
@@ -42,6 +48,7 @@
 - [x] **Aleph:** Integrated Merlin notifications into MCP event flow
 - [x] **Aleph:** Documentation: `docs/MERLIN_THALES.md`
 - [x] **Luban:** Created GitHub repository with main and develop branches
+- [x] **Luban:** UI to Merlin Notifications (4 files, 1,247 lines, 0 TypeScript errors)
 
 ## Previous Days
 
