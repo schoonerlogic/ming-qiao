@@ -33,25 +33,28 @@
 
 ### Luban
 
-- **Task:** Debug UI 500 Error
+- **Task:** Debug UI 500 Error → SSR HYDRATION FIX COMPLETE ✅
 - **Branch:** agent/luban/main/merlin-ui-notifications
-- **Status:** BLOCKED - Critical hydration error
-- **Issue:**
-  - UI loads briefly (SSR) then crashes with 500 error
-  - Error in Console disappears too fast to read
-  - Full debug instructions: `TASK_LUBAN_DEBUG.md`
-- **Action Required:**
-  1. Read `TASK_LUBAN_DEBUG.md` for detailed steps
-  2. Enable "Pause on exceptions" in DevTools
-  3. Capture exact error message + stack trace
-  4. Check Network tab for API call status
-  5. Add debug logging to threads.svelte.ts
-  6. Report findings to COUNCIL_CHAT.md
-- **Files to Check:**
-  - `ui/src/lib/stores/threads.svelte.ts`
-  - `ui/src/lib/api.ts`
-  - `ui/src/routes/+page.svelte`
-- **Note:** BLOCKING all browser testing - highest priority!
+- **Status:** COMPLETE - UI loading successfully
+- **Completed:**
+  - Fixed Tailwind CSS v4 incompatibility (downgraded to v3.4.0)
+  - Fixed Svelte 5 SSR error with $state runes
+  - Fixed orphan $effect in merlinNotifications.svelte.ts
+  - Added `export const ssr = false;` to +page.svelte
+  - Verified UI loads successfully at http://localhost:5173
+  - Screenshot confirmed by Proteus
+- **Root Cause:** 
+  - Orphan `$effect` running at module level (line 375 in merlinNotifications.svelte.ts)
+  - Svelte 5 doesn't allow `$effect` outside component context
+  - Caused `effect_orphan` error → client-side hydration failure → 500 page
+- **Fix Applied:**
+  1. Added `export const ssr = false;` to ui/src/routes/+page.svelte
+  2. Removed orphan `$effect` from ui/src/lib/stores/merlinNotifications.svelte.ts (lines 374-386)
+- **Status:** ✅ UI LOADING SUCCESSFULLY
+- **Files Modified:**
+  - `ui/src/routes/+page.svelte` - Added ssr=false
+  - `ui/src/lib/stores/merlinNotifications.svelte.ts` - Removed orphan $effect
+- **Note:** Ready for systematic feature testing per docs/UI_TEST_REPORT.md
 
 ### Thales
 

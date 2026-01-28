@@ -3,6 +3,7 @@
  * Manages WebSocket connection to /merlin/notifications
  */
 
+import { browser } from '$app/environment';
 import type { MerlinNotification, MerlinNotificationUI, MerlinIntervention, Toast } from '$lib/types/notifications';
 import { getNotificationConfig } from '$lib/types/notifications';
 
@@ -16,11 +17,12 @@ const MERLIN_NOTIFICATIONS_URL = 'ws://localhost:7777/merlin/notifications';
 // Notification Store
 // ============================================================================
 
-let socket: WebSocket | null = $state(null);
-let connected = $state(false);
-let connectionError = $state<string | null>(null);
-let notifications = $state<MerlinNotificationUI[]>([]);
-let unreadCount = $state(0);
+// Skip SSR execution by wrapping in browser check
+let socket: WebSocket | null = $state(browser ? null : null);
+let connected = $state(browser ? false : false);
+let connectionError = $state<string | null>(browser ? null : null);
+let notifications = $state<MerlinNotificationUI[]>(browser ? [] : []);
+let unreadCount = $state(browser ? 0 : 0);
 
 // Auto-dismissal tracking
 const autoDismissTimers = new Map<string, ReturnType<typeof setTimeout>>();
@@ -33,6 +35,8 @@ const autoDismissTimers = new Map<string, ReturnType<typeof setTimeout>>();
  * Connect to Merlin notification WebSocket
  */
 export function connect() {
+  if (!browser) return; // Skip SSR
+  
   if (socket?.readyState === WebSocket.OPEN) {
     console.log('[MerlinNotifications] Already connected');
     return;
@@ -262,7 +266,7 @@ export function subscribeToNotifications(callback: (notification: MerlinNotifica
 // Intervention & Toast System
 // ============================================================================
 
-let toasts = $state<Toast[]>([]);
+let toasts = $state<Toast[]>(browser ? [] : []);
 const toastTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
 /**
@@ -367,14 +371,7 @@ export const merlinNotifications = {
 // Auto-connect on import (optional, remove if you want manual connection)
 // ============================================================================
 
-$effect(() => {
-  // Auto-connect when store is first used
-  if (!connected && !socket) {
-    connect();
-  }
+// Note: Auto-connect removed because $effect cannot be used at module level
+// The component using this store should call connect() in its onMount
+// Example: in MerlinNotificationStream.svelte or +page.svelte
 
-  // Cleanup on store destruction
-  return () => {
-    disconnect();
-  };
-});

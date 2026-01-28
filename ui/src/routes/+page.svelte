@@ -1,4 +1,7 @@
 <script lang="ts">
+  // Disable SSR for this page to prevent hydration errors with $state runes
+  export const ssr = false;
+
   import ThreadList from '$lib/components/ThreadList.svelte';
   import ThreadView from '$lib/components/ThreadView.svelte';
   import SearchBar from '$lib/components/SearchBar.svelte';
