@@ -85,7 +85,7 @@
               d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"
             />
           </svg>
-          Started {formatDate(threadsStore.currentThread.started_at)}
+          Started {formatDate(threadsStore.currentThread.created_at)}
         </span>
       </div>
     </div>
@@ -103,7 +103,7 @@
     </div>
 
     <!-- Decisions -->
-    {#if threadsStore.currentThread.decisions.length > 0}
+    {#if threadsStore.currentThread.decisions && threadsStore.currentThread.decisions.length > 0}
       <div class="space-y-4 mb-6">
         <h2 class="text-lg font-semibold text-gray-900">Decisions</h2>
         {#each threadsStore.currentThread.decisions as decision (decision.id)}

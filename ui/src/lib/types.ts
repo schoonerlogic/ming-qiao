@@ -62,9 +62,10 @@ export interface ThreadDetail {
   subject: string;
   participants: string[];
   status: ThreadStatus;
-  started_at: string;
+  created_at: string;  // Backend returns 'created_at', not 'started_at'
+  message_count?: number;  // Optional field returned by backend
   messages: Message[];
-  decisions: Decision[];
+  decisions?: Decision[];  // May be null if no decisions
 }
 
 export interface Decision {
