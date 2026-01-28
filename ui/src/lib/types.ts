@@ -46,11 +46,11 @@ export interface ArtifactRef {
 }
 
 export interface Thread {
-  thread_id: string;
+  id: string;  // Backend returns 'id', not 'thread_id'
   subject: string;
   participants: string[];
   status: ThreadStatus;
-  started_at: string;
+  created_at: string;  // Backend returns 'created_at', not 'started_at'
   last_message_at: string;
   message_count: number;
   decision_count: number;

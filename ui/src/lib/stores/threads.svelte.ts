@@ -62,7 +62,7 @@ function createThreadStore() {
     },
 
     updateThreadInList(thread: Thread) {
-      const index = threads.findIndex((t) => t.thread_id === thread.thread_id);
+      const index = threads.findIndex((t) => t.id === thread.id);
       if (index !== -1) {
         threads[index] = thread;
       } else {

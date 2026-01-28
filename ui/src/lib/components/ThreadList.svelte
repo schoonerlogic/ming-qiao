@@ -102,10 +102,10 @@
     </div>
   {:else}
     <div class="space-y-2">
-      {#each threadsStore.threads as thread (thread.thread_id)}
+      {#each threadsStore.threads as thread (thread.id)}
         <div
           class="bg-white border border-gray-200 rounded-lg p-4 hover:border-blue-300 hover:shadow-md transition-all cursor-pointer"
-          onclick={() => onSelectThread?.(thread.thread_id)}
+          onclick={() => onSelectThread?.(thread.id)}
         >
           <div class="flex items-start justify-between">
             <div class="flex-1">
