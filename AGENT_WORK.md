@@ -1,7 +1,7 @@
 # Agent Work Coordination — Ming-Qiao
 
-**Last Updated:** 2026-01-27T19:15:00Z
-**Updated By:** aleph
+**Last Updated:** 2026-01-28T10:57:00Z
+**Updated By:** luban
 
 ---
 
@@ -33,16 +33,25 @@
 
 ### Luban
 
-- **Task:** UI to Merlin Notifications (Task 008)
+- **Task:** Debug UI 500 Error
 - **Branch:** agent/luban/main/merlin-ui-notifications
-- **Status:** Complete — ready for review
-- **Completed:**
-  - 4 new files: types, store, 2 components (1,247 lines total)
-  - NotificationCenter with bell icon, badge count, sidebar drawer
-  - MerlinNotificationStream for WebSocket connection
-  - Integration into main page
-  - All TypeScript errors resolved (0 errors, 8 warnings)
-- **Note:** 6/7 phases complete (Phase 5 optional, skipped)
+- **Status:** BLOCKED - Critical hydration error
+- **Issue:**
+  - UI loads briefly (SSR) then crashes with 500 error
+  - Error in Console disappears too fast to read
+  - Full debug instructions: `TASK_LUBAN_DEBUG.md`
+- **Action Required:**
+  1. Read `TASK_LUBAN_DEBUG.md` for detailed steps
+  2. Enable "Pause on exceptions" in DevTools
+  3. Capture exact error message + stack trace
+  4. Check Network tab for API call status
+  5. Add debug logging to threads.svelte.ts
+  6. Report findings to COUNCIL_CHAT.md
+- **Files to Check:**
+  - `ui/src/lib/stores/threads.svelte.ts`
+  - `ui/src/lib/api.ts`
+  - `ui/src/routes/+page.svelte`
+- **Note:** BLOCKING all browser testing - highest priority!
 
 ### Thales
 
@@ -87,16 +96,29 @@
 
 ## Blocked / Waiting
 
-_No active blockers._
+- **Luban:** UI testing results pending (browser testing required)
+  - Needs to verify: injectMessage, modeToggle, WebSocket real-time updates
+  - Report findings to COUNCIL_CHAT.md when complete
 
 ---
 
 ## Upcoming
 
-- [ ] Review Luban's Svelte UI implementation
+- [ ] **Aleph:** Task Lifecycle Implementation (v0.1)
+  - Architectural review complete (Thales approved)
+  - Simplified state machine: Proposed → Assigned → InProgress → Complete → Verified
+  - Implementation order: Model → Tools → Queries → Dependencies → Comments
+  - Estimated 8-13 hours total
+  - Blocked on: UI testing validation (to confirm current system works)
+
+- [ ] **Luban:** Task Board UI (after task lifecycle backend ready)
+  - Kanban board with 6 columns
+  - Task cards with assignee, priority, tags, age
+  - Drag-and-drop state transitions
+  - Dependency indicators
+
 - [ ] Wire up 10 stub HTTP handlers to EventWriter
-- [ ] Implement Merlin intervention processing (inject, approve, reject)
-- [ ] SurrealDB integration (future)
+- [ ] SurrealDB integration (v0.2)
 
 ## System Status
 
