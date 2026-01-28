@@ -24,6 +24,11 @@ let connectionError = $state<string | null>(browser ? null : null);
 let notifications = $state<MerlinNotificationUI[]>(browser ? [] : []);
 let unreadCount = $state(browser ? 0 : 0);
 
+// Reconnection tracking (prevent infinite loops)
+let isReconnecting = $state(browser ? false : false);
+let reconnectAttempts = $state(browser ? 0 : 0);
+const MAX_RECONNECT_ATTEMPTS = 10;
+
 // Auto-dismissal tracking
 const autoDismissTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
@@ -37,13 +42,29 @@ const autoDismissTimers = new Map<string, ReturnType<typeof setTimeout>>();
 export function connect() {
   if (!browser) return; // Skip SSR
   
+  // Prevent re-entrant calls
+  if (isReconnecting) {
+    console.log('[MerlinNotifications] Already reconnecting, skipping');
+    return;
+  }
+  
   if (socket?.readyState === WebSocket.OPEN) {
     console.log('[MerlinNotifications] Already connected');
     return;
   }
 
-  console.log('[MerlinNotifications] Connecting to', MERLIN_NOTIFICATIONS_URL);
+  // Check max retry limit
+  if (reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
+    console.log('[MerlinNotifications] Max reconnection attempts reached, giving up');
+    connectionError = 'Connection failed after multiple attempts';
+    isReconnecting = false;
+    return;
+  }
+
+  console.log(`[MerlinNotifications] Connecting to ${MERLIN_NOTIFICATIONS_URL} (attempt ${reconnectAttempts + 1}/${MAX_RECONNECT_ATTEMPTS})`);
   connectionError = null;
+  isReconnecting = true;
+  reconnectAttempts++;
 
   try {
     socket = new WebSocket(MERLIN_NOTIFICATIONS_URL);
@@ -52,6 +73,8 @@ export function connect() {
       console.log('[MerlinNotifications] Connected');
       connected = true;
       connectionError = null;
+      isReconnecting = false;
+      reconnectAttempts = 0; // Reset on successful connection
     };
 
     socket.onmessage = (event) => {
@@ -73,18 +96,25 @@ export function connect() {
       console.log('[MerlinNotifications] Disconnected');
       connected = false;
       socket = null;
+      isReconnecting = false; // Allow reconnection
 
-      // Auto-reconnect after 5 seconds
-      setTimeout(() => {
-        if (!connected) {
-          console.log('[MerlinNotifications] Attempting to reconnect...');
-          connect();
-        }
-      }, 5000);
+      // Auto-reconnect after 5 seconds (only if under max attempts)
+      if (reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
+        setTimeout(() => {
+          if (!connected) {
+            console.log('[MerlinNotifications] Attempting to reconnect...');
+            connect();
+          }
+        }, 5000);
+      } else {
+        console.log('[MerlinNotifications] Max reconnection attempts reached, stopping');
+        connectionError = 'Connection failed. Please refresh the page.';
+      }
     };
   } catch (error) {
     console.error('[MerlinNotifications] Failed to connect:', error);
     connectionError = 'Failed to connect';
+    isReconnecting = false;
   }
 }
 

@@ -1,6 +1,7 @@
 <script lang="ts">
   import { merlinNotifications } from '$stores/merlinNotifications';
   import type { MerlinNotificationUI } from '$lib/types/notifications';
+  import { onMount } from 'svelte';
 
   /**
    * MerlinNotificationStream - Invisible component that manages the notification stream
@@ -18,6 +19,9 @@
   let connected = $derived(merlinNotifications.connected);
   let connectionError = $derived(merlinNotifications.connectionError);
 
+  // Track if we've already initiated connection
+  let hasInitialized = $state(false);
+
   // Watch for connection changes
   $effect(() => {
     if (onConnectionChange) {
@@ -25,11 +29,11 @@
     }
   });
 
-  // Ensure connection on mount
-  $effect(() => {
-    if (!connected) {
-      merlinNotifications.connect();
-    }
+  // Initialize connection ONCE on mount
+  onMount(() => {
+    console.log('[MerlinNotificationStream] Component mounted, initiating connection...');
+    merlinNotifications.connect();
+    hasInitialized = true;
   });
 </script>
 
