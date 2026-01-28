@@ -51,16 +51,40 @@
 
     // Subscribe to WebSocket messages
     const unsubscribe = onMessage((message) => {
-      console.log('WebSocket message:', message);
+      console.log('[DEBUG] WebSocket message received:', JSON.stringify(message, null, 2));
       
       switch (message.type) {
         case 'connected':
           console.log('[DEBUG] WebSocket connected message received');
           wsConnected = true;
           break;
+        case 'event':
+          // Backend sends Event { event } structure
+          console.log('[DEBUG] Event received:', message);
+          
+          // Check if this is a message_sent event
+          if (message.event?.event_type === 'MessageSent' || message.event?.event_type === 'message_sent') {
+            console.log('[DEBUG] Message event detected');
+            loadThreads('active');
+            
+            // Extract thread_id from the event payload
+            const threadId = message.event?.payload?.data?.thread_id;
+            console.log('[DEBUG] Thread ID from event:', threadId);
+            
+            // If current thread is open, reload it to show new message
+            if (threadsStore.currentThread && threadId === threadsStore.currentThread.id) {
+              console.log('[DEBUG] Reloading current thread:', threadId);
+              loadThread(threadId);
+            }
+          }
+          break;
         case 'message':
-          // Refresh threads when new message arrives
+          // Frontend's expected format (may not be used by backend yet)
           loadThreads('active');
+          
+          if (threadsStore.currentThread && message.thread_id === threadsStore.currentThread.id) {
+            loadThread(threadsStore.currentThread.id);
+          }
           break;
         case 'thread_status':
           // Refresh thread list when status changes
