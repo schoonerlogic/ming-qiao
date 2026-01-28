@@ -43,7 +43,7 @@
         <h3 class="font-semibold text-gray-900">Decision Required</h3>
         <span class={getStatusBadgeClass(decision.status)}>{decision.status}</span>
       </div>
-      <p class="text-gray-900 font-medium">{decision.question}</p>
+      <p class="text-gray-900 font-medium">{decision.subject}</p>
     </div>
   </div>
 
@@ -51,13 +51,13 @@
     <div class="bg-green-50 border-l-4 border-green-500 p-3 mb-3">
       <p class="font-medium text-green-900">Resolution</p>
       <p class="text-green-800">{decision.resolution}</p>
-      {#if decision.rationale}
-        <p class="text-sm text-green-700 mt-1">{decision.rationale}</p>
+      {#if decision.context}
+        <p class="text-sm text-green-700 mt-1">{decision.context}</p>
       {/if}
       <div class="flex items-center gap-2 mt-2 text-xs text-green-600">
         <span>Decided by {decision.decided_by}</span>
-        {#if decision.decided_at}
-          <span>• {formatDate(decision.decided_at)}</span>
+        {#if decision.created_at}
+          <span>• {formatDate(decision.created_at)}</span>
         {/if}
       </div>
     </div>

@@ -65,20 +65,22 @@
     <!-- Avatar -->
     <div class="flex-shrink-0">
       <div
-        class="w-10 h-10 rounded-full {getAvatarColor(message.from_agent)} flex items-center justify-center text-white font-semibold"
+        class="w-10 h-10 rounded-full {getAvatarColor(message.from)} flex items-center justify-center text-white font-semibold"
       >
-        {getInitials(message.from_agent)}
+        {getInitials(message.from)}
       </div>
     </div>
 
     <!-- Message Content -->
     <div class="flex-1 min-w-0">
       <div class="flex items-center gap-2 mb-1">
-        <span class="font-semibold text-gray-900">{message.from_agent}</span>
+        <span class="font-semibold text-gray-900">{message.from}</span>
         <span class="text-gray-400">→</span>
-        <span class="text-gray-700">{message.to_agent}</span>
-        <span class={getPriorityBadgeClass(message.priority)}>{message.priority}</span>
-        <span class="text-xs text-gray-500 ml-auto">{formatDate(message.sent_at)}</span>
+        <span class="text-gray-700">{message.to}</span>
+        {#if message.priority}
+          <span class={getPriorityBadgeClass(message.priority)}>{message.priority}</span>
+        {/if}
+        <span class="text-xs text-gray-500 ml-auto">{formatDate(message.created_at)}</span>
       </div>
 
       {#if message.subject}

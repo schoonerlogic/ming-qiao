@@ -96,7 +96,7 @@
       {#if threadsStore.currentThread.messages.length === 0}
         <p class="text-gray-500 text-center py-4">No messages yet</p>
       {:else}
-        {#each threadsStore.currentThread.messages as message (message.message_id)}
+        {#each threadsStore.currentThread.messages as message (message.id)}
           <Message {message} />
         {/each}
       {/if}
@@ -106,7 +106,7 @@
     {#if threadsStore.currentThread.decisions.length > 0}
       <div class="space-y-4 mb-6">
         <h2 class="text-lg font-semibold text-gray-900">Decisions</h2>
-        {#each threadsStore.currentThread.decisions as decision (decision.decision_id)}
+        {#each threadsStore.currentThread.decisions as decision (decision.id)}
           <DecisionCard {decision} />
         {/each}
       </div>

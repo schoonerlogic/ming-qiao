@@ -26,14 +26,14 @@ export type AnnotationTarget = 'thread' | 'decision' | 'message';
 // ============================================================================
 
 export interface Message {
-  message_id: string;
-  thread_id: string;
-  from_agent: string;
-  to_agent: string;
+  id: string;  // Backend returns 'id', not 'message_id'
+  thread_id?: string;  // Optional in thread detail response
+  from: string;  // Backend returns 'from', not 'from_agent'
+  to: string;  // Backend returns 'to', not 'to_agent'
   subject?: string;
   content: string;
-  priority: Priority;
-  sent_at: string;
+  priority?: Priority;  // Optional in thread detail response
+  created_at: string;  // Backend returns 'created_at', not 'sent_at'
   read_at?: string;
   artifact_refs?: ArtifactRef[];
   context_refs?: any[];
@@ -68,16 +68,17 @@ export interface ThreadDetail {
 }
 
 export interface Decision {
-  decision_id: string;
-  thread_id: string;
-  question: string;
+  id: string;  // Backend returns 'id', not 'decision_id'
+  thread_id?: string;  // Optional in list responses
+  subject: string;  // Backend returns 'subject', not 'question'
+  context?: string;  // Backend returns 'context', not 'rationale'
   resolution?: string;
-  rationale?: string;
+  chosen?: number;  // Index of chosen option
+  status: DecisionStatus;
+  created_at: string;  // Backend returns 'created_at', not 'decided_at'
+  options?: DecisionOption[];
   decided_by?: string;
   approved_by?: string;
-  status: DecisionStatus;
-  decided_at?: string;
-  options?: DecisionOption[];
 }
 
 export interface DecisionOption {
