@@ -33,28 +33,29 @@
 
 ### Luban
 
-- **Task:** Debug UI 500 Error → SSR HYDRATION FIX COMPLETE ✅
+- **Task:** Frontend Connection Diagnostics → DEBUG LOGGING ADDED ✅
 - **Branch:** agent/luban/main/merlin-ui-notifications
-- **Status:** COMPLETE - UI loading successfully
+- **Status:** IN PROGRESS - Awaiting browser testing results
 - **Completed:**
-  - Fixed Tailwind CSS v4 incompatibility (downgraded to v3.4.0)
-  - Fixed Svelte 5 SSR error with $state runes
-  - Fixed orphan $effect in merlinNotifications.svelte.ts
-  - Added `export const ssr = false;` to +page.svelte
-  - Verified UI loads successfully at http://localhost:5173
-  - Screenshot confirmed by Proteus
-- **Root Cause:** 
-  - Orphan `$effect` running at module level (line 375 in merlinNotifications.svelte.ts)
-  - Svelte 5 doesn't allow `$effect` outside component context
-  - Caused `effect_orphan` error → client-side hydration failure → 500 page
-- **Fix Applied:**
-  1. Added `export const ssr = false;` to ui/src/routes/+page.svelte
-  2. Removed orphan `$effect` from ui/src/lib/stores/merlinNotifications.svelte.ts (lines 374-386)
-- **Status:** ✅ UI LOADING SUCCESSFULLY
-- **Files Modified:**
-  - `ui/src/routes/+page.svelte` - Added ssr=false
-  - `ui/src/lib/stores/merlinNotifications.svelte.ts` - Removed orphan $effect
-- **Note:** Ready for systematic feature testing per docs/UI_TEST_REPORT.md
+  - Fixed SSR hydration error (commit 918d474)
+  - Added comprehensive debug logging (commit ad08ff7)
+  - Added try/catch error handling to +page.svelte onMount()
+  - Added request/response logging to api.ts
+  - Updated COUNCIL_CHAT.md with diagnostic steps
+- **Current Issue:** 
+  - UI renders successfully but shows "Disconnected" status
+  - Thread list shows "No threads found"
+  - Backend verified working (16 threads available)
+  - Likely cause: Store initialization or API connection issue
+- **Changes Made:**
+  - `ui/src/routes/+page.svelte` - Added debug logs for config/threads/WebSocket
+  - `ui/src/lib/api.ts` - Added request/response logging for all API calls
+  - `COUNCIL_CHAT.md` - Updated with diagnostic instructions
+- **Next Steps:**
+  - Awaiting browser DevTools console output (from Proteus or Aleph)
+  - Need to check Network tab for API call status
+  - Verify WebSocket connection attempts
+- **Note:** Thales requested debugging of connection issue
 
 ### Thales
 
