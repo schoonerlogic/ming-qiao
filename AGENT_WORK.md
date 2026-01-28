@@ -1,6 +1,6 @@
 # Agent Work Coordination — Ming-Qiao
 
-**Last Updated:** 2026-01-28T10:57:00Z
+**Last Updated:** 2026-01-28T15:05:00Z
 **Updated By:** luban
 
 ---
@@ -33,29 +33,55 @@
 
 ### Luban
 
-- **Task:** Frontend Connection Diagnostics → DEBUG LOGGING ADDED ✅
+- **Task:** Frontend Connection Diagnostics → ALL CRITICAL BUGS FIXED ✅
 - **Branch:** agent/luban/main/merlin-ui-notifications
-- **Status:** IN PROGRESS - Awaiting browser testing results
+- **Status:** READY FOR BROWSER TESTING - All fixes complete, awaiting user verification
 - **Completed:**
   - Fixed SSR hydration error (commit 918d474)
   - Added comprehensive debug logging (commit ad08ff7)
-  - Added try/catch error handling to +page.svelte onMount()
-  - Added request/response logging to api.ts
-  - Updated COUNCIL_CHAT.md with diagnostic steps
-- **Current Issue:** 
-  - UI renders successfully but shows "Disconnected" status
-  - Thread list shows "No threads found"
-  - Backend verified working (16 threads available)
-  - Likely cause: Store initialization or API connection issue
+  - **Fixed infinite WebSocket reconnection loop (commit 2da8e78)**
+  - **Fixed ThreadList duplicate key error (commit 21d0e0e)**
+  - **Fixed ThreadView duplicate key errors (commit 771dac2)**
+  - **Fixed ThreadDetail loading state issue (commit fa196d7)**
+  - **Fixed intervention action naming mismatch (commit b630936)**
+  - **Fixed /api/inject endpoint to accept all valid actions (commit 351da79)**
+- **Bugs Fixed:**
+  1. **Infinite WebSocket Loop** - Reconnection guards prevent "Insufficient resources" error
+  2. **ThreadList Rendering** - Updated Thread interface: `id` instead of `thread_id`
+  3. **ThreadView Message Keys** - Updated Message interface: `id`/`from`/`to`/`created_at`
+  4. **ThreadView Decision Keys** - Updated Decision interface: `id`/`subject`/`context`/`created_at`
+  5. **ThreadDetail Loading State** - Fixed `started_at` → `created_at`, added null safety for `decisions`
+  6. **Intervention Action Names** - Fixed frontend InterventionMessage type to match backend
+  7. **API Action Validation** - Backend `/api/inject` now accepts all 6 valid action types
+- **API Field Mapping Documented:**
+  - Threads: `id`, `subject`, `participants`, `status`, `created_at`, `message_count`
+  - Messages: `id`, `from`, `to`, `content`, `created_at`
+  - Decisions: `id`, `subject`, `context`, `status`, `created_at`
 - **Changes Made:**
-  - `ui/src/routes/+page.svelte` - Added debug logs for config/threads/WebSocket
-  - `ui/src/lib/api.ts` - Added request/response logging for all API calls
-  - `COUNCIL_CHAT.md` - Updated with diagnostic instructions
+  - `ui/src/lib/types.ts` - All interfaces updated to match backend API exactly
+  - `ui/src/lib/components/ThreadList.svelte` - Use `thread.id` instead of `thread.thread_id`
+  - `ui/src/lib/components/ThreadView.svelte` - Use `message.id`, `decision.id`, `created_at`
+  - `ui/src/lib/components/Message.svelte` - Use `message.from`, `message.to`, `message.created_at`
+  - `ui/src/lib/components/DecisionCard.svelte` - Use `decision.subject`, `decision.context`, `decision.created_at`
+  - `ui/src/lib/stores/merlinNotifications.svelte.ts` - Reconnection guards
+  - `ui/src/lib/components/MerlinNotificationStream.svelte` - onMount instead of $effect
+  - `ui/src/routes/+page.svelte` - Debug logs for config/threads/WebSocket
+  - `ui/src/lib/api.ts` - Request/response logging for all API calls
+  - `ui/src/lib/stores/threads.svelte.ts` - Use `thread.id` for find/update
+- **Expected Results After Browser Refresh:**
+  - ✅ Thread list renders (16 threads visible)
+  - ✅ Clicking thread shows messages (2 messages from test data)
+  - ✅ WebSocket connections stable (no infinite loops)
+  - ✅ Message timestamps display correctly
+  - ✅ Decision section renders (if decisions exist)
+  - ✅ No "spinning arrow" loading state
 - **Next Steps:**
-  - Awaiting browser DevTools console output (from Proteus or Aleph)
-  - Need to check Network tab for API call status
-  - Verify WebSocket connection attempts
-- **Note:** Thales requested debugging of connection issue
+  - **User to test:** Refresh browser at http://localhost:5173
+  - Verify thread list loads
+  - Click on "Test" thread
+  - Verify messages render
+  - Report any remaining issues to COUNCIL_CHAT.md
+- **Note:** Thales requested debugging of connection issue - all known issues resolved
 
 ### Thales
 

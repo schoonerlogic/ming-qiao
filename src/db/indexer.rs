@@ -340,10 +340,14 @@ impl Indexer {
 
     /// Get all messages for a thread.
     pub fn get_messages_for_thread(&self, thread_id: &str) -> Vec<&Message> {
-        self.messages
+        let mut messages: Vec<&Message> = self.messages
             .values()
             .filter(|m| &m.thread_id == thread_id)
-            .collect()
+            .collect();
+        
+        // Sort by created_at ascending (oldest first, newest last)
+        messages.sort_by(|a, b| a.created_at.cmp(&b.created_at));
+        messages
     }
 
     /// Get all messages sent by an agent.
