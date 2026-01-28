@@ -9,7 +9,8 @@
 
 ### Aleph
 
-- **Task:** Council Message Exchange Test (COUNCIL_MESSAGE_TEST.md) - COMPLETE ✅
+- **Task:** Awaiting NATS architecture design from Thales (scheduled for tomorrow)
+- **Previous:** Council Message Exchange Test (COUNCIL_MESSAGE_TEST.md) - COMPLETE ✅
 - **Branch:** agent/luban/main/merlin-ui-notifications
 - **Status:** Complete - All 3 agents exchanged messages successfully
 - **Completed:**
