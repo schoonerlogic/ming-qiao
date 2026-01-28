@@ -36,7 +36,7 @@
     try {
       // Send intervention via WebSocket
       const success = merlinNotifications.sendIntervention({
-        action: 'setMode',
+        action: 'set_mode',  // Backend expects snake_case
         mode
       });
       

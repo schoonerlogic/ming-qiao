@@ -31,7 +31,7 @@
     submitting = true;
     
     const success = merlinNotifications.sendIntervention({
-      action: 'approveDecision',
+      action: 'approve_decision',  // Backend expects snake_case
       decisionId: decision.decision_id,
       reason: reason.trim() || undefined
     });
@@ -53,7 +53,7 @@
     submitting = true;
     
     const success = merlinNotifications.sendIntervention({
-      action: 'rejectDecision',
+      action: 'reject_decision',  // Backend expects snake_case
       decisionId: decision.decision_id,
       reason: reason.trim() || undefined
     });

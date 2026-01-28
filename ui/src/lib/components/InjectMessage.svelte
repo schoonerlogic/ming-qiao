@@ -40,7 +40,7 @@
     sending = true;
     
     const success = merlinNotifications.sendIntervention({
-      action: 'injectMessage',
+      action: 'inject_message',  // Backend expects snake_case
       threadId: thread.thread_id,
       from: 'merlin',
       content: content.trim()

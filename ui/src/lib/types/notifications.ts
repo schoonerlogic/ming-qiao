@@ -242,7 +242,7 @@ export type MerlinIntervention =
  * Inject a message into a thread
  */
 export interface InjectMessageIntervention {
-  action: 'injectMessage';
+  action: 'inject_message';  // Backend expects snake_case
   threadId: string;
   from: string; // Agent ID (usually "merlin")
   content: string;
@@ -252,7 +252,7 @@ export interface InjectMessageIntervention {
  * Approve a pending decision
  */
 export interface ApproveDecisionIntervention {
-  action: 'approveDecision';
+  action: 'approve_decision';  // Backend expects snake_case
   decisionId: string;
   reason?: string;
 }
@@ -261,7 +261,7 @@ export interface ApproveDecisionIntervention {
  * Reject a pending decision
  */
 export interface RejectDecisionIntervention {
-  action: 'rejectDecision';
+  action: 'reject_decision';  // Backend expects snake_case
   decisionId: string;
   reason?: string;
 }
@@ -270,7 +270,7 @@ export interface RejectDecisionIntervention {
  * Change observation mode
  */
 export interface SetModeIntervention {
-  action: 'setMode';
+  action: 'set_mode';  // Backend expects snake_case
   mode: 'passive' | 'advisory' | 'gated';
 }
 
