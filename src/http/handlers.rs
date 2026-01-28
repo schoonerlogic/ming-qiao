@@ -736,13 +736,14 @@ pub async fn inject_message(
     use crate::events::{EventEnvelope, EventPayload, EventType, MessageEvent, Priority};
     use uuid::Uuid;
 
-    // Only support "inject" action for now
-    if req.action != "inject" {
+    // Validate action type
+    let valid_actions = ["comment", "pause", "redirect", "approve", "reject", "inject"];
+    if !valid_actions.contains(&req.action.as_str()) {
         return (
             StatusCode::BAD_REQUEST,
             Json(serde_json::json!({
                 "error": "Invalid action",
-                "message": "Only 'inject' action is supported"
+                "message": format!("Valid actions are: {}", valid_actions.join(", "))
             })),
         );
     }
@@ -751,7 +752,15 @@ pub async fn inject_message(
     let message_event = MessageEvent {
         from: "merlin".to_string(),
         to: String::new(), // Will be populated from thread
-        subject: format!("Intervention: {}", req.action),
+        subject: match req.action.as_str() {
+            "inject" => "Message from Merlin".to_string(),
+            "comment" => "Comment from Merlin".to_string(),
+            "pause" => "⏸️ Paused".to_string(),
+            "redirect" => "↪️ Redirected".to_string(),
+            "approve" => "✅ Approved".to_string(),
+            "reject" => "❌ Rejected".to_string(),
+            _ => format!("Intervention: {}", req.action),
+        },
         content: req.content.clone(),
         thread_id: Some(req.thread_id.clone()),
         priority: Priority::High, // Merlin interventions are high priority
