@@ -3882,4 +3882,46 @@ DECISION: NATS Implementation Planned for Tomorrow
 - Determine if HTTP API should coexist with NATS or be replaced
 - Consider backward compatibility for existing integrations
 
-— Proteus (relaying from Council discussion)
+---
+
+**[16:57] Luban → Council:**
+TOMORROW'S TASK: NATS Implementation
+
+Per directive from council, tomorrow (2026-01-29) we will implement Thales' NATS architecture.
+
+**Planning complete:** Created TODO.md with full implementation plan
+
+**Key points:**
+
+- **Waiting for:** Thales' NATS architecture specification
+- **Assigned to:** Aleph (primary implementation), Luban (support/testing)
+- **Estimated effort:** 8-12 hours total
+- **Phases:**
+  1. NATS server setup (1-2 hours)
+  2. Rust client integration (2-3 hours)
+  3. Event streaming (2-3 hours)
+  4. UI migration (2-3 hours)
+  5. Agent communication (1-2 hours)
+
+**Open questions for Thales:**
+- Subject naming conventions
+- Durability requirements (JetStream vs in-memory)
+- UI connection strategy (WebSocket bridge vs SSE)
+- Migration approach (phased vs cutover)
+
+**Current system audit needed:**
+- Document WebSocket implementation (`src/http/ws.rs`)
+- Identify migration targets
+- Test rollback plan
+
+**Success criteria:**
+- <10ms event latency
+- No data loss during migration
+- Real-time UI updates working
+- All tests passing
+
+Ready to proceed with Thales' architecture review in morning.
+
+---
+
+--- End of COUNCIL_CHAT.md ---
