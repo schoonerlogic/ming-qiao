@@ -7,33 +7,38 @@
 // Enums
 // ============================================================================
 
-export type Priority = 'low' | 'normal' | 'high' | 'critical';
+export type Priority = "low" | "normal" | "high" | "critical";
 
-export type ThreadStatus = 'active' | 'paused' | 'resolved' | 'archived';
+export type ThreadStatus = "active" | "paused" | "resolved" | "archived";
 
-export type DecisionStatus = 'pending' | 'approved' | 'rejected' | 'superseded';
+export type DecisionStatus = "pending" | "approved" | "rejected" | "superseded";
 
-export type AgentStatus = 'available' | 'working' | 'blocked' | 'offline';
+export type AgentStatus = "available" | "working" | "blocked" | "offline";
 
-export type ObservationMode = 'passive' | 'advisory' | 'gated';
+export type ObservationMode = "passive" | "advisory" | "gated";
 
-export type InjectAction = 'comment' | 'pause' | 'redirect' | 'approve' | 'reject';
+export type InjectAction =
+  | "comment"
+  | "pause"
+  | "redirect"
+  | "approve"
+  | "reject";
 
-export type AnnotationTarget = 'thread' | 'decision' | 'message';
+export type AnnotationTarget = "thread" | "decision" | "message";
 
 // ============================================================================
 // Core Types
 // ============================================================================
 
 export interface Message {
-  id: string;  // Backend returns 'id', not 'message_id'
-  thread_id?: string;  // Optional in thread detail response
-  from: string;  // Backend returns 'from', not 'from_agent'
-  to: string;  // Backend returns 'to', not 'to_agent'
+  id: string; // Backend returns 'id', not 'message_id'
+  thread_id?: string; // Optional in thread detail response
+  from: string; // Backend returns 'from', not 'from_agent'
+  to: string; // Backend returns 'to', not 'to_agent'
   subject?: string;
   content: string;
-  priority?: Priority;  // Optional in thread detail response
-  created_at: string;  // Backend returns 'created_at', not 'sent_at'
+  priority?: Priority; // Optional in thread detail response
+  created_at: string; // Backend returns 'created_at', not 'sent_at'
   read_at?: string;
   artifact_refs?: ArtifactRef[];
   context_refs?: any[];
@@ -46,11 +51,11 @@ export interface ArtifactRef {
 }
 
 export interface Thread {
-  id: string;  // Backend returns 'id', not 'thread_id'
+  id: string; // Backend returns 'id', not 'thread_id'
   subject: string;
   participants: string[];
   status: ThreadStatus;
-  created_at: string;  // Backend returns 'created_at', not 'started_at'
+  created_at: string; // Backend returns 'created_at', not 'started_at'
   last_message_at: string;
   message_count: number;
   decision_count: number;
@@ -62,21 +67,21 @@ export interface ThreadDetail {
   subject: string;
   participants: string[];
   status: ThreadStatus;
-  created_at: string;  // Backend returns 'created_at', not 'started_at'
-  message_count?: number;  // Optional field returned by backend
+  created_at: string; // Backend returns 'created_at', not 'started_at'
+  message_count?: number; // Optional field returned by backend
   messages: Message[];
-  decisions?: Decision[];  // May be null if no decisions
+  decisions?: Decision[]; // May be null if no decisions
 }
 
 export interface Decision {
-  id: string;  // Backend returns 'id', not 'decision_id'
-  thread_id?: string;  // Optional in list responses
-  subject: string;  // Backend returns 'subject', not 'question'
-  context?: string;  // Backend returns 'context', not 'rationale'
+  id: string; // Backend returns 'id', not 'decision_id'
+  thread_id?: string; // Optional in list responses
+  subject: string; // Backend returns 'subject', not 'question'
+  context?: string; // Backend returns 'context', not 'rationale'
   resolution?: string;
-  chosen?: number;  // Index of chosen option
+  chosen?: number; // Index of chosen option
   status: DecisionStatus;
-  created_at: string;  // Backend returns 'created_at', not 'decided_at'
+  created_at: string; // Backend returns 'created_at', not 'decided_at'
   options?: DecisionOption[];
   decided_by?: string;
   approved_by?: string;
@@ -150,7 +155,7 @@ export interface SearchResponse {
 }
 
 export interface SearchResult {
-  type: 'decision' | 'message';
+  type: "decision" | "message";
   id: string;
   snippet: string;
   score: number;
@@ -178,36 +183,36 @@ export type WSMessage =
   | WSModeChanged;
 
 export interface WSConnected {
-  type: 'connected';
+  type: "connected";
   mode: ObservationMode;
   unread_count: number;
 }
 
 export interface WSMessageEvent {
-  type: 'message';
+  type: "message";
   thread_id: string;
   message: Message;
 }
 
 export interface WSDecisionPending {
-  type: 'decision_pending';
+  type: "decision_pending";
   decision: Decision;
 }
 
 export interface WSThreadStatus {
-  type: 'thread_status';
+  type: "thread_status";
   thread_id: string;
   status: ThreadStatus;
 }
 
 export interface WSAgentTyping {
-  type: 'agent_typing';
+  type: "agent_typing";
   agent: string;
   thread_id: string;
 }
 
 export interface WSModeChanged {
-  type: 'mode_changed';
+  type: "mode_changed";
   old_mode: ObservationMode;
   new_mode: ObservationMode;
 }
@@ -233,6 +238,7 @@ export interface CreateThreadRequest {
 
 export interface InjectRequest {
   thread_id: string;
+  sender: string;
   content: string;
   action: InjectAction;
 }

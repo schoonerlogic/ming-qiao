@@ -9,9 +9,21 @@
 
 ### Aleph
 
-- **Task:** Backend verification for Luban's UI testing
+- **Task:** Council Message Exchange Test (COUNCIL_MESSAGE_TEST.md)
 - **Branch:** agent/luban/main/merlin-ui-notifications
-- **Status:** Complete — Backend ready and verified
+- **Status:** In Progress - Step 1 complete, Step 2 ready
+- **Completed:**
+  - Fixed `/api/inject` endpoint to preserve sender field (was hardcoded to "merlin")
+  - Updated `InjectRequest` struct to include `sender` field
+  - Step 1: Luban message sent successfully ✅
+  - Message visible in thread with correct sender
+- **Current Status:**
+  - Backend: Running release build with sender fix
+  - Step 1 Complete: Luban's message in system
+  - Step 2 Ready: Awaiting Proteus to send message as Thales via UI
+- **Previous:** Backend verification for Luban's UI testing
+- **Branch:** agent/luban/main/merlin-ui-notifications
+- **Previous Status:** Complete — Backend ready and verified
 - **Completed:**
   - Task 009: Merlin intervention processing backend
   - Integration testing of injectMessage, setMode, approve/reject

@@ -719,6 +719,7 @@ pub async fn reject_decision(
 #[derive(Debug, Deserialize)]
 pub struct InjectRequest {
     pub thread_id: String,
+    pub sender: String,
     pub content: String,
     #[serde(default = "default_comment")]
     pub action: String,
@@ -726,6 +727,10 @@ pub struct InjectRequest {
 
 fn default_comment() -> String {
     "comment".to_string()
+}
+
+fn default_sender() -> String {
+    "merlin".to_string()
 }
 
 /// Inject a message into a thread
@@ -737,7 +742,9 @@ pub async fn inject_message(
     use uuid::Uuid;
 
     // Validate action type
-    let valid_actions = ["comment", "pause", "redirect", "approve", "reject", "inject"];
+    let valid_actions = [
+        "comment", "pause", "redirect", "approve", "reject", "inject",
+    ];
     if !valid_actions.contains(&req.action.as_str()) {
         return (
             StatusCode::BAD_REQUEST,
@@ -748,13 +755,14 @@ pub async fn inject_message(
         );
     }
 
-    // Create message event from Merlin
+    // Create message event from sender
+    let sender = req.sender.clone();
     let message_event = MessageEvent {
-        from: "merlin".to_string(),
+        from: sender.clone(),
         to: String::new(), // Will be populated from thread
         subject: match req.action.as_str() {
-            "inject" => "Message from Merlin".to_string(),
-            "comment" => "Comment from Merlin".to_string(),
+            "inject" => format!("Message from {}", sender),
+            "comment" => format!("Comment from {}", sender),
             "pause" => "⏸️ Paused".to_string(),
             "redirect" => "↪️ Redirected".to_string(),
             "approve" => "✅ Approved".to_string(),
@@ -763,7 +771,7 @@ pub async fn inject_message(
         },
         content: req.content.clone(),
         thread_id: Some(req.thread_id.clone()),
-        priority: Priority::High, // Merlin interventions are high priority
+        priority: Priority::High,
     };
 
     // Create event envelope
@@ -771,7 +779,7 @@ pub async fn inject_message(
         id: Uuid::now_v7(),
         timestamp: chrono::Utc::now(),
         event_type: EventType::MessageSent,
-        agent_id: "merlin".to_string(),
+        agent_id: sender,
         payload: EventPayload::Message(message_event),
     };
 
