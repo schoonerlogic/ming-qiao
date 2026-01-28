@@ -1,6 +1,6 @@
 # Agent Work Coordination — Ming-Qiao
 
-**Last Updated:** 2026-01-28T15:05:00Z
+**Last Updated:** 2026-01-28T16:40:00Z
 **Updated By:** luban
 
 ---
@@ -9,39 +9,24 @@
 
 ### Aleph
 
-- **Task:** Council Message Exchange Test (COUNCIL_MESSAGE_TEST.md)
+- **Task:** Council Message Exchange Test (COUNCIL_MESSAGE_TEST.md) - COMPLETE ✅
 - **Branch:** agent/luban/main/merlin-ui-notifications
-- **Status:** In Progress - Step 1 complete, Step 2 ready
+- **Status:** Complete - All 3 agents exchanged messages successfully
 - **Completed:**
-  - Fixed `/api/inject` endpoint to preserve sender field (was hardcoded to "merlin")
-  - Updated `InjectRequest` struct to include `sender` field
-  - Step 1: Luban message sent successfully ✅
-  - Message visible in thread with correct sender
-- **Current Status:**
-  - Backend: Running release build with sender fix
-  - Step 1 Complete: Luban's message in system
-  - Step 2 Ready: Awaiting Proteus to send message as Thales via UI
-- **Previous:** Backend verification for Luban's UI testing
-- **Branch:** agent/luban/main/merlin-ui-notifications
-- **Previous Status:** Complete — Backend ready and verified
-- **Completed:**
-  - Task 009: Merlin intervention processing backend
-  - Integration testing of injectMessage, setMode, approve/reject
-  - Added comprehensive logging to merlin.rs
-  - Created integration test report (docs/INTEGRATION_TEST_REPORT.md)
-  - Verified backend for UI testing
-- **Backend Status:**
-  - ✅ Server running on http://localhost:7777
-  - ✅ 16 threads available for testing
-  - ✅ 18 messages in event log
-  - ✅ WebSocket endpoints working
-  - ✅ Sample thread: 019c00c8-129d-77f2-ac1c-a6a9ff098d15
-- **Test Results:**
-  - ✅ injectMessage: Full end-to-end flow working
-  - ✅ setMode: In-memory state updates working
-  - ⚠️ approve/reject: Logging only, events pending (TODO)
-  - 82 tests passing
-- **Note:** Backend verified, ready for Luban's UI testing
+  - Fixed `/api/inject` endpoint to preserve sender field (commit 8d54cdf)
+  - Updated backend `InjectRequest` struct to include `sender` field
+  - Updated frontend `InjectRequest` type to include `sender` field
+  - Updated `MerlinInput.svelte` to pass sender parameter
+- **Council Message Test Results:**
+  - ✅ Step 1: Luban message sent (ID: 019c0679-aa99-7560-9633-b65a4188b95e)
+  - ✅ Step 2: Thales message sent (ID: 019c067a-4351-771f-9621-6a8b63cb573e)
+  - ✅ Step 3: Aleph verified both messages visible
+  - ✅ Step 4: Aleph responded (ID: 019c068f-34e9-7c50-9df6-a42694660f26)
+  - ✅ Step 5: Round-trip verified - all 3 agent messages visible
+- **Validation:**
+  - Agent-to-agent messaging working via `/api/inject`
+  - Sender field correctly preserved
+  - Ming-Qiao v0.1 communication layer operational
 
 ### Luban
 
