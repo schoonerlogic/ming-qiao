@@ -20,15 +20,34 @@
   onMount(() => {
     const init = async () => {
       // Load initial data
-      await loadConfig();
-      await loadThreads('active');
+      console.log('[DEBUG] Loading config...');
+      try {
+        await loadConfig();
+        console.log('[DEBUG] Config loaded successfully');
+      } catch (e) {
+        console.error('[DEBUG] Config load failed:', e);
+      }
+
+      console.log('[DEBUG] Loading threads...');
+      try {
+        await loadThreads('active');
+        console.log('[DEBUG] Threads loaded successfully');
+      } catch (e) {
+        console.error('[DEBUG] Thread load failed:', e);
+      }
     };
 
     // Initialize data
     init();
 
     // Connect WebSocket
-    connect();
+    console.log('[DEBUG] Connecting WebSocket...');
+    try {
+      connect();
+      console.log('[DEBUG] WebSocket connect() called');
+    } catch (e) {
+      console.error('[DEBUG] WebSocket connect failed:', e);
+    }
 
     // Subscribe to WebSocket messages
     const unsubscribe = onMessage((message) => {
@@ -36,6 +55,7 @@
       
       switch (message.type) {
         case 'connected':
+          console.log('[DEBUG] WebSocket connected message received');
           wsConnected = true;
           break;
         case 'message':
