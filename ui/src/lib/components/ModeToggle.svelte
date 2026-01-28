@@ -20,17 +20,19 @@
         return 'bg-blue-500';
       case 'gated':
         return 'bg-purple-500';
+      default:
+        return 'bg-gray-500';
     }
   }
   
   async function handleModeChange(mode: ObservationMode) {
-    if (loading || mode === configStore.mode) return;
+    if (loading || mode === configStore.config.mode) return;
     
     loading = true;
-    previousMode = configStore.mode;
+    previousMode = configStore.config.mode;
     
     // Optimistic update
-    const oldMode = configStore.mode;
+    const oldMode = configStore.config.mode;
     updateLocalMode(mode);
     
     try {
@@ -79,15 +81,15 @@
   <div class="flex items-center justify-between mb-3">
     <div>
       <h3 class="font-semibold text-gray-900">Observation Mode</h3>
-      <p class="text-sm text-gray-600">Current: {configStore.mode}</p>
+      <p class="text-sm text-gray-600">Current: {configStore.config.mode}</p>
     </div>
-    <div class="w-3 h-3 rounded-full {getModeColor(configStore.mode)}"></div>
+    <div class="w-3 h-3 rounded-full {getModeColor(configStore.config.mode)}"></div>
   </div>
 
   <div class="space-y-2">
     {#each modes as mode}
       <button
-        class="w-full flex items-start gap-3 p-3 rounded-md border {configStore.mode === mode.value
+        class="w-full flex items-start gap-3 p-3 rounded-md border {configStore.config.mode === mode.value
           ? 'border-blue-500 bg-blue-50'
           : 'border-gray-200 hover:bg-gray-50'} transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
         disabled={loading}
@@ -96,16 +98,16 @@
         <div class="flex-1 text-left">
           <div class="flex items-center gap-2">
             <span class="font-medium text-gray-900">{mode.label}</span>
-            {#if configStore.mode === mode.value}
+            {#if configStore.config.mode === mode.value}
               <span class="text-xs text-blue-600">(active)</span>
             {/if}
           </div>
           <p class="text-sm text-gray-600">{mode.description}</p>
         </div>
-        <div class="w-4 h-4 rounded-full border-2 {configStore.mode === mode.value
+        <div class="w-4 h-4 rounded-full border-2 {configStore.config.mode === mode.value
           ? 'border-blue-500 bg-blue-500'
           : 'border-gray-300'} flex items-center justify-center">
-          {#if configStore.mode === mode.value}
+          {#if configStore.config.mode === mode.value}
             <svg class="w-3 h-3 text-white" fill="currentColor" viewBox="0 0 20 20">
               <path
                 fill-rule="evenodd"
