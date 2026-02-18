@@ -17,4 +17,5 @@ pub mod events;
 pub mod http;
 pub mod mcp;
 pub mod merlin;
+pub mod nats;
 pub mod state;

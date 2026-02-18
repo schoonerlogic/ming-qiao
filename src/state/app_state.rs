@@ -10,6 +10,7 @@ use tokio::sync::{broadcast, RwLock};
 use crate::db::Indexer;
 use crate::events::EventEnvelope;
 use crate::merlin::MerlinNotifier;
+use crate::nats::NatsBridge;
 use crate::state::config::{Config, ObservationMode};
 
 /// Broadcast channel capacity for event notifications
@@ -43,6 +44,9 @@ struct AppStateInner {
 
     /// Merlin notification system
     merlin_notifier: Arc<MerlinNotifier>,
+
+    /// NATS messaging bridge (None if disabled or unreachable)
+    nats_bridge: RwLock<Option<NatsBridge>>,
 }
 
 impl AppState {
@@ -107,6 +111,7 @@ impl AppState {
                 event_tx,
                 indexer: RwLock::new(indexer),
                 merlin_notifier: Arc::new(MerlinNotifier::new()),
+                nats_bridge: RwLock::new(None),
             }),
         }
     }
@@ -215,6 +220,34 @@ impl AppState {
     pub async fn refresh_indexer(&self) -> Result<usize, crate::db::IndexerError> {
         let mut indexer = self.inner.indexer.write().await;
         indexer.catch_up()
+    }
+
+    /// Store a connected NATS bridge
+    pub async fn set_nats_bridge(&self, bridge: NatsBridge) {
+        *self.inner.nats_bridge.write().await = Some(bridge);
+    }
+
+    /// Publish an event to NATS if connected.
+    ///
+    /// Logs a warning and continues if NATS is not connected or publish fails.
+    /// Local JSONL persistence is unaffected.
+    pub async fn nats_publish(&self, event: &EventEnvelope) {
+        let bridge = self.inner.nats_bridge.read().await;
+        if let Some(ref b) = *bridge {
+            if let Err(e) = b.publish(event).await {
+                tracing::warn!("NATS publish failed (event {}): {}", event.id, e);
+            }
+        }
+    }
+
+    /// Check if NATS is connected
+    pub async fn nats_connected(&self) -> bool {
+        self.inner.nats_bridge.read().await.is_some()
+    }
+
+    /// Get the broadcast sender for injecting remote events into the local bus
+    pub fn event_sender(&self) -> broadcast::Sender<EventEnvelope> {
+        self.inner.event_tx.clone()
     }
 }
 

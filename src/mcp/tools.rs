@@ -373,8 +373,8 @@ impl ToolRegistry {
     // Tool Implementations
     // ========================================================================
 
-    /// Helper to write an event to the log and broadcast it
-    fn write_event(&self, event: &EventEnvelope) -> Result<String, McpError> {
+    /// Helper to write an event to the log, broadcast it, and publish to NATS
+    async fn write_event(&self, event: &EventEnvelope) -> Result<String, McpError> {
         let writer = self
             .writer
             .as_ref()
@@ -388,6 +388,7 @@ impl ToolRegistry {
         if let Some(ref state) = self.app_state {
             state.broadcast_event(event.clone());
             state.merlin_notifier().notify(event.clone(), state);
+            state.nats_publish(event).await;
         }
 
         Ok(event_id)
@@ -452,7 +453,7 @@ impl ToolRegistry {
         };
 
         // Write to event log
-        let event_id = self.write_event(&event)?;
+        let event_id = self.write_event(&event).await?;
 
         Ok(CallToolResult::text(format!(
             "Message sent successfully.\n\n**Event ID:** {}\n**From:** {}\n**To:** {}\n**Subject:** {}",
@@ -626,7 +627,7 @@ impl ToolRegistry {
             }),
         };
 
-        let event_id = self.write_event(&event)?;
+        let event_id = self.write_event(&event).await?;
 
         Ok(CallToolResult::text(format!(
             "Review requested from Thales.\n\n**Event ID:** {}\n**Artifact:** {}\n**Question:** {}",
@@ -666,7 +667,7 @@ impl ToolRegistry {
             }),
         };
 
-        let event_id = self.write_event(&event)?;
+        let event_id = self.write_event(&event).await?;
 
         Ok(CallToolResult::text(format!(
             "Artifact shared successfully.\n\n**Event ID:** {}\n**Path:** {}\n**Description:** {}",
@@ -919,7 +920,7 @@ impl ToolRegistry {
             }),
         };
 
-        let event_id = self.write_event(&event)?;
+        let event_id = self.write_event(&event).await?;
 
         Ok(CallToolResult::text(format!(
             "Decision recorded successfully.\n\n**Event ID:** {}\n**Question:** {}\n**Resolution:** {}\n**Rationale:** {}",

@@ -45,6 +45,58 @@ pub struct GateRules {
     pub decision_type: Vec<String>,
 }
 
+/// NATS messaging configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NatsConfig {
+    /// Whether NATS integration is enabled
+    #[serde(default)]
+    pub enabled: bool,
+
+    /// NATS server URL
+    #[serde(default = "default_nats_url")]
+    pub url: String,
+
+    /// JetStream stream name
+    #[serde(default = "default_nats_stream")]
+    pub stream_name: String,
+
+    /// Subject to publish events on (use {agent_id} placeholder)
+    #[serde(default = "default_nats_publish_subject")]
+    pub publish_subject: String,
+
+    /// Subject pattern to subscribe to for receiving events
+    #[serde(default = "default_nats_subscribe_subject")]
+    pub subscribe_subject: String,
+}
+
+fn default_nats_url() -> String {
+    "nats://localhost:4222".to_string()
+}
+
+fn default_nats_stream() -> String {
+    "AM_MINGQIAO".to_string()
+}
+
+fn default_nats_publish_subject() -> String {
+    "am.agent.{agent_id}.task.mingqiao.events".to_string()
+}
+
+fn default_nats_subscribe_subject() -> String {
+    "am.agent.*.task.mingqiao.events".to_string()
+}
+
+impl Default for NatsConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            url: default_nats_url(),
+            stream_name: default_nats_stream(),
+            publish_subject: default_nats_publish_subject(),
+            subscribe_subject: default_nats_subscribe_subject(),
+        }
+    }
+}
+
 /// Runtime configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
@@ -67,6 +119,10 @@ pub struct Config {
     /// HTTP server port
     #[serde(default = "default_port")]
     pub port: u16,
+
+    /// NATS messaging configuration
+    #[serde(default)]
+    pub nats: NatsConfig,
 }
 
 fn default_data_dir() -> String {
@@ -95,6 +151,7 @@ impl Default for Config {
             },
             data_dir: default_data_dir(),
             port: default_port(),
+            nats: NatsConfig::default(),
         }
     }
 }
@@ -189,5 +246,48 @@ mod tests {
             config.events_path(),
             std::path::PathBuf::from("/custom/path/events.jsonl")
         );
+    }
+
+    #[test]
+    fn test_nats_config_defaults() {
+        let nats = NatsConfig::default();
+        assert!(!nats.enabled);
+        assert_eq!(nats.url, "nats://localhost:4222");
+        assert_eq!(nats.stream_name, "AM_MINGQIAO");
+        assert_eq!(
+            nats.publish_subject,
+            "am.agent.{agent_id}.task.mingqiao.events"
+        );
+        assert_eq!(nats.subscribe_subject, "am.agent.*.task.mingqiao.events");
+    }
+
+    #[test]
+    fn test_config_missing_nats_section_uses_defaults() {
+        let toml_str = r#"
+            mode = "passive"
+            data_dir = "data"
+            port = 7777
+        "#;
+        let config: Config = toml::from_str(toml_str).unwrap();
+        assert!(!config.nats.enabled);
+        assert_eq!(config.nats.url, "nats://localhost:4222");
+    }
+
+    #[test]
+    fn test_config_with_nats_enabled() {
+        let toml_str = r#"
+            mode = "passive"
+            data_dir = "data"
+            port = 7777
+
+            [nats]
+            enabled = true
+            url = "nats://custom:4222"
+        "#;
+        let config: Config = toml::from_str(toml_str).unwrap();
+        assert!(config.nats.enabled);
+        assert_eq!(config.nats.url, "nats://custom:4222");
+        // Non-specified fields use defaults
+        assert_eq!(config.nats.stream_name, "AM_MINGQIAO");
     }
 }
