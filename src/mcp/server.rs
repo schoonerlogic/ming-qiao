@@ -15,6 +15,7 @@ use crate::mcp::protocol::{
     ToolsCapability,
 };
 use crate::mcp::tools::ToolRegistry;
+use crate::state::AppState;
 
 /// MCP protocol version we support
 pub const PROTOCOL_VERSION: &str = "2024-11-05";
@@ -42,6 +43,17 @@ impl McpServer {
     pub fn new(agent_id: String) -> Self {
         Self {
             tools: ToolRegistry::new(),
+            agent_id,
+            initialized: false,
+        }
+    }
+
+    /// Create a new MCP server with shared AppState
+    ///
+    /// This enables event broadcasting, Merlin notifications, and NATS publishing.
+    pub fn with_state(agent_id: String, state: AppState) -> Self {
+        Self {
+            tools: ToolRegistry::with_state(state),
             agent_id,
             initialized: false,
         }

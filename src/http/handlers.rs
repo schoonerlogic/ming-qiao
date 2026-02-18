@@ -72,11 +72,13 @@ impl ApiError {
 // ============================================================================
 
 /// Health check endpoint
-pub async fn health_check() -> impl IntoResponse {
+pub async fn health_check(State(state): State<AppState>) -> impl IntoResponse {
+    let nats_connected = state.nats_connected().await;
     Json(serde_json::json!({
         "status": "healthy",
         "service": "ming-qiao",
-        "version": env!("CARGO_PKG_VERSION")
+        "version": env!("CARGO_PKG_VERSION"),
+        "nats_connected": nats_connected
     }))
 }
 
@@ -747,7 +749,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_health_check() {
-        let response = health_check().await;
+        let state = AppState::new();
+        let response = health_check(State(state)).await;
         let json = response.into_response();
         assert_eq!(json.status(), StatusCode::OK);
     }
