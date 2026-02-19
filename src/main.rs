@@ -21,10 +21,9 @@ use std::process::ExitCode;
 use tracing::{error, info};
 use tracing_subscriber::{fmt, EnvFilter};
 
-use ming_qiao::events::EventWriter;
 use ming_qiao::http::HttpServer;
 use ming_qiao::mcp::McpServer;
-use ming_qiao::nats::NatsBridge;
+use ming_qiao::nats::NatsAgentClient;
 use ming_qiao::state::AppState;
 
 /// Initialize logging with tracing
@@ -88,22 +87,15 @@ async fn run_http_server() -> Result<(), Box<dyn std::error::Error>> {
         info!("Server will start with empty indexer");
     }
 
-    // Connect NATS bridge if enabled
+    // Connect NATS agent client if enabled
     let nats_config = state.config().await.nats;
     let agent_id = state
         .agent_id()
         .unwrap_or("http-server")
         .to_string();
-    if let Some(mut bridge) = NatsBridge::connect(&nats_config, &agent_id).await {
-        let event_tx = state.event_sender();
-        let event_writer = EventWriter::new_with_path(state.events_path())
-            .ok()
-            .map(std::sync::Arc::new);
-        if let Err(e) = bridge.start_subscription(event_tx, event_writer).await {
-            error!("Failed to start NATS subscription: {}", e);
-        }
-        state.set_nats_bridge(bridge).await;
-        info!("NATS bridge active for HTTP server");
+    if let Some(client) = NatsAgentClient::connect(&nats_config, &agent_id, "mingqiao").await {
+        state.set_nats_client(client).await;
+        info!("NATS agent client active for HTTP server");
     }
 
     let server = HttpServer::new(state);
@@ -129,18 +121,11 @@ async fn run_mcp_server() -> Result<(), Box<dyn std::error::Error>> {
 
     state.ensure_dirs()?;
 
-    // Connect NATS bridge if enabled
+    // Connect NATS agent client if enabled
     let nats_config = state.config().await.nats;
-    if let Some(mut bridge) = NatsBridge::connect(&nats_config, &agent_id).await {
-        let event_tx = state.event_sender();
-        let event_writer = EventWriter::new_with_path(state.events_path())
-            .ok()
-            .map(std::sync::Arc::new);
-        if let Err(e) = bridge.start_subscription(event_tx, event_writer).await {
-            error!("Failed to start NATS subscription: {}", e);
-        }
-        state.set_nats_bridge(bridge).await;
-        info!("NATS bridge active for MCP server");
+    if let Some(client) = NatsAgentClient::connect(&nats_config, &agent_id, "mingqiao").await {
+        state.set_nats_client(client).await;
+        info!("NATS agent client active for MCP server");
     }
 
     info!("Starting MCP server for agent: {}", agent_id);

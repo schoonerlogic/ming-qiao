@@ -388,7 +388,6 @@ impl ToolRegistry {
         if let Some(ref state) = self.app_state {
             state.broadcast_event(event.clone());
             state.merlin_notifier().notify(event.clone(), state);
-            state.nats_publish(event).await;
         }
 
         Ok(event_id)

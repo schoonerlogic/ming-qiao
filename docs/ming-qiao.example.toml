@@ -87,20 +87,15 @@ extract_decisions = false  # Auto-extract decisions (experimental)
 
 [nats]
 # NATS messaging for real-time agent coordination
-# Requires: brew install nats-server && nats-server
+# Requires: brew install nats-server && nats-server --jetstream
+#
+# Subject hierarchy and JetStream streams are defined in code
+# (nats::subjects and nats::streams modules). Only connection
+# parameters are configured here.
 enabled = false
 
 # NATS server URL
 url = "nats://localhost:4222"
-
-# JetStream stream name (captures all agent events)
-stream_name = "AM_MINGQIAO"
-
-# Subject to publish events on ({agent_id} replaced at runtime)
-publish_subject = "am.agent.{agent_id}.task.mingqiao.events"
-
-# Subject pattern to subscribe to (wildcard receives all agents)
-subscribe_subject = "am.agent.*.task.mingqiao.events"
 
 [logging]
 # Log level: "trace", "debug", "info", "warn", "error"

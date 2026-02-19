@@ -1,19 +1,21 @@
-//! NATS messaging bridge for agent coordination
+//! NATS messaging for agent coordination
 //!
-//! Provides pub/sub messaging between agents running in separate processes
+//! Provides typed pub/sub messaging between agents running in separate processes
 //! or worktrees. Complements the local JSONL event log — NATS carries events
 //! in real time, while the log remains the source of truth.
 //!
 //! ## Module structure
 //!
 //! - `subjects` — Subject hierarchy builder (`am.agent.{agent}.task.{project}.*`)
-//! - `bridge` — Core NatsBridge connection and pub/sub (to be refactored into `client`)
+//! - `messages` — Typed message payloads (Presence, TaskAssignment, etc.)
+//! - `streams` — JetStream stream and consumer configurations
+//! - `client` — NatsAgentClient: connect, publish, subscribe
 
-mod bridge;
+mod client;
 pub mod messages;
 pub mod streams;
 pub mod subjects;
 
-pub use bridge::NatsBridge;
+pub use client::{ClientError, NatsAgentClient};
 pub use messages::{NatsMessage, Presence, SessionNote, TaskAssignment, TaskStatusUpdate};
 pub use subjects::AgentSubjects;
