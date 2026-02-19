@@ -10,11 +10,14 @@ use tokio::sync::{broadcast, RwLock};
 use crate::db::Indexer;
 use crate::events::EventEnvelope;
 use crate::merlin::MerlinNotifier;
-use crate::nats::NatsAgentClient;
+use crate::nats::{NatsAgentClient, NatsMessage};
 use crate::state::config::{Config, ObservationMode};
 
 /// Broadcast channel capacity for event notifications
 const EVENT_CHANNEL_CAPACITY: usize = 256;
+
+/// Broadcast channel capacity for NATS messages from other agents
+const NATS_CHANNEL_CAPACITY: usize = 256;
 
 /// Shared application state
 ///
@@ -47,6 +50,9 @@ struct AppStateInner {
 
     /// NATS agent client (None if disabled or unreachable)
     nats_client: RwLock<Option<NatsAgentClient>>,
+
+    /// Broadcast channel for NATS messages received from other agents
+    nats_tx: broadcast::Sender<NatsMessage>,
 }
 
 impl AppState {
@@ -59,6 +65,7 @@ impl AppState {
     pub fn with_config(config: Config) -> Self {
         let data_dir = PathBuf::from(&config.data_dir);
         let (event_tx, _) = broadcast::channel(EVENT_CHANNEL_CAPACITY);
+        let (nats_tx, _) = broadcast::channel(NATS_CHANNEL_CAPACITY);
 
         // Create indexer with events path
         let events_path = data_dir.join("events.jsonl");
@@ -112,6 +119,7 @@ impl AppState {
                 indexer: RwLock::new(indexer),
                 merlin_notifier: Arc::new(MerlinNotifier::new()),
                 nats_client: RwLock::new(None),
+                nats_tx,
             }),
         }
     }
@@ -242,6 +250,22 @@ impl AppState {
     /// Get the broadcast sender for injecting events into the local bus
     pub fn event_sender(&self) -> broadcast::Sender<EventEnvelope> {
         self.inner.event_tx.clone()
+    }
+
+    /// Get the broadcast sender for NATS messages from other agents.
+    ///
+    /// Pass this to `NatsAgentClient` subscription methods. Messages
+    /// received from other agents will be broadcast on this channel.
+    pub fn nats_message_sender(&self) -> broadcast::Sender<NatsMessage> {
+        self.inner.nats_tx.clone()
+    }
+
+    /// Subscribe to NATS messages from other agents.
+    ///
+    /// Returns a receiver for presence heartbeats, task events, and
+    /// session notes from remote agents.
+    pub fn subscribe_nats_messages(&self) -> broadcast::Receiver<NatsMessage> {
+        self.inner.nats_tx.subscribe()
     }
 }
 

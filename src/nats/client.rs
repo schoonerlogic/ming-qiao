@@ -9,10 +9,12 @@
 //! - **Task coordination** → JetStream `AGENT_TASKS` stream (work queue, 7 days)
 //! - **Session notes** → JetStream `AGENT_NOTES` stream (limits, 30 days)
 
+use std::time::Duration;
+
 use async_nats::jetstream;
 use tokio::sync::broadcast;
 use tokio::task::JoinHandle;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 use crate::nats::messages::{NatsMessage, Presence, SessionNote, TaskAssignment, TaskStatusUpdate};
 use crate::nats::streams;
@@ -344,7 +346,57 @@ impl NatsAgentClient {
         Ok(())
     }
 
-    /// Shut down all subscription background tasks.
+    // ========================================================================
+    // Presence heartbeat
+    // ========================================================================
+
+    /// Start a background task that publishes presence heartbeats at a regular interval.
+    ///
+    /// Heartbeats announce this agent's availability to all other agents.
+    /// Published every 30 seconds via core NATS (ephemeral, no persistence).
+    ///
+    /// The heartbeat includes the agent name, project, current branch, and a
+    /// status string. For dynamic status updates, stop the heartbeat and start
+    /// a new one with the updated values.
+    pub fn start_presence_heartbeat(&mut self, branch: String, status: String) {
+        let client = self.client.clone();
+        let subject = self.subjects.presence();
+        let agent = self.subjects.agent().to_string();
+        let project = self.subjects.project().to_string();
+
+        info!(
+            "Starting presence heartbeat for '{}' (every 30s on {})",
+            agent, subject
+        );
+
+        let handle = tokio::spawn(async move {
+            let mut interval = tokio::time::interval(Duration::from_secs(30));
+
+            loop {
+                interval.tick().await;
+
+                let presence = Presence::new(&agent, &project, &branch, &status);
+                let msg = NatsMessage::Presence(presence);
+
+                match serde_json::to_vec(&msg) {
+                    Ok(payload) => {
+                        if let Err(e) = client.publish(subject.clone(), payload.into()).await {
+                            warn!("Presence heartbeat publish failed: {}", e);
+                        } else {
+                            debug!("Presence heartbeat published for '{}'", agent);
+                        }
+                    }
+                    Err(e) => {
+                        warn!("Presence heartbeat serialization failed: {}", e);
+                    }
+                }
+            }
+        });
+
+        self.handles.push(handle);
+    }
+
+    /// Shut down all subscription background tasks and heartbeat.
     pub fn shutdown(&mut self) {
         for handle in self.handles.drain(..) {
             handle.abort();

@@ -93,9 +93,28 @@ async fn run_http_server() -> Result<(), Box<dyn std::error::Error>> {
         .agent_id()
         .unwrap_or("http-server")
         .to_string();
-    if let Some(client) = NatsAgentClient::connect(&nats_config, &agent_id, "mingqiao").await {
+    if let Some(mut client) = NatsAgentClient::connect(&nats_config, &agent_id, "mingqiao").await {
+        let nats_tx = state.nats_message_sender();
+
+        // HTTP server observes all task activity and notes from all agents
+        if let Err(e) = client.subscribe_all_tasks(nats_tx.clone()).await {
+            error!("Failed to subscribe to tasks: {}", e);
+        }
+        if let Err(e) = client.subscribe_notes(nats_tx.clone()).await {
+            error!("Failed to subscribe to notes: {}", e);
+        }
+        if let Err(e) = client.subscribe_presence(nats_tx).await {
+            error!("Failed to subscribe to presence: {}", e);
+        }
+
+        // Start presence heartbeat
+        client.start_presence_heartbeat(
+            "main".to_string(),
+            "serving HTTP".to_string(),
+        );
+
         state.set_nats_client(client).await;
-        info!("NATS agent client active for HTTP server");
+        info!("NATS agent client active for HTTP server (subscriptions + heartbeat)");
     }
 
     let server = HttpServer::new(state);
@@ -123,9 +142,36 @@ async fn run_mcp_server() -> Result<(), Box<dyn std::error::Error>> {
 
     // Connect NATS agent client if enabled
     let nats_config = state.config().await.nats;
-    if let Some(client) = NatsAgentClient::connect(&nats_config, &agent_id, "mingqiao").await {
+    if let Some(mut client) = NatsAgentClient::connect(&nats_config, &agent_id, "mingqiao").await {
+        let nats_tx = state.nats_message_sender();
+
+        // MCP agent receives own task assignments and observes all activity
+        if let Err(e) = client.subscribe_own_tasks(nats_tx.clone()).await {
+            error!("Failed to subscribe to own tasks: {}", e);
+        }
+        if let Err(e) = client.subscribe_all_tasks(nats_tx.clone()).await {
+            error!("Failed to subscribe to all tasks: {}", e);
+        }
+        if let Err(e) = client.subscribe_notes(nats_tx.clone()).await {
+            error!("Failed to subscribe to notes: {}", e);
+        }
+        if let Err(e) = client.subscribe_presence(nats_tx).await {
+            error!("Failed to subscribe to presence: {}", e);
+        }
+
+        // Start presence heartbeat — get branch from git if possible
+        let branch = std::process::Command::new("git")
+            .args(["rev-parse", "--abbrev-ref", "HEAD"])
+            .output()
+            .ok()
+            .and_then(|o| String::from_utf8(o.stdout).ok())
+            .map(|s| s.trim().to_string())
+            .unwrap_or_else(|| "unknown".to_string());
+
+        client.start_presence_heartbeat(branch, "available".to_string());
+
         state.set_nats_client(client).await;
-        info!("NATS agent client active for MCP server");
+        info!("NATS agent client active for MCP server (subscriptions + heartbeat)");
     }
 
     info!("Starting MCP server for agent: {}", agent_id);
