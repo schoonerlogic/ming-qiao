@@ -46,6 +46,10 @@ pub struct GateRules {
 }
 
 /// NATS messaging configuration
+///
+/// Subject hierarchy and stream topology are defined in code
+/// (`nats::subjects` and `nats::streams`), not in config. Only the
+/// connection parameters live here.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NatsConfig {
     /// Whether NATS integration is enabled
@@ -55,34 +59,10 @@ pub struct NatsConfig {
     /// NATS server URL
     #[serde(default = "default_nats_url")]
     pub url: String,
-
-    /// JetStream stream name
-    #[serde(default = "default_nats_stream")]
-    pub stream_name: String,
-
-    /// Subject to publish events on (use {agent_id} placeholder)
-    #[serde(default = "default_nats_publish_subject")]
-    pub publish_subject: String,
-
-    /// Subject pattern to subscribe to for receiving events
-    #[serde(default = "default_nats_subscribe_subject")]
-    pub subscribe_subject: String,
 }
 
 fn default_nats_url() -> String {
     "nats://localhost:4222".to_string()
-}
-
-fn default_nats_stream() -> String {
-    "AM_MINGQIAO".to_string()
-}
-
-fn default_nats_publish_subject() -> String {
-    "am.agent.{agent_id}.task.mingqiao.events".to_string()
-}
-
-fn default_nats_subscribe_subject() -> String {
-    "am.agent.*.task.mingqiao.events".to_string()
 }
 
 impl Default for NatsConfig {
@@ -90,9 +70,6 @@ impl Default for NatsConfig {
         Self {
             enabled: false,
             url: default_nats_url(),
-            stream_name: default_nats_stream(),
-            publish_subject: default_nats_publish_subject(),
-            subscribe_subject: default_nats_subscribe_subject(),
         }
     }
 }
@@ -253,12 +230,6 @@ mod tests {
         let nats = NatsConfig::default();
         assert!(!nats.enabled);
         assert_eq!(nats.url, "nats://localhost:4222");
-        assert_eq!(nats.stream_name, "AM_MINGQIAO");
-        assert_eq!(
-            nats.publish_subject,
-            "am.agent.{agent_id}.task.mingqiao.events"
-        );
-        assert_eq!(nats.subscribe_subject, "am.agent.*.task.mingqiao.events");
     }
 
     #[test]
@@ -287,7 +258,5 @@ mod tests {
         let config: Config = toml::from_str(toml_str).unwrap();
         assert!(config.nats.enabled);
         assert_eq!(config.nats.url, "nats://custom:4222");
-        // Non-specified fields use defaults
-        assert_eq!(config.nats.stream_name, "AM_MINGQIAO");
     }
 }

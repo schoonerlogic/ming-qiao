@@ -134,6 +134,20 @@ pub enum EventType {
     StatusChanged,
 }
 
+impl std::fmt::Display for EventType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::MessageSent => write!(f, "message_sent"),
+            Self::MessageReceived => write!(f, "message_received"),
+            Self::ArtifactShared => write!(f, "artifact_shared"),
+            Self::DecisionRecorded => write!(f, "decision_recorded"),
+            Self::TaskAssigned => write!(f, "task_assigned"),
+            Self::TaskCompleted => write!(f, "task_completed"),
+            Self::StatusChanged => write!(f, "status_changed"),
+        }
+    }
+}
+
 /// Event payloads contain the specific data for each event type
 ///
 /// The payload variant must match the event_type in the envelope.

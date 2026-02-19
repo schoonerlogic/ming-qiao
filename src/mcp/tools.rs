@@ -7,12 +7,10 @@ use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
-use std::path::PathBuf;
-use std::sync::Arc;
 use uuid::Uuid;
 
 use crate::events::{
-    EventEnvelope, EventPayload, EventReader, EventType, EventWriter, MessageEvent, Priority,
+    EventEnvelope, EventPayload, EventType, MessageEvent, Priority,
 };
 use crate::mcp::protocol::{CallToolResult, McpError};
 use crate::state::AppState;
@@ -35,68 +33,21 @@ pub struct ToolDefinition {
 pub struct ToolRegistry {
     /// Tool definitions by name
     definitions: HashMap<String, ToolDefinition>,
-    /// Event writer for persisting events
-    writer: Option<Arc<EventWriter>>,
-    /// Path to event log for reading
-    events_path: PathBuf,
-    /// App state for broadcasting events (optional)
-    app_state: Option<AppState>,
+    /// App state (provides persistence, indexer, broadcasting)
+    state: AppState,
 }
 
 impl ToolRegistry {
-    /// Default event log path
-    const DEFAULT_EVENTS_PATH: &'static str = "data/events.jsonl";
-
-    /// Create a new tool registry with all ming-qiao tools
-    pub fn new() -> Self {
-        Self::with_path(Self::DEFAULT_EVENTS_PATH)
-    }
-
-    /// Create a tool registry with a custom event log path
-    pub fn with_path<P: Into<PathBuf>>(events_path: P) -> Self {
-        let events_path = events_path.into();
-        let mut definitions = HashMap::new();
-
-        // Register all tools
-        for tool in Self::all_tools() {
-            definitions.insert(tool.name.clone(), tool);
-        }
-
-        // Create writer (may fail if directory can't be created, handle gracefully)
-        let writer = EventWriter::new_with_path(&events_path).ok().map(Arc::new);
-
-        Self {
-            definitions,
-            writer,
-            events_path,
-            app_state: None,
-        }
-    }
-
-    /// Create a tool registry with AppState for event broadcasting
+    /// Create a tool registry backed by AppState.
+    ///
+    /// All event writes go through `state.persistence()`, all reads through
+    /// `state.indexer()`. Events are also fed to the Indexer after storing.
     pub fn with_state(state: AppState) -> Self {
-        let events_path = state.events_path();
         let mut definitions = HashMap::new();
-
-        // Register all tools
         for tool in Self::all_tools() {
             definitions.insert(tool.name.clone(), tool);
         }
-
-        // Create writer
-        let writer = EventWriter::new_with_path(&events_path).ok().map(Arc::new);
-
-        Self {
-            definitions,
-            writer,
-            events_path,
-            app_state: Some(state),
-        }
-    }
-
-    /// Check if the registry has an active event writer
-    pub fn has_writer(&self) -> bool {
-        self.writer.is_some()
+        Self { definitions, state }
     }
 
     /// List all available tools
@@ -115,7 +66,6 @@ impl ToolRegistry {
             return Err(McpError::NotFound(format!("Tool not found: {}", name)));
         }
 
-        // Dispatch to tool handler
         match name {
             "send_message" => self.tool_send_message(arguments, agent_id).await,
             "check_messages" => self.tool_check_messages(arguments, agent_id).await,
@@ -373,31 +323,29 @@ impl ToolRegistry {
     // Tool Implementations
     // ========================================================================
 
-    /// Helper to write an event to the log, broadcast it, and publish to NATS
+    /// Write an event: persist to SurrealDB, feed to Indexer, broadcast, notify.
     async fn write_event(&self, event: &EventEnvelope) -> Result<String, McpError> {
-        let writer = self
-            .writer
-            .as_ref()
-            .ok_or_else(|| McpError::Internal("Event writer not available".to_string()))?;
+        // 1. Persist to SurrealDB
+        let event_id = self
+            .state
+            .persistence()
+            .store_event(event)
+            .await
+            .map_err(|e| McpError::Internal(format!("Failed to store event: {}", e)))?;
 
-        let event_id = writer
-            .append(event)
-            .map_err(|e| McpError::Internal(format!("Failed to write event: {}", e)))?;
-
-        // Broadcast to WebSocket clients and send Merlin notifications if app_state is available
-        if let Some(ref state) = self.app_state {
-            state.broadcast_event(event.clone());
-            state.merlin_notifier().notify(event.clone(), state);
-            state.nats_publish(event).await;
+        // 2. Feed to Indexer (materialized views)
+        {
+            let mut indexer = self.state.indexer_mut().await;
+            if let Err(e) = indexer.process_event(event) {
+                tracing::warn!("Indexer failed to process event {}: {}", event_id, e);
+            }
         }
 
-        Ok(event_id)
-    }
+        // 3. Broadcast to WebSocket clients + Merlin notifications
+        self.state.broadcast_event(event.clone());
+        self.state.merlin_notifier().notify(event.clone(), &self.state);
 
-    /// Helper to get an event reader
-    fn get_reader(&self) -> Result<EventReader, McpError> {
-        EventReader::open(&self.events_path)
-            .map_err(|e| McpError::Internal(format!("Failed to open event log: {}", e)))
+        Ok(event_id)
     }
 
     /// Helper to parse priority from string
@@ -436,7 +384,6 @@ impl ToolRegistry {
             .map(String::from);
         let priority = Self::parse_priority(args.get("priority").and_then(|v| v.as_str()));
 
-        // Create the event
         let event = EventEnvelope {
             id: Uuid::now_v7(),
             timestamp: Utc::now(),
@@ -452,7 +399,6 @@ impl ToolRegistry {
             }),
         };
 
-        // Write to event log
         let event_id = self.write_event(&event).await?;
 
         Ok(CallToolResult::text(format!(
@@ -466,79 +412,50 @@ impl ToolRegistry {
         args: Value,
         agent_id: &str,
     ) -> Result<CallToolResult, McpError> {
-        let unread_only = args
+        let _unread_only = args
             .get("unread_only")
             .and_then(|v| v.as_bool())
             .unwrap_or(true);
         let from_agent = args.get("from_agent").and_then(|v| v.as_str());
         let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(10) as usize;
 
-        // Read events from the log
-        let reader = match self.get_reader() {
-            Ok(r) => r,
-            Err(_) => {
-                return Ok(CallToolResult::text(format!(
-                    "## Inbox for {}\n\nNo messages yet.",
-                    agent_id
-                )));
-            }
+        // Use Indexer for O(1) lookups — clone messages to release the lock
+        let mut messages: Vec<_> = {
+            let indexer = self.state.indexer().await;
+            indexer
+                .get_messages_to_agent(agent_id)
+                .into_iter()
+                .filter(|msg| {
+                    if let Some(from) = from_agent {
+                        msg.from == from
+                    } else {
+                        true
+                    }
+                })
+                .take(limit)
+                .cloned()
+                .collect()
         };
 
-        let mut messages = Vec::new();
-        let replay = reader
-            .replay()
-            .map_err(|e| McpError::Internal(format!("Failed to read events: {}", e)))?;
+        // Sort by timestamp (most recent first)
+        messages.sort_by(|a, b| b.created_at.cmp(&a.created_at));
 
-        for event_result in replay {
-            let event = match event_result {
-                Ok(e) => e,
-                Err(_) => continue,
-            };
-
-            // Filter for messages sent to this agent
-            if event.event_type != EventType::MessageSent {
-                continue;
-            }
-
-            if let EventPayload::Message(ref msg) = event.payload {
-                // Check if message is for this agent (or broadcast)
-                if msg.to != agent_id && msg.to != "all" {
-                    continue;
-                }
-
-                // Filter by sender if specified
-                if let Some(from) = from_agent {
-                    if msg.from != from {
-                        continue;
-                    }
-                }
-
-                messages.push((event.id.to_string(), event.timestamp, msg.clone()));
-
-                if messages.len() >= limit {
-                    break;
-                }
-            }
-        }
-
-        // Format output
         if messages.is_empty() {
             return Ok(CallToolResult::text(format!(
-                "## Inbox for {}\n\nNo messages{}.",
-                agent_id,
-                if unread_only { " (unread)" } else { "" }
+                "## Inbox for {}\n\nNo messages.",
+                agent_id
             )));
         }
 
         let mut output = format!("## Inbox for {}\n\n", agent_id);
-        for (id, timestamp, msg) in messages {
+        for msg in messages {
             output.push_str(&format!(
                 "### {} [{}]\n**From:** {} | **Priority:** {:?}\n**ID:** {}\n\n---\n\n",
                 msg.subject,
-                timestamp.format("%Y-%m-%d %H:%M"),
+                msg.created_at.format("%Y-%m-%d %H:%M"),
                 msg.from,
                 msg.priority,
-                id
+                msg.id
             ));
         }
 
@@ -555,37 +472,25 @@ impl ToolRegistry {
             .and_then(|v| v.as_str())
             .ok_or_else(|| McpError::InvalidInput("message_id required".to_string()))?;
 
-        // Read events to find the message
-        let reader = self.get_reader()?;
-        let replay = reader
-            .replay()
-            .map_err(|e| McpError::Internal(format!("Failed to read events: {}", e)))?;
+        // Use Indexer for O(1) lookup
+        let indexer = self.state.indexer().await;
+        let msg = indexer.get_message(message_id);
 
-        for event_result in replay {
-            let event = match event_result {
-                Ok(e) => e,
-                Err(_) => continue,
-            };
-
-            if event.id.to_string() == message_id {
-                if let EventPayload::Message(msg) = event.payload {
-                    return Ok(CallToolResult::text(format!(
-                        "## {}\n\n**From:** {}\n**To:** {}\n**Date:** {}\n**Priority:** {:?}\n\n---\n\n{}",
-                        msg.subject,
-                        msg.from,
-                        msg.to,
-                        event.timestamp.format("%Y-%m-%d %H:%M:%S UTC"),
-                        msg.priority,
-                        msg.content
-                    )));
-                }
-            }
+        match msg {
+            Some(msg) => Ok(CallToolResult::text(format!(
+                "## {}\n\n**From:** {}\n**To:** {}\n**Date:** {}\n**Priority:** {:?}\n\n---\n\n{}",
+                msg.subject,
+                msg.from,
+                msg.to,
+                msg.created_at.format("%Y-%m-%d %H:%M:%S UTC"),
+                msg.priority,
+                msg.content
+            ))),
+            None => Ok(CallToolResult::text(format!(
+                "Message not found: {}",
+                message_id
+            ))),
         }
-
-        Ok(CallToolResult::text(format!(
-            "Message not found: {}",
-            message_id
-        )))
     }
 
     async fn tool_request_review(
@@ -606,7 +511,6 @@ impl ToolRegistry {
         let context = args.get("context").and_then(|v| v.as_str()).unwrap_or("");
         let priority = Self::parse_priority(args.get("priority").and_then(|v| v.as_str()));
 
-        // Create a message event to Thales requesting review
         let content = format!(
             "**Review Request**\n\n**Artifact:** {}\n\n**Question:** {}\n\n**Context:** {}",
             artifact_path, question, context
@@ -652,7 +556,6 @@ impl ToolRegistry {
             .and_then(|v| v.as_str())
             .unwrap_or("Shared artifact");
 
-        // Simple checksum placeholder (would compute actual SHA-256 in production)
         let checksum = format!("sha256:{}", Uuid::now_v7());
 
         let event = EventEnvelope {
@@ -684,45 +587,25 @@ impl ToolRegistry {
         let query = args.get("query").and_then(|v| v.as_str());
         let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(5) as usize;
 
-        let reader = match self.get_reader() {
-            Ok(r) => r,
-            Err(_) => {
-                return Ok(CallToolResult::text(
-                    "No decisions recorded yet.".to_string(),
-                ));
-            }
-        };
+        let indexer = self.state.indexer().await;
 
-        let replay = reader
-            .replay()
-            .map_err(|e| McpError::Internal(format!("Failed to read events: {}", e)))?;
-
-        // Search for specific decision by ID
+        // Search by specific decision ID
         if let Some(id) = decision_id {
-            for event_result in replay {
-                let event = match event_result {
-                    Ok(e) => e,
-                    Err(_) => continue,
-                };
+            if let Some(decision) = indexer.get_decision(id) {
+                let chosen_opt = decision
+                    .options
+                    .get(decision.chosen)
+                    .map(|o| o.description.as_str())
+                    .unwrap_or("(unknown)");
 
-                if event.id.to_string() == id {
-                    if let EventPayload::Decision(decision) = event.payload {
-                        let chosen_opt = decision
-                            .options
-                            .get(decision.chosen)
-                            .map(|o| o.description.as_str())
-                            .unwrap_or("(unknown)");
-
-                        return Ok(CallToolResult::text(format!(
-                            "## Decision: {}\n\n**Date:** {}\n**Context:** {}\n\n**Chosen:** {}\n\n**Rationale:** {}",
-                            decision.title,
-                            event.timestamp.format("%Y-%m-%d %H:%M"),
-                            decision.context,
-                            chosen_opt,
-                            decision.rationale
-                        )));
-                    }
-                }
+                return Ok(CallToolResult::text(format!(
+                    "## Decision: {}\n\n**Date:** {}\n**Context:** {}\n\n**Chosen:** {}\n\n**Rationale:** {}",
+                    decision.title,
+                    decision.created_at.format("%Y-%m-%d %H:%M"),
+                    decision.context,
+                    chosen_opt,
+                    decision.rationale
+                )));
             }
             return Ok(CallToolResult::text(format!("Decision not found: {}", id)));
         }
@@ -730,29 +613,15 @@ impl ToolRegistry {
         // Search by query string
         if let Some(q) = query {
             let q_lower = q.to_lowercase();
-            let mut results = Vec::new();
-
-            for event_result in replay {
-                let event = match event_result {
-                    Ok(e) => e,
-                    Err(_) => continue,
-                };
-
-                if event.event_type != EventType::DecisionRecorded {
-                    continue;
-                }
-
-                if let EventPayload::Decision(ref decision) = event.payload {
-                    if decision.title.to_lowercase().contains(&q_lower)
-                        || decision.context.to_lowercase().contains(&q_lower)
-                    {
-                        results.push((event.id.to_string(), event.timestamp, decision.clone()));
-                        if results.len() >= limit {
-                            break;
-                        }
-                    }
-                }
-            }
+            let results: Vec<_> = indexer
+                .get_decisions()
+                .into_iter()
+                .filter(|d| {
+                    d.title.to_lowercase().contains(&q_lower)
+                        || d.context.to_lowercase().contains(&q_lower)
+                })
+                .take(limit)
+                .collect();
 
             if results.is_empty() {
                 return Ok(CallToolResult::text(format!(
@@ -762,12 +631,12 @@ impl ToolRegistry {
             }
 
             let mut output = format!("## Decisions matching: {}\n\n", q);
-            for (id, timestamp, decision) in results {
+            for decision in results {
                 output.push_str(&format!(
                     "### {}\n**ID:** {} | **Date:** {}\n\n---\n\n",
                     decision.title,
-                    id,
-                    timestamp.format("%Y-%m-%d %H:%M")
+                    decision.id,
+                    decision.created_at.format("%Y-%m-%d %H:%M")
                 ));
             }
 
@@ -787,50 +656,23 @@ impl ToolRegistry {
         let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(10) as usize;
         let participant = args.get("participant").and_then(|v| v.as_str());
 
-        let reader = match self.get_reader() {
-            Ok(r) => r,
-            Err(_) => {
-                return Ok(CallToolResult::text(
-                    "## Threads\n\nNo threads yet.".to_string(),
-                ));
-            }
-        };
+        let indexer = self.state.indexer().await;
+        let all_threads = indexer.get_all_threads();
 
-        let replay = reader
-            .replay()
-            .map_err(|e| McpError::Internal(format!("Failed to read events: {}", e)))?;
-
-        // Collect unique thread IDs from messages
-        let mut threads: HashMap<String, (String, chrono::DateTime<Utc>, String)> = HashMap::new();
-
-        for event_result in replay {
-            let event = match event_result {
-                Ok(e) => e,
-                Err(_) => continue,
-            };
-
-            if event.event_type != EventType::MessageSent {
-                continue;
-            }
-
-            if let EventPayload::Message(ref msg) = event.payload {
-                // Filter by participant if specified
+        let mut threads: Vec<_> = all_threads
+            .into_iter()
+            .filter(|t| {
                 if let Some(p) = participant {
-                    if msg.from != p && msg.to != p {
-                        continue;
-                    }
+                    t.participants.contains(&p.to_string())
+                } else {
+                    true
                 }
+            })
+            .collect();
 
-                // Use thread_id or message id as thread identifier
-                let thread_key = msg
-                    .thread_id
-                    .clone()
-                    .unwrap_or_else(|| event.id.to_string());
-                threads
-                    .entry(thread_key)
-                    .or_insert_with(|| (msg.subject.clone(), event.timestamp, msg.from.clone()));
-            }
-        }
+        // Sort by updated_at (most recent first)
+        threads.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+        threads.truncate(limit);
 
         if threads.is_empty() {
             return Ok(CallToolResult::text(
@@ -838,19 +680,14 @@ impl ToolRegistry {
             ));
         }
 
-        // Sort by timestamp (most recent first) and limit
-        let mut thread_list: Vec<_> = threads.into_iter().collect();
-        thread_list.sort_by(|a, b| b.1 .1.cmp(&a.1 .1));
-        thread_list.truncate(limit);
-
         let mut output = "## Threads\n\n".to_string();
-        for (thread_id, (subject, timestamp, from)) in thread_list {
+        for thread in threads {
             output.push_str(&format!(
                 "- **{}** (started by {}, {})\n  ID: `{}`\n\n",
-                subject,
-                from,
-                timestamp.format("%Y-%m-%d %H:%M"),
-                thread_id
+                thread.subject,
+                thread.participants.first().map(|s| s.as_str()).unwrap_or("unknown"),
+                thread.created_at.format("%Y-%m-%d %H:%M"),
+                thread.id
             ));
         }
 
@@ -884,7 +721,6 @@ impl ToolRegistry {
             .and_then(|v| v.as_str())
             .ok_or_else(|| McpError::InvalidInput("rationale required".to_string()))?;
 
-        // Parse options_considered if provided
         let options: Vec<DecisionOption> = args
             .get("options_considered")
             .and_then(|v| v.as_array())
@@ -915,7 +751,7 @@ impl ToolRegistry {
                 title: question.to_string(),
                 context: format!("Thread: {}", thread_id),
                 options,
-                chosen: 0, // First option is the chosen one
+                chosen: 0,
                 rationale: rationale.to_string(),
             }),
         };
@@ -929,25 +765,18 @@ impl ToolRegistry {
     }
 }
 
-impl Default for ToolRegistry {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_registry_creation() {
-        let registry = ToolRegistry::new();
+    #[tokio::test]
+    async fn test_registry_creation() {
+        let state = AppState::new().await;
+        let registry = ToolRegistry::with_state(state);
         let tools = registry.list();
 
-        // Should have 8 tools
         assert_eq!(tools.len(), 8);
 
-        // Check tool names
         let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
         assert!(names.contains(&"send_message"));
         assert!(names.contains(&"check_messages"));
@@ -960,14 +789,14 @@ mod tests {
         let tool = ToolRegistry::def_send_message();
         let json = serde_json::to_string(&tool).unwrap();
 
-        // Should use camelCase
         assert!(json.contains("inputSchema"));
         assert!(json.contains("\"name\":\"send_message\""));
     }
 
     #[tokio::test]
     async fn test_call_unknown_tool() {
-        let registry = ToolRegistry::new();
+        let state = AppState::new().await;
+        let registry = ToolRegistry::with_state(state);
         let result = registry
             .call("unknown_tool", serde_json::json!({}), "test")
             .await;
@@ -980,8 +809,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_call_send_message_stub() {
-        let registry = ToolRegistry::new();
+    async fn test_call_send_message() {
+        let state = AppState::new().await;
+        let registry = ToolRegistry::with_state(state);
         let result = registry
             .call(
                 "send_message",
@@ -995,7 +825,6 @@ mod tests {
             .await
             .unwrap();
 
-        // Should return stub response
         if let Some(content) = result.content.first() {
             match content {
                 crate::mcp::protocol::ToolContent::Text { text } => {

@@ -39,18 +39,10 @@ pub struct McpServer {
 }
 
 impl McpServer {
-    /// Create a new MCP server
-    pub fn new(agent_id: String) -> Self {
-        Self {
-            tools: ToolRegistry::new(),
-            agent_id,
-            initialized: false,
-        }
-    }
-
-    /// Create a new MCP server with shared AppState
+    /// Create a new MCP server backed by AppState.
     ///
-    /// This enables event broadcasting, Merlin notifications, and NATS publishing.
+    /// All tool operations use `state.persistence()` for writes and
+    /// `state.indexer()` for reads.
     pub fn with_state(agent_id: String, state: AppState) -> Self {
         Self {
             tools: ToolRegistry::with_state(state),
@@ -220,16 +212,18 @@ impl McpServer {
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_server_creation() {
-        let server = McpServer::new("test-agent".to_string());
+    #[tokio::test]
+    async fn test_server_creation() {
+        let state = AppState::new().await;
+        let server = McpServer::with_state("test-agent".to_string(), state);
         assert_eq!(server.agent_id, "test-agent");
         assert!(!server.initialized);
     }
 
     #[tokio::test]
     async fn test_handle_initialize() {
-        let mut server = McpServer::new("test".to_string());
+        let state = AppState::new().await;
+        let mut server = McpServer::with_state("test".to_string(), state);
 
         let params = serde_json::json!({
             "protocolVersion": "2024-11-05",
@@ -248,12 +242,12 @@ mod tests {
         assert_eq!(result.server_info.name, SERVER_NAME);
     }
 
-    #[test]
-    fn test_handle_tools_list() {
-        let server = McpServer::new("test".to_string());
+    #[tokio::test]
+    async fn test_handle_tools_list() {
+        let state = AppState::new().await;
+        let server = McpServer::with_state("test".to_string(), state);
         let result = server.handle_tools_list().unwrap();
 
-        // Should have a "tools" array
         assert!(result.get("tools").is_some());
     }
 }

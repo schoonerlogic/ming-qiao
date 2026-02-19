@@ -1,12 +1,12 @@
 // Database module for Ming-Qiao
 //
-// This module contains materialized view models for SurrealDB,
-// derived from the append-only event log.
+// This module contains the SurrealDB persistence layer and
+// in-memory materialized view models.
 
 pub mod error;
 pub mod indexer;
 pub mod models;
-pub mod state;
+pub mod persistence;
 pub mod tests;
 
 // Re-export all models for convenient use
@@ -16,6 +16,6 @@ pub use models::{
 };
 
 // Re-export indexer types
-pub use error::IndexerError;
+pub use error::{IndexerError, PersistenceError};
 pub use indexer::Indexer;
-pub use state::IndexerState;
+pub use persistence::Persistence;

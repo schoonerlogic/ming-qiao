@@ -37,6 +37,9 @@ toml = "0.8"
 # NATS messaging
 async-nats = "0.38"
 
+# SurrealDB persistence
+surrealdb = { version = "3", default-features = false, features = ["kv-mem", "rustls"] }
+
 [dev-dependencies]
 tokio-test = "0.4"
 tempfile = "3"

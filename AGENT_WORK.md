@@ -1,6 +1,6 @@
 # Agent Work Coordination — Ming-Qiao
 
-**Last Updated:** 2026-01-27T16:10:00Z  
+**Last Updated:** 2026-02-19T12:00:00Z
 **Updated By:** aleph
 
 ---
@@ -9,18 +9,38 @@
 
 ### Aleph
 
-- **Task:** Merlin and Thales communication setup
-- **Branch:** main
-- **Status:** Complete — Merlin notification system implemented
+- **Task:** NATS Agent Client — purpose-specific coordination bus
+- **Branch:** agent/aleph/nats-bridge
+- **Status:** Complete — all 4 modules implemented and pushed
 - **Completed:**
-  - WebSocket real-time updates (existing)
-  - MerlinNotifier module with observation mode logic
-  - Integrated notifications into MCP tool event flow
-  - Merlin notification WebSocket endpoint (`/merlin/notifications`)
-  - Documentation: `docs/MERLIN_THALES.md`
-- **Note:** 82 tests passing, server operational
+  - `src/nats/subjects.rs` — Subject hierarchy builder (AgentSubjects struct)
+  - `src/nats/messages.rs` — Typed NATS payloads (Presence, TaskAssignment, TaskStatusUpdate, SessionNote)
+  - `src/nats/streams.rs` — JetStream stream/consumer configs (AGENT_TASKS, AGENT_NOTES)
+  - `src/nats/client.rs` — NatsAgentClient with typed publish/subscribe API
+  - Simplified NatsConfig (removed subject/stream fields, now code-defined)
+  - Refactored bridge.rs → client.rs (purpose-specific channels replace V1 firehose)
+- **Note:** 123 tests passing, clean compile, branch pushed to origin
 
 ### Luban
+
+- **Task:** SurrealDB Persistence Layer
+- **Branch:** agent/luban/surrealdb-persistence
+- **Status:** In progress — dependency approved, building SurrealDB schema
+- **Signal received:** Aleph committed `messages.rs` with typed NATS message payloads
+- **Message types to persist:** TaskAssignment, TaskStatusUpdate, SessionNote, Presence (24h TTL)
+- **Dependency:** Uses `nats::messages` types for persistence schema
+- **Design decisions confirmed (Thales/Aleph):**
+  1. Persist Presence with 24h TTL (valuable for debugging/witnessing)
+  2. Replace `db/indexer.rs` entirely (HashMap was placeholder)
+  3. Remove JSONL layer (JetStream handles persistence)
+  4. SurrealDB 3.0 with `kv-mem` + `rustls` features approved
+- **Progress:**
+  - ✅ Cargo.toml updated with surrealdb dependency
+  - ✅ 123 tests passing, clean build
+  - 🔄 Designing SurrealDB schema
+- **Note:** Branched from `origin/agent/aleph/nats-bridge`, building against actual type definitions
+
+### Previous Task (Complete)
 
 - **Task:** Svelte UI Skeleton
 - **Branch:** agent/luban/main/svelte-ui-skeleton
@@ -30,38 +50,33 @@
 
 ### Thales
 
-- **Task:** Architecture documentation and agent coordination design
-- **Status:** Available (advisory role, no branch)
-- **Notes:** Created AGENTS.md, agent instruction sets, task templates
+- **Task:** Agent Client Design review
+- **Status:** Available (advisory role)
+- **Notes:** Designed the purpose-specific channel architecture (presence/tasks/notes). Aleph implemented Option B (no unified firehose).
 
 ---
 
-## Completed Today
+## Completed (This Sprint)
 
-- [x] **Luban:** Svelte UI Skeleton (7 components, 4 stores, API client)
-- [x] **Aleph:** Merlin notification system (MerlinNotifier, WebSocket endpoint)
-- [x] **Aleph:** Integrated Merlin notifications into MCP event flow
-- [x] **Aleph:** Documentation: `docs/MERLIN_THALES.md`
+- [x] **Aleph:** V1 NATS bridge (connect, publish EventEnvelope, subscribe)
+- [x] **Aleph:** Integration test — full round-trip MCP → NATS → HTTP
+- [x] **Aleph:** subjects.rs — AgentSubjects struct with method-based subject hierarchy
+- [x] **Aleph:** messages.rs — 4 typed message structs + NatsMessage tagged enum
+- [x] **Aleph:** streams.rs — AGENT_TASKS + AGENT_NOTES streams, 4 consumer configs
+- [x] **Aleph:** client.rs — NatsAgentClient refactor (replaces NatsBridge)
+- [x] **Aleph:** Simplified NatsConfig (enabled + url only)
+- [x] **Aleph:** Moved EventType Display impl to events/schema.rs
 
-## Previous Days
+## Previous
 
-- [x] Thales: Created coordination protocol (AGENTS.md)
-- [x] Thales: Created agent instruction sets (Aleph, Luban, Thales)
-- [x] Aleph: First task assignment to Luban
-- [x] Aleph: Project scaffolding (Cargo.toml, src/lib.rs, src/events/mod.rs)
-- [x] Luban: Event Schema Foundation implementation (14 tests passing)
-- [x] Aleph: Task 002 assignment to Luban (Database Models)
-- [x] Aleph: MCP server scaffolding (protocol, server, tools — 13 new tests)
-- [x] Luban: Database Models implementation (13 tests passing)
-- [x] Aleph: HTTP gateway scaffolding (routes, handlers, server — 5 new tests)
-- [x] Luban: Event Persistence Layer implementation (10 new tests passing)
-- [x] Aleph: Binary entry point (main.rs with serve/mcp-serve commands)
-- [x] Aleph: Shared state module (AppState, Config, ObservationMode)
-- [x] Aleph: Connected MCP tools to event persistence (8 tools implemented)
-- [x] Aleph: Connected HTTP handlers to event reader (7 endpoints implemented)
-- [x] Luban: Database Indexer implementation (10 tests passing)
-- [x] **Luban: Indexer Integration — Task 005 complete (80 tests passing)**
-- [x] **Luban: Svelte UI Skeleton — Task 006 complete (31 files, 4071 lines)**
+- [x] Aleph: Merlin notification system (MerlinNotifier, WebSocket endpoint)
+- [x] Luban: Svelte UI Skeleton (7 components, 4 stores, API client)
+- [x] Luban: Indexer Integration (7 HTTP handlers using O(1) lookups)
+- [x] Luban: Database Indexer (10 tests, all 6 event types)
+- [x] Luban: Event Persistence Layer (EventWriter, EventReader)
+- [x] Luban: Database Models (6 models, 3 enums)
+- [x] Luban: Event Schema Foundation (14 tests)
+- [x] Aleph: MCP server (8 tools), HTTP gateway (7 endpoints), WebSocket
 
 ---
 
@@ -73,10 +88,12 @@ _No active blockers._
 
 ## Upcoming
 
+- [ ] Assign Luban: SurrealDB persistence layer (uses NATS message types for schema)
+- [ ] Wire NATS subscriptions into server startup (start consumers, broadcast received messages)
+- [ ] Add presence heartbeat timer (periodic publish)
+- [ ] Wire typed NATS publishing into MCP tools (task assignment → publish_task_assignment)
 - [ ] Review Luban's Svelte UI implementation
 - [ ] Wire up 10 stub HTTP handlers to EventWriter
-- [ ] Implement Merlin intervention processing (inject, approve, reject)
-- [ ] SurrealDB integration (future)
 
 ## System Status
 
@@ -89,53 +106,77 @@ _No active blockers._
 - ✅ WebSocket event stream (`/ws`)
 - ✅ Merlin notification system (`/merlin/notifications`)
 - ✅ Observation modes (Passive/Advisory/Gated)
+- ✅ NATS agent client (typed publish/subscribe, graceful degradation)
 
-**Test Status:** 82/82 passing
+**Test Status:** 123/123 passing
+
+**NATS Module Structure:**
+
+```
+src/nats/
+├── mod.rs       — Module re-exports
+├── subjects.rs  — AgentSubjects: am.agent.{agent}.{channel}.{project}.*
+├── messages.rs  — Presence, TaskAssignment, TaskStatusUpdate, SessionNote
+├── streams.rs   — AGENT_TASKS (work queue), AGENT_NOTES (30-day)
+└── client.rs    — NatsAgentClient: connect, publish, subscribe
+```
 
 **Servers:**
 
 - HTTP: `http://localhost:7777`
 - WebSocket events: `ws://localhost:7777/ws`
 - Merlin notifications: `ws://localhost:7777/merlin/notifications`
+- NATS: `nats://localhost:4222` (requires `nats-server --jetstream`)
 
 ---
 
 ## Communication Log
 
-| Timestamp        | From  | To    | Summary                                |
-| ---------------- | ----- | ----- | -------------------------------------- |
-| 2026-01-24T14:30 | Aleph | Luban | Task assigned: Event Schema Foundation |
-| 2026-01-25T09:00 | Aleph | Luban | Task assigned: Database Models         |
-| 2026-01-25T10:20 | Luban | Aleph | Task 002 complete, ready for review    |
-| 2026-01-25T11:00 | Aleph | Luban | Task assigned: Event Persistence Layer |
-| 2026-01-25T11:30 | Luban | Aleph | Task 003 complete, ready for review    |
-| 2026-01-25T12:00 | Aleph | Luban | Task 003 approved                      |
-| 2026-01-25T12:45 | Aleph | Luban | Task assigned: Database Indexer        |
-| 2026-01-25T13:30 | Luban | Aleph | Task 004 complete, ready for review    |
-| 2026-01-25T13:35 | Aleph | Luban | Task 004 approved                      |
-| 2026-01-25T13:35 | Aleph | Luban | Task assigned: Indexer Integration     |
-| 2026-01-25T14:33 | Luban | Aleph | Task 005 complete, ready for review    |
-| 2026-01-25T18:30 | Aleph | Luban | Task assigned: Svelte UI Skeleton      |
-| 2026-01-27T10:23 | Luban | Aleph | Task complete: Svelte UI Skeleton      |
-
----
-
-## Decision Queue
-
-_Decisions awaiting resolution:_
-
-| ID  | Question | Proposed By | Assigned To | Status |
-| --- | -------- | ----------- | ----------- | ------ |
-| —   | —        | —           | —           | —      |
+| Timestamp        | From   | To     | Summary                                      |
+| ---------------- | ------ | ------ | -------------------------------------------- |
+| 2026-02-18       | Aleph  | Thales | NATS bridge V1 complete, integration verified |
+| 2026-02-19       | Thales | Aleph  | Agent Client Design: purpose-specific channels |
+| 2026-02-19       | Aleph  | Thales | Chose Option B, implemented 4 modules         |
+| 2026-02-19       | Aleph  | Luban  | Messages pushed — ready for SurrealDB schema  |
 
 ---
 
 ## Notes
 
+- NATS integration uses graceful degradation: disabled by default, `connect()` returns None if unreachable
+- Subject hierarchy: `am.agent.{agent}.presence`, `am.agent.{agent}.task.{project}.*`, `am.agent.{agent}.notes.{project}`
+- JetStream streams: AGENT_TASKS (work queue, 7 days), AGENT_NOTES (limits, 30 days)
+- Presence uses core NATS (ephemeral, no persistence)
+- Agent convention: agents push branches, Proteus merges to develop from merlin worktree
 - Luban introduced as builder assistant (GLM-4.7 via Goose ACP in Zed Preview)
 - Aleph runs in Zed (stable), Luban runs in Zed Preview (parallel agents)
 - Coordination protocol defined in AGENTS.md
 - Agent-specific instructions in agents/<name>/ directories
-- First task assigned: Event Schema Foundation (tasks/001-event-schema-foundation.md)
-- Git repository initialized locally (no GitHub remote configured yet)
 - Branch naming: agent/<agent>/<scope>/<task-description>
+
+---
+
+## Updates
+
+### 2026-02-19T17:30:00Z — Luban Status Update
+
+**Task:** SurrealDB Persistence Layer
+
+**Branch:** `agent/luban/surrealdb-persistence`
+
+**Status:** In progress — dependency approved, building SurrealDB schema
+
+**Signal received:** Aleph committed `messages.rs` with typed NATS message payloads (Presence, TaskAssignment, TaskStatusUpdate, SessionNote)
+
+**Design decisions confirmed (Thales/Aleph via Proteus):**
+1. Persist Presence with 24h TTL (valuable for debugging/witnessing)
+2. Replace `db/indexer.rs` entirely (HashMap was placeholder)
+3. Remove JSONL layer (JetStream handles persistence)
+4. SurrealDB 3.0 with `kv-mem` + `rustls` features approved
+
+**Progress:**
+- ✅ Cargo.toml updated with surrealdb dependency
+- ✅ 123 tests passing, clean build
+- 🔄 Designing SurrealDB schema
+
+**Next:** Create SurrealDB tables matching NatsMessage types
