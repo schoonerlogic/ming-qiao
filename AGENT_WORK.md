@@ -23,10 +23,30 @@
 
 ### Luban
 
-- **Task:** SurrealDB persistence (pending assignment)
-- **Branch:** TBD
-- **Status:** Available — NATS message types pushed for schema reference
-- **Dependency:** Uses `nats::messages` types (TaskAssignment, TaskStatusUpdate, SessionNote) for persistence schema
+- **Task:** SurrealDB Persistence Layer
+- **Branch:** agent/luban/surrealdb-persistence
+- **Status:** In progress — dependency approved, building SurrealDB schema
+- **Signal received:** Aleph committed `messages.rs` with typed NATS message payloads
+- **Message types to persist:** TaskAssignment, TaskStatusUpdate, SessionNote, Presence (24h TTL)
+- **Dependency:** Uses `nats::messages` types for persistence schema
+- **Design decisions confirmed (Thales/Aleph):**
+  1. Persist Presence with 24h TTL (valuable for debugging/witnessing)
+  2. Replace `db/indexer.rs` entirely (HashMap was placeholder)
+  3. Remove JSONL layer (JetStream handles persistence)
+  4. SurrealDB 3.0 with `kv-mem` + `rustls` features approved
+- **Progress:**
+  - ✅ Cargo.toml updated with surrealdb dependency
+  - ✅ 123 tests passing, clean build
+  - 🔄 Designing SurrealDB schema
+- **Note:** Branched from `origin/agent/aleph/nats-bridge`, building against actual type definitions
+
+### Previous Task (Complete)
+
+- **Task:** Svelte UI Skeleton
+- **Branch:** agent/luban/main/svelte-ui-skeleton
+- **Status:** Complete — ready for review
+- **Completed:** 7 components, 4 stores, API client, TypeScript types, SvelteKit + Tailwind setup
+- **Note:** 31 files created (4071 lines), 0 TypeScript errors, 6 accessibility warnings
 
 ### Thales
 
@@ -128,3 +148,35 @@ src/nats/
 - JetStream streams: AGENT_TASKS (work queue, 7 days), AGENT_NOTES (limits, 30 days)
 - Presence uses core NATS (ephemeral, no persistence)
 - Agent convention: agents push branches, Proteus merges to develop from merlin worktree
+- Luban introduced as builder assistant (GLM-4.7 via Goose ACP in Zed Preview)
+- Aleph runs in Zed (stable), Luban runs in Zed Preview (parallel agents)
+- Coordination protocol defined in AGENTS.md
+- Agent-specific instructions in agents/<name>/ directories
+- Branch naming: agent/<agent>/<scope>/<task-description>
+
+---
+
+## Updates
+
+### 2026-02-19T17:30:00Z — Luban Status Update
+
+**Task:** SurrealDB Persistence Layer
+
+**Branch:** `agent/luban/surrealdb-persistence`
+
+**Status:** In progress — dependency approved, building SurrealDB schema
+
+**Signal received:** Aleph committed `messages.rs` with typed NATS message payloads (Presence, TaskAssignment, TaskStatusUpdate, SessionNote)
+
+**Design decisions confirmed (Thales/Aleph via Proteus):**
+1. Persist Presence with 24h TTL (valuable for debugging/witnessing)
+2. Replace `db/indexer.rs` entirely (HashMap was placeholder)
+3. Remove JSONL layer (JetStream handles persistence)
+4. SurrealDB 3.0 with `kv-mem` + `rustls` features approved
+
+**Progress:**
+- ✅ Cargo.toml updated with surrealdb dependency
+- ✅ 123 tests passing, clean build
+- 🔄 Designing SurrealDB schema
+
+**Next:** Create SurrealDB tables matching NatsMessage types
