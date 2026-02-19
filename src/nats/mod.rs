@@ -11,6 +11,7 @@
 
 mod bridge;
 pub mod messages;
+pub mod streams;
 pub mod subjects;
 
 pub use bridge::NatsBridge;
