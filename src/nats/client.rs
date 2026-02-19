@@ -467,20 +467,3 @@ pub enum ClientError {
     Serialize(#[from] serde_json::Error),
 }
 
-// ============================================================================
-// Display impl for EventType (moved from bridge.rs — belongs near the type)
-// ============================================================================
-
-impl std::fmt::Display for crate::events::EventType {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::MessageSent => write!(f, "message_sent"),
-            Self::MessageReceived => write!(f, "message_received"),
-            Self::ArtifactShared => write!(f, "artifact_shared"),
-            Self::DecisionRecorded => write!(f, "decision_recorded"),
-            Self::TaskAssigned => write!(f, "task_assigned"),
-            Self::TaskCompleted => write!(f, "task_completed"),
-            Self::StatusChanged => write!(f, "status_changed"),
-        }
-    }
-}
