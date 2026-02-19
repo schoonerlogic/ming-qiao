@@ -749,7 +749,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_health_check() {
-        let state = AppState::new();
+        let state = AppState::new().await;
         let response = health_check(State(state)).await;
         let json = response.into_response();
         assert_eq!(json.status(), StatusCode::OK);

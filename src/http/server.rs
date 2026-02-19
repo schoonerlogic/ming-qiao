@@ -102,12 +102,6 @@ impl HttpServer {
     }
 }
 
-impl Default for HttpServer {
-    fn default() -> Self {
-        Self::new(AppState::default())
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -120,16 +114,17 @@ mod tests {
         assert!(config.enable_cors);
     }
 
-    #[test]
-    fn test_server_address() {
-        let server = HttpServer::new(AppState::default());
+    #[tokio::test]
+    async fn test_server_address() {
+        let state = AppState::new().await;
+        let server = HttpServer::new(state);
         assert_eq!(server.address(), "127.0.0.1:7777");
     }
 
-    #[test]
-    fn test_router_builds() {
-        let server = HttpServer::new(AppState::default());
+    #[tokio::test]
+    async fn test_router_builds() {
+        let state = AppState::new().await;
+        let server = HttpServer::new(state);
         let _router = server.router();
-        // Just verify it builds without panic
     }
 }
