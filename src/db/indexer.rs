@@ -4,7 +4,7 @@
 use crate::db::error::IndexerError;
 use crate::db::models::{Agent, Artifact, Decision, Message, Thread};
 use crate::events::{EventEnvelope, EventPayload};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// Materializes events into in-memory queryable views.
 ///
@@ -21,6 +21,9 @@ pub struct Indexer {
 
     /// Count of events processed (for diagnostics)
     events_processed: u64,
+
+    /// Event IDs already processed (dedup guard for NATS echo + hydration overlap)
+    seen_ids: HashSet<String>,
 }
 
 impl Indexer {
@@ -33,6 +36,7 @@ impl Indexer {
             artifacts: HashMap::new(),
             agents: HashMap::new(),
             events_processed: 0,
+            seen_ids: HashSet::new(),
         }
     }
 
@@ -46,6 +50,11 @@ impl Indexer {
     /// Called by the write path after storing the event in SurrealDB.
     pub fn process_event(&mut self, event: &EventEnvelope) -> Result<(), IndexerError> {
         let event_id = event.id.to_string();
+
+        // Dedup: skip events already processed (NATS echo, hydration overlap)
+        if !self.seen_ids.insert(event_id.clone()) {
+            return Ok(());
+        }
 
         self.events_processed += 1;
 

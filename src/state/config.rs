@@ -74,6 +74,37 @@ impl Default for NatsConfig {
     }
 }
 
+/// Database connection configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DatabaseConfig {
+    /// SurrealDB connection URL.
+    /// Use `mem://` for in-memory (tests/default), `ws://host:port` for shared server.
+    #[serde(default = "default_database_url")]
+    pub url: String,
+
+    /// Optional username for authentication (required for `ws://` connections)
+    #[serde(default)]
+    pub username: Option<String>,
+
+    /// Optional password for authentication (required for `ws://` connections)
+    #[serde(default)]
+    pub password: Option<String>,
+}
+
+fn default_database_url() -> String {
+    "mem://".to_string()
+}
+
+impl Default for DatabaseConfig {
+    fn default() -> Self {
+        Self {
+            url: default_database_url(),
+            username: None,
+            password: None,
+        }
+    }
+}
+
 /// Runtime configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
@@ -100,6 +131,10 @@ pub struct Config {
     /// NATS messaging configuration
     #[serde(default)]
     pub nats: NatsConfig,
+
+    /// Database connection configuration
+    #[serde(default)]
+    pub database: DatabaseConfig,
 }
 
 fn default_data_dir() -> String {
@@ -129,12 +164,17 @@ impl Default for Config {
             data_dir: default_data_dir(),
             port: default_port(),
             nats: NatsConfig::default(),
+            database: DatabaseConfig::default(),
         }
     }
 }
 
 impl Config {
-    /// Load configuration from a TOML file
+    /// Load configuration from a TOML file.
+    ///
+    /// Relative `data_dir` paths are resolved against the config file's parent
+    /// directory, not the process CWD. This is essential for MCP mode where
+    /// Claude Desktop spawns the process from an arbitrary working directory.
     pub fn load(path: impl AsRef<Path>) -> Result<Self, ConfigError> {
         let path = path.as_ref();
         if !path.exists() {
@@ -142,7 +182,17 @@ impl Config {
         }
 
         let content = std::fs::read_to_string(path)?;
-        let config: Config = toml::from_str(&content)?;
+        let mut config: Config = toml::from_str(&content)?;
+
+        // Resolve relative data_dir against config file's parent directory
+        let data_path = Path::new(&config.data_dir);
+        if data_path.is_relative() {
+            if let Some(config_dir) = path.parent() {
+                let absolute = config_dir.join(data_path);
+                config.data_dir = absolute.to_string_lossy().into_owned();
+            }
+        }
+
         Ok(config)
     }
 
@@ -242,6 +292,44 @@ mod tests {
         let config: Config = toml::from_str(toml_str).unwrap();
         assert!(!config.nats.enabled);
         assert_eq!(config.nats.url, "nats://localhost:4222");
+    }
+
+    #[test]
+    fn test_database_config_defaults() {
+        let db = DatabaseConfig::default();
+        assert_eq!(db.url, "mem://");
+        assert!(db.username.is_none());
+        assert!(db.password.is_none());
+    }
+
+    #[test]
+    fn test_config_missing_database_section_uses_defaults() {
+        let toml_str = r#"
+            mode = "passive"
+            data_dir = "data"
+            port = 7777
+        "#;
+        let config: Config = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.database.url, "mem://");
+        assert!(config.database.username.is_none());
+    }
+
+    #[test]
+    fn test_config_with_database_ws() {
+        let toml_str = r#"
+            mode = "passive"
+            data_dir = "data"
+            port = 7777
+
+            [database]
+            url = "ws://localhost:8000"
+            username = "root"
+            password = "root"
+        "#;
+        let config: Config = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.database.url, "ws://localhost:8000");
+        assert_eq!(config.database.username.as_deref(), Some("root"));
+        assert_eq!(config.database.password.as_deref(), Some("root"));
     }
 
     #[test]

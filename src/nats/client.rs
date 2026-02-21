@@ -93,6 +93,13 @@ impl NatsAgentClient {
         &self.subjects
     }
 
+    /// Return the raw NATS client and events broadcast subject for the
+    /// event sync bridge.  The client is cloned (cheap Arc bump), following
+    /// the same pattern used by `start_presence_heartbeat`.
+    pub fn event_sync_parts(&self) -> (async_nats::Client, String) {
+        (self.client.clone(), self.subjects.events())
+    }
+
     // ========================================================================
     // Publish methods
     // ========================================================================

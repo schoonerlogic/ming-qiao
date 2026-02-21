@@ -10,9 +10,9 @@ use serde_json::Value;
 use tracing::{debug, error, info, warn};
 
 use crate::mcp::protocol::{
-    CallToolParams, InitializeParams, InitializeResult, JsonRpcError, JsonRpcRequest,
-    JsonRpcResponse, McpError, McpErrorCode, RequestId, ServerCapabilities, ServerInfo,
-    ToolsCapability,
+    CallToolParams, InitializeParams, InitializeResult, JsonRpcError, JsonRpcNotification,
+    JsonRpcRequest, JsonRpcResponse, McpError, McpErrorCode, RequestId, ServerCapabilities,
+    ServerInfo, ToolsCapability,
 };
 use crate::mcp::tools::ToolRegistry;
 use crate::state::AppState;
@@ -56,35 +56,64 @@ impl McpServer {
         let stdin = io::stdin();
         let mut stdout = io::stdout();
 
-        info!("MCP server starting for agent: {}", self.agent_id);
+        eprintln!("[ming-qiao] MCP server ready for agent: {}", self.agent_id);
 
         for line in stdin.lock().lines() {
-            let line = line?;
+            let line = match line {
+                Ok(l) => l,
+                Err(e) => {
+                    eprintln!("[ming-qiao] stdin read error: {}", e);
+                    return Err(McpError::Io(e));
+                }
+            };
 
             if line.is_empty() {
                 continue;
             }
 
-            debug!("Received: {}", line);
-
             let response = self.handle_message(&line).await;
 
             if let Some(resp) = response {
                 let json = serde_json::to_string(&resp)?;
-                debug!("Sending: {}", json);
                 writeln!(stdout, "{}", json)?;
                 stdout.flush()?;
             }
         }
 
-        info!("MCP server shutting down");
+        eprintln!("[ming-qiao] MCP server shutting down (stdin closed)");
         Ok(())
     }
 
     /// Handle a single JSON-RPC message
     async fn handle_message(&mut self, message: &str) -> Option<JsonRpcResponse> {
-        // Parse the JSON
-        let request: JsonRpcRequest = match serde_json::from_str(message) {
+        // Parse as raw JSON first to distinguish requests from notifications.
+        // JSON-RPC notifications have no "id" field and MUST NOT receive a response.
+        let raw: Value = match serde_json::from_str(message) {
+            Ok(v) => v,
+            Err(e) => {
+                error!("Failed to parse JSON: {}", e);
+                return Some(JsonRpcResponse::error(
+                    RequestId::Null,
+                    JsonRpcError {
+                        code: McpErrorCode::ParseError.code(),
+                        message: format!("Parse error: {}", e),
+                        data: None,
+                    },
+                ));
+            }
+        };
+
+        // No "id" field → JSON-RPC notification → no response allowed
+        if raw.get("id").is_none() {
+            match serde_json::from_value::<JsonRpcNotification>(raw) {
+                Ok(notification) => self.handle_notification(&notification),
+                Err(e) => eprintln!("[ming-qiao] Failed to parse notification: {}", e),
+            }
+            return None;
+        }
+
+        // Has "id" → JSON-RPC request → must respond
+        let request: JsonRpcRequest = match serde_json::from_value(raw) {
             Ok(req) => req,
             Err(e) => {
                 error!("Failed to parse request: {}", e);
@@ -116,16 +145,26 @@ impl McpServer {
         }
     }
 
+    /// Handle a JSON-RPC notification (no response allowed)
+    fn handle_notification(&mut self, notification: &JsonRpcNotification) {
+        match notification.method.as_str() {
+            "initialized" => {
+                debug!("Client acknowledged initialization");
+            }
+            "notifications/cancelled" => {
+                debug!("Client cancelled a request");
+            }
+            _ => {
+                warn!("Unknown notification: {}", notification.method);
+            }
+        }
+    }
+
     /// Dispatch a request to the appropriate handler
     async fn dispatch(&mut self, request: &JsonRpcRequest) -> Result<Value, McpError> {
         match request.method.as_str() {
             // Lifecycle methods
             "initialize" => self.handle_initialize(request.params.clone()),
-            "initialized" => {
-                // Notification, no response needed but we return empty
-                debug!("Client sent initialized notification");
-                Ok(serde_json::json!({}))
-            }
             "shutdown" => {
                 info!("Shutdown requested");
                 Ok(serde_json::json!(null))

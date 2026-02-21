@@ -727,6 +727,33 @@ mod tests {
     }
 
     #[test]
+    fn test_indexer_dedup() {
+        let event_id = Uuid::now_v7();
+        let event = EventEnvelope {
+            id: event_id,
+            timestamp: Utc::now(),
+            event_type: EventType::MessageSent,
+            agent_id: "aleph".to_string(),
+            payload: EventPayload::Message(crate::events::MessageEvent {
+                from: "aleph".to_string(),
+                to: "thales".to_string(),
+                subject: "Dedup Test".to_string(),
+                content: "Should only count once".to_string(),
+                thread_id: None,
+                priority: Priority::Normal,
+            }),
+        };
+
+        let mut indexer = Indexer::new();
+        indexer.process_event(&event).unwrap();
+        indexer.process_event(&event).unwrap(); // duplicate
+
+        assert_eq!(indexer.events_processed(), 1);
+        let thread = indexer.get_thread(&event_id.to_string()).unwrap();
+        assert_eq!(thread.message_count, 1);
+    }
+
+    #[test]
     fn test_indexer_get_all_artifacts() {
         let art1_id = Uuid::now_v7();
         let art2_id = Uuid::now_v7();
