@@ -2,7 +2,8 @@
 // SurrealDB Persistence Layer — replaces JSONL append-only log
 
 use serde_json::Value;
-use surrealdb::engine::local::{Db, Mem};
+use surrealdb::engine::any::Any;
+use surrealdb::opt::auth::Root;
 use surrealdb::Surreal;
 
 use crate::db::error::PersistenceError;
@@ -17,48 +18,81 @@ use crate::nats::messages::{Presence, SessionNote, TaskAssignment, TaskStatusUpd
 /// Indexes on common query fields for efficient lookups.
 const SCHEMA: &str = r#"
 -- Presence heartbeats (ephemeral, 24h TTL concept — pruned by query)
-DEFINE TABLE presence SCHEMALESS;
-DEFINE INDEX agent_idx ON presence COLUMNS agent;
-DEFINE INDEX timestamp_idx ON presence COLUMNS timestamp;
+DEFINE TABLE IF NOT EXISTS presence SCHEMALESS;
+DEFINE INDEX IF NOT EXISTS agent_idx ON presence COLUMNS agent;
+DEFINE INDEX IF NOT EXISTS timestamp_idx ON presence COLUMNS timestamp;
 
 -- Task assignments
-DEFINE TABLE task_assignment SCHEMALESS;
-DEFINE INDEX task_id_idx ON task_assignment COLUMNS task_id;
-DEFINE INDEX assigned_to_idx ON task_assignment COLUMNS assigned_to;
+DEFINE TABLE IF NOT EXISTS task_assignment SCHEMALESS;
+DEFINE INDEX IF NOT EXISTS task_id_idx ON task_assignment COLUMNS task_id;
+DEFINE INDEX IF NOT EXISTS assigned_to_idx ON task_assignment COLUMNS assigned_to;
 
 -- Task status updates
-DEFINE TABLE task_status_update SCHEMALESS;
-DEFINE INDEX task_id_idx ON task_status_update COLUMNS task_id;
-DEFINE INDEX agent_idx ON task_status_update COLUMNS agent;
+DEFINE TABLE IF NOT EXISTS task_status_update SCHEMALESS;
+DEFINE INDEX IF NOT EXISTS task_id_idx ON task_status_update COLUMNS task_id;
+DEFINE INDEX IF NOT EXISTS agent_idx ON task_status_update COLUMNS agent;
 
 -- Session notes
-DEFINE TABLE session_note SCHEMALESS;
-DEFINE INDEX agent_idx ON session_note COLUMNS agent;
-DEFINE INDEX project_idx ON session_note COLUMNS project;
+DEFINE TABLE IF NOT EXISTS session_note SCHEMALESS;
+DEFINE INDEX IF NOT EXISTS agent_idx ON session_note COLUMNS agent;
+DEFINE INDEX IF NOT EXISTS project_idx ON session_note COLUMNS project;
 
 -- EventEnvelope (local event log — replaces JSONL)
-DEFINE TABLE event SCHEMALESS;
-DEFINE INDEX event_id_idx ON event COLUMNS event_id UNIQUE;
-DEFINE INDEX agent_idx ON event COLUMNS agent_id;
-DEFINE INDEX type_idx ON event COLUMNS event_type;
-DEFINE INDEX timestamp_idx ON event COLUMNS timestamp;
+DEFINE TABLE IF NOT EXISTS event SCHEMALESS;
+DEFINE INDEX IF NOT EXISTS event_id_idx ON event COLUMNS event_id UNIQUE;
+DEFINE INDEX IF NOT EXISTS agent_idx ON event COLUMNS agent_id;
+DEFINE INDEX IF NOT EXISTS type_idx ON event COLUMNS event_type;
+DEFINE INDEX IF NOT EXISTS timestamp_idx ON event COLUMNS timestamp;
 "#;
 
 /// SurrealDB persistence layer for ming-qiao.
 ///
-/// Wraps an in-memory SurrealDB instance. Replaces the JSONL append-only log
-/// for local events AND provides storage for NATS coordination messages.
-/// Clone is cheap — `Surreal<Db>` is internally Arc'd.
+/// Wraps a `Surreal<Any>` connection that routes by URL scheme at runtime:
+/// - `mem://` — in-memory engine (tests, single-process default)
+/// - `ws://host:port` — WebSocket to a shared SurrealDB server
+///
+/// Clone is cheap — `Surreal<Any>` is internally Arc'd.
 #[derive(Clone)]
 pub struct Persistence {
-    db: Surreal<Db>,
+    db: Surreal<Any>,
 }
 
 impl Persistence {
-    /// Create an in-memory SurrealDB, set namespace/database, run schema.
+    /// Convenience: create an in-memory SurrealDB (equivalent to `connect("mem://", None, None)`).
+    ///
+    /// Used by tests and `AppState::new()` (default config).
     pub async fn new() -> Result<Self, PersistenceError> {
-        let db = Surreal::new::<Mem>(()).await.map_err(db_err)?;
-        db.use_ns("astralmaris").use_db("mingqiao").await.map_err(db_err)?;
+        Self::connect("mem://", None, None).await
+    }
+
+    /// Connect to SurrealDB at the given URL.
+    ///
+    /// - `mem://` — in-memory engine (no auth needed)
+    /// - `ws://host:port` — shared server (provide username/password)
+    ///
+    /// Runs the schema with `IF NOT EXISTS` so multiple processes can connect
+    /// to the same server without conflicting.
+    pub async fn connect(
+        url: &str,
+        username: Option<&str>,
+        password: Option<&str>,
+    ) -> Result<Self, PersistenceError> {
+        let db = surrealdb::engine::any::connect(url).await.map_err(db_err)?;
+
+        // Authenticate if credentials provided (required for ws:// connections)
+        if let (Some(user), Some(pass)) = (username, password) {
+            db.signin(Root {
+                username: user.to_string(),
+                password: pass.to_string(),
+            })
+            .await
+            .map_err(db_err)?;
+        }
+
+        db.use_ns("astralmaris")
+            .use_db("mingqiao")
+            .await
+            .map_err(db_err)?;
         db.query(SCHEMA).await.map_err(db_err)?;
         Ok(Self { db })
     }
@@ -212,6 +246,19 @@ impl Persistence {
             )
             .bind(("aid", agent_id.to_string()))
             .bind(("limit", limit))
+            .await
+            .map_err(db_err)?;
+        let rows: Vec<Value> = result.take(0).map_err(db_err)?;
+        rows.into_iter().map(row_to_envelope).collect()
+    }
+
+    /// Get all events, ordered by timestamp ascending.
+    ///
+    /// Used for Indexer hydration on startup — replays the full event log
+    /// through `process_event()` to rebuild in-memory materialized views.
+    pub async fn get_all_events(&self) -> Result<Vec<EventEnvelope>, PersistenceError> {
+        let mut result = self.db
+            .query("SELECT * OMIT id FROM event ORDER BY timestamp ASC")
             .await
             .map_err(db_err)?;
         let rows: Vec<Value> = result.take(0).map_err(db_err)?;
@@ -512,6 +559,34 @@ mod tests {
 
         let latest = db.get_latest_presence("aleph").await.unwrap().unwrap();
         assert_eq!(latest.status, "second");
+    }
+
+    #[tokio::test]
+    async fn test_get_all_events() {
+        let db = Persistence::new().await.unwrap();
+
+        // Empty DB returns empty vec
+        let empty = db.get_all_events().await.unwrap();
+        assert!(empty.is_empty());
+
+        // Store 3 events with small delays to ensure distinct timestamps
+        db.store_event(&make_test_event("aleph", "first")).await.unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        db.store_event(&make_test_event("luban", "second")).await.unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        db.store_event(&make_test_event("thales", "third")).await.unwrap();
+
+        let all = db.get_all_events().await.unwrap();
+        assert_eq!(all.len(), 3);
+
+        // Verify ascending timestamp order
+        assert!(all[0].timestamp <= all[1].timestamp);
+        assert!(all[1].timestamp <= all[2].timestamp);
+
+        // Verify all agents present
+        assert_eq!(all[0].agent_id, "aleph");
+        assert_eq!(all[1].agent_id, "luban");
+        assert_eq!(all[2].agent_id, "thales");
     }
 
     #[tokio::test]

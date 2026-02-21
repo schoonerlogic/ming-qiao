@@ -74,9 +74,32 @@ impl AppState {
         let (event_tx, _) = broadcast::channel(EVENT_CHANNEL_CAPACITY);
         let (nats_tx, _) = broadcast::channel(NATS_CHANNEL_CAPACITY);
 
-        let persistence = Persistence::new()
-            .await
-            .expect("Failed to initialize SurrealDB persistence");
+        let persistence = Persistence::connect(
+            &config.database.url,
+            config.database.username.as_deref(),
+            config.database.password.as_deref(),
+        )
+        .await
+        .expect("Failed to connect to SurrealDB");
+
+        // Hydrate Indexer from SurrealDB (replay stored events for cold-start consistency)
+        let mut indexer = Indexer::new();
+        match persistence.get_all_events().await {
+            Ok(events) => {
+                let count = events.len();
+                for event in &events {
+                    if let Err(e) = indexer.process_event(event) {
+                        tracing::warn!("Indexer hydration skipped event {}: {}", event.id, e);
+                    }
+                }
+                if count > 0 {
+                    tracing::info!("Indexer hydrated with {} events from SurrealDB", count);
+                }
+            }
+            Err(e) => {
+                tracing::warn!("Indexer hydration failed, starting empty: {}", e);
+            }
+        }
 
         Self {
             inner: Arc::new(AppStateInner {
@@ -85,7 +108,7 @@ impl AppState {
                 agent_id: std::env::var("MING_QIAO_AGENT_ID").ok(),
                 event_tx,
                 persistence,
-                indexer: RwLock::new(Indexer::new()),
+                indexer: RwLock::new(indexer),
                 merlin_notifier: Arc::new(MerlinNotifier::new()),
                 nats_client: RwLock::new(None),
                 nats_tx,

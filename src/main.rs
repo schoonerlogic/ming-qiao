@@ -162,36 +162,45 @@ async fn run_http_server() -> Result<(), Box<dyn std::error::Error>> {
 
 /// Run the MCP server
 async fn run_mcp_server() -> Result<(), Box<dyn std::error::Error>> {
+    // All diagnostics use eprintln! (stderr) to keep stdout clean for JSON-RPC
     let agent_id = env::var("MING_QIAO_AGENT_ID").unwrap_or_else(|_| {
-        error!("MING_QIAO_AGENT_ID not set, using 'unknown'");
+        eprintln!("[ming-qiao] MING_QIAO_AGENT_ID not set, using 'unknown'");
         "unknown".to_string()
     });
 
     let config_path = env::var("MING_QIAO_CONFIG").unwrap_or_else(|_| "ming-qiao.toml".to_string());
 
     let state = match AppState::load(&config_path).await {
-        Ok(s) => s,
-        Err(_) => AppState::new().await,
+        Ok(s) => {
+            eprintln!("[ming-qiao] Loaded config from {}", config_path);
+            s
+        }
+        Err(e) => {
+            eprintln!("[ming-qiao] Config load failed ({}), using defaults", e);
+            AppState::new().await
+        }
     };
 
     state.ensure_dirs()?;
+    eprintln!("[ming-qiao] State initialized, connecting NATS...");
 
     // Connect NATS agent client if enabled
     let nats_config = state.config().await.nats;
+    eprintln!("[ming-qiao] NATS config: enabled={}, url={}", nats_config.enabled, nats_config.url);
     if let Some(mut client) = NatsAgentClient::connect(&nats_config, &agent_id, "mingqiao").await {
         let nats_tx = state.nats_message_sender();
 
         if let Err(e) = client.subscribe_own_tasks(nats_tx.clone()).await {
-            error!("Failed to subscribe to own tasks: {}", e);
+            eprintln!("[ming-qiao] NATS subscribe own tasks failed: {}", e);
         }
         if let Err(e) = client.subscribe_all_tasks(nats_tx.clone()).await {
-            error!("Failed to subscribe to all tasks: {}", e);
+            eprintln!("[ming-qiao] NATS subscribe all tasks failed: {}", e);
         }
         if let Err(e) = client.subscribe_notes(nats_tx.clone()).await {
-            error!("Failed to subscribe to notes: {}", e);
+            eprintln!("[ming-qiao] NATS subscribe notes failed: {}", e);
         }
         if let Err(e) = client.subscribe_presence(nats_tx).await {
-            error!("Failed to subscribe to presence: {}", e);
+            eprintln!("[ming-qiao] NATS subscribe presence failed: {}", e);
         }
 
         let branch = std::process::Command::new("git")
@@ -209,10 +218,10 @@ async fn run_mcp_server() -> Result<(), Box<dyn std::error::Error>> {
         // Bridge NATS messages → SurrealDB persistence
         spawn_nats_persistence_bridge(&state);
 
-        info!("NATS agent client active for MCP server (subscriptions + heartbeat + persistence)");
+        eprintln!("[ming-qiao] NATS connected for agent '{}'", agent_id);
+    } else {
+        eprintln!("[ming-qiao] NATS not enabled or connection failed, running without NATS");
     }
-
-    info!("Starting MCP server for agent: {}", agent_id);
 
     let mut server = McpServer::with_state(agent_id, state);
     server.run().await?;
@@ -230,7 +239,8 @@ async fn main() -> ExitCode {
 
     let command = &args[1];
 
-    // Initialize logging (skip for mcp-serve to keep stdio clean)
+    // Initialize tracing (skip for mcp-serve — tracing pollutes stdout on some
+    // platforms despite claiming stderr default; MCP diagnostics use eprintln!)
     if command != "mcp-serve" {
         init_logging();
     }
@@ -252,6 +262,7 @@ async fn main() -> ExitCode {
     match result {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
+            eprintln!("[ming-qiao] FATAL: {}", e);
             error!("Server error: {}", e);
             ExitCode::FAILURE
         }
