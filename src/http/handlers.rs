@@ -282,6 +282,8 @@ pub struct CreateThreadRequest {
     pub content: String,
     #[serde(default = "default_normal")]
     pub priority: String,
+    /// Optional thread ID to append to an existing thread instead of creating a new one.
+    pub thread_id: Option<String>,
 }
 
 fn default_normal() -> String {
@@ -317,7 +319,7 @@ pub async fn create_thread(
             to: req.to_agent,
             subject: req.subject,
             content: req.content,
-            thread_id: None, // New thread — indexer uses event_id as thread_id
+            thread_id: req.thread_id.clone(),
             priority,
         }),
     };
@@ -343,14 +345,14 @@ pub async fn create_thread(
     // Broadcast to WebSocket listeners
     state.broadcast_event(event);
 
-    // Thread ID = event ID (indexer convention when thread_id is None)
-    let id = event_id.to_string();
+    // Thread ID = provided thread_id or event ID (indexer convention when thread_id is None)
+    let thread_id = req.thread_id.unwrap_or_else(|| event_id.to_string());
 
     (
         StatusCode::CREATED,
         Json(serde_json::json!({
-            "thread_id": id,
-            "message_id": id,
+            "thread_id": thread_id,
+            "message_id": event_id.to_string(),
             "created_at": now
         })),
     )
