@@ -103,6 +103,125 @@ fn spawn_nats_persistence_bridge(state: &AppState) {
     });
 }
 
+/// Spawn a background task that publishes local events to NATS for cross-process sync.
+///
+/// Subscribes to the AppState event broadcast channel and publishes each
+/// EventEnvelope to the shared NATS events subject. The subscriber on the
+/// remote process picks it up and feeds it to its Indexer (dedup handles echo).
+fn spawn_event_nats_publisher(
+    state: &AppState,
+    client: async_nats::Client,
+    subject: String,
+    use_tracing: bool,
+) {
+    let mut rx = state.subscribe_events();
+
+    tokio::spawn(async move {
+        loop {
+            match rx.recv().await {
+                Ok(event) => {
+                    match serde_json::to_vec(&event) {
+                        Ok(payload) => {
+                            if let Err(e) = client.publish(subject.clone(), payload.into()).await {
+                                if use_tracing {
+                                    warn!("Event NATS publish failed: {}", e);
+                                } else {
+                                    eprintln!("[ming-qiao] Event NATS publish failed: {}", e);
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            if use_tracing {
+                                warn!("Event serialization failed: {}", e);
+                            } else {
+                                eprintln!("[ming-qiao] Event serialization failed: {}", e);
+                            }
+                        }
+                    }
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                    if use_tracing {
+                        warn!("Event NATS publisher lagged by {} messages", n);
+                    } else {
+                        eprintln!("[ming-qiao] Event NATS publisher lagged by {} messages", n);
+                    }
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                    if use_tracing {
+                        info!("Event channel closed, stopping NATS publisher");
+                    } else {
+                        eprintln!("[ming-qiao] Event channel closed, stopping NATS publisher");
+                    }
+                    break;
+                }
+            }
+        }
+    });
+}
+
+/// Spawn a background task that receives events from NATS and feeds the local Indexer.
+///
+/// Does NOT call `broadcast_event()` to avoid echo loops back to the publisher.
+/// Dedup in the Indexer handles the case where a local event echoes back via NATS.
+fn spawn_event_nats_subscriber(
+    state: &AppState,
+    client: async_nats::Client,
+    subject: String,
+    use_tracing: bool,
+) {
+    let state = state.clone();
+
+    tokio::spawn(async move {
+        let subscription = match client.subscribe(subject.clone()).await {
+            Ok(s) => s,
+            Err(e) => {
+                if use_tracing {
+                    error!("Failed to subscribe to event sync subject {}: {}", subject, e);
+                } else {
+                    eprintln!("[ming-qiao] Failed to subscribe to event sync subject {}: {}", subject, e);
+                }
+                return;
+            }
+        };
+
+        if use_tracing {
+            info!("Event NATS subscriber active on {}", subject);
+        } else {
+            eprintln!("[ming-qiao] Event NATS subscriber active on {}", subject);
+        }
+
+        use futures_util::StreamExt;
+        let mut subscription = subscription;
+        while let Some(msg) = subscription.next().await {
+            match serde_json::from_slice::<ming_qiao::events::EventEnvelope>(&msg.payload) {
+                Ok(event) => {
+                    let mut indexer = state.indexer_mut().await;
+                    if let Err(e) = indexer.process_event(&event) {
+                        if use_tracing {
+                            warn!("Indexer rejected remote event {}: {}", event.id, e);
+                        } else {
+                            eprintln!("[ming-qiao] Indexer rejected remote event {}: {}", event.id, e);
+                        }
+                    }
+                }
+                Err(e) => {
+                    if use_tracing {
+                        warn!("Failed to deserialize event from NATS: {}", e);
+                    } else {
+                        eprintln!("[ming-qiao] Failed to deserialize event from NATS: {}", e);
+                    }
+                }
+            }
+        }
+
+        if use_tracing {
+            info!("Event NATS subscription on {} ended", subject);
+        } else {
+            eprintln!("[ming-qiao] Event NATS subscription on {} ended", subject);
+        }
+    });
+}
+
 /// Run the HTTP server
 async fn run_http_server() -> Result<(), Box<dyn std::error::Error>> {
     let config_path = env::var("MING_QIAO_CONFIG").unwrap_or_else(|_| "ming-qiao.toml".to_string());
@@ -128,6 +247,9 @@ async fn run_http_server() -> Result<(), Box<dyn std::error::Error>> {
         .unwrap_or("http-server")
         .to_string();
     if let Some(mut client) = NatsAgentClient::connect(&nats_config, &agent_id, "mingqiao").await {
+        // Extract event sync parts before moving client into state
+        let (nats_raw, events_subject) = client.event_sync_parts();
+
         let nats_tx = state.nats_message_sender();
 
         if let Err(e) = client.subscribe_all_tasks(nats_tx.clone()).await {
@@ -150,7 +272,11 @@ async fn run_http_server() -> Result<(), Box<dyn std::error::Error>> {
         // Bridge NATS messages → SurrealDB persistence
         spawn_nats_persistence_bridge(&state);
 
-        info!("NATS agent client active for HTTP server (subscriptions + heartbeat + persistence)");
+        // Bridge local events ↔ NATS for cross-process Indexer sync
+        spawn_event_nats_publisher(&state, nats_raw.clone(), events_subject.clone(), true);
+        spawn_event_nats_subscriber(&state, nats_raw, events_subject, true);
+
+        info!("NATS agent client active for HTTP server (subscriptions + heartbeat + persistence + event sync)");
     }
 
     let server = HttpServer::new(state);
@@ -188,6 +314,9 @@ async fn run_mcp_server() -> Result<(), Box<dyn std::error::Error>> {
     let nats_config = state.config().await.nats;
     eprintln!("[ming-qiao] NATS config: enabled={}, url={}", nats_config.enabled, nats_config.url);
     if let Some(mut client) = NatsAgentClient::connect(&nats_config, &agent_id, "mingqiao").await {
+        // Extract event sync parts before moving client into state
+        let (nats_raw, events_subject) = client.event_sync_parts();
+
         let nats_tx = state.nats_message_sender();
 
         if let Err(e) = client.subscribe_own_tasks(nats_tx.clone()).await {
@@ -218,7 +347,11 @@ async fn run_mcp_server() -> Result<(), Box<dyn std::error::Error>> {
         // Bridge NATS messages → SurrealDB persistence
         spawn_nats_persistence_bridge(&state);
 
-        eprintln!("[ming-qiao] NATS connected for agent '{}'", agent_id);
+        // Bridge local events ↔ NATS for cross-process Indexer sync
+        spawn_event_nats_publisher(&state, nats_raw.clone(), events_subject.clone(), false);
+        spawn_event_nats_subscriber(&state, nats_raw, events_subject, false);
+
+        eprintln!("[ming-qiao] NATS connected for agent '{}' (event sync active)", agent_id);
     } else {
         eprintln!("[ming-qiao] NATS not enabled or connection failed, running without NATS");
     }

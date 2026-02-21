@@ -65,6 +65,21 @@ impl AgentSubjects {
     }
 
     // ========================================================================
+    // Events broadcast (core NATS — ephemeral, cross-process sync)
+    // ========================================================================
+
+    /// Shared event broadcast subject for cross-process Indexer sync.
+    ///
+    /// Project-scoped (not agent-scoped) since all processes share the same
+    /// event stream. SurrealDB + hydration provides durability; this is
+    /// fire-and-forget for real-time sync.
+    ///
+    /// `am.events.{project}`
+    pub fn events(&self) -> String {
+        format!("am.events.{}", self.project)
+    }
+
+    // ========================================================================
     // Task coordination (JetStream — persistent, work queue)
     // ========================================================================
 
@@ -190,6 +205,7 @@ mod tests {
         let s = subjects();
         let all = vec![
             s.presence(),
+            s.events(),
             s.task_assigned(),
             s.task_started(),
             s.task_update(),
@@ -224,6 +240,15 @@ mod tests {
     #[test]
     fn test_all_agents_presence() {
         assert_eq!(AgentSubjects::all_agents_presence(), "am.agent.*.presence");
+    }
+
+    // ========================================================================
+    // Events broadcast
+    // ========================================================================
+
+    #[test]
+    fn test_events_subject() {
+        assert_eq!(subjects().events(), "am.events.mingqiao");
     }
 
     // ========================================================================
