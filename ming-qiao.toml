@@ -1,0 +1,7 @@
+mode = "passive"
+data_dir = "data"
+port = 7777
+
+[nats]
+enabled = true
+url = "nats://localhost:4222"

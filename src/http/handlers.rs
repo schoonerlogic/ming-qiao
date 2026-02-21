@@ -9,8 +9,12 @@ use axum::{
     response::IntoResponse,
     Json,
 };
+use chrono::Utc;
 use serde::{Deserialize, Serialize};
+use tracing::warn;
+use uuid::Uuid;
 
+use crate::events::{EventEnvelope, EventPayload, EventType, MessageEvent, Priority};
 use crate::state::AppState;
 
 // ============================================================================
@@ -271,7 +275,9 @@ pub async fn get_thread(
 #[derive(Debug, Deserialize)]
 pub struct CreateThreadRequest {
     pub subject: String,
+    #[serde(alias = "from")]
     pub from_agent: String,
+    #[serde(alias = "to")]
     pub to_agent: String,
     pub content: String,
     #[serde(default = "default_normal")]
@@ -282,21 +288,70 @@ fn default_normal() -> String {
     "normal".to_string()
 }
 
+fn parse_priority(s: &str) -> Priority {
+    match s {
+        "low" => Priority::Low,
+        "high" => Priority::High,
+        "critical" => Priority::Critical,
+        _ => Priority::Normal,
+    }
+}
+
 /// Create a new thread
-pub async fn create_thread(Json(req): Json<CreateThreadRequest>) -> impl IntoResponse {
-    // TODO: Create thread in event log
+pub async fn create_thread(
+    State(state): State<AppState>,
+    Json(req): Json<CreateThreadRequest>,
+) -> impl IntoResponse {
+    let event_id = Uuid::now_v7();
+    let now = Utc::now();
+
+    let priority = parse_priority(&req.priority);
+
+    let event = EventEnvelope {
+        id: event_id,
+        timestamp: now,
+        event_type: EventType::MessageSent,
+        agent_id: req.from_agent.clone(),
+        payload: EventPayload::Message(MessageEvent {
+            from: req.from_agent,
+            to: req.to_agent,
+            subject: req.subject,
+            content: req.content,
+            thread_id: None, // New thread — indexer uses event_id as thread_id
+            priority,
+        }),
+    };
+
+    // Persist to SurrealDB
+    if let Err(e) = state.persistence().store_event(&event).await {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({
+                "error": { "code": "STORE_FAILED", "message": format!("Failed to persist event: {}", e) }
+            })),
+        );
+    }
+
+    // Update in-memory indexer
+    {
+        let mut indexer = state.indexer_mut().await;
+        if let Err(e) = indexer.process_event(&event) {
+            warn!("Indexer failed to process event: {}", e);
+        }
+    }
+
+    // Broadcast to WebSocket listeners
+    state.broadcast_event(event);
+
+    // Thread ID = event ID (indexer convention when thread_id is None)
+    let id = event_id.to_string();
+
     (
         StatusCode::CREATED,
         Json(serde_json::json!({
-            "thread_id": "thread-stub-123",
-            "message_id": "msg-stub-123",
-            "created_at": chrono::Utc::now(),
-            "_stub": true,
-            "_request": {
-                "subject": req.subject,
-                "from": req.from_agent,
-                "to": req.to_agent
-            }
+            "thread_id": id,
+            "message_id": id,
+            "created_at": now
         })),
     )
 }
@@ -323,6 +378,7 @@ pub async fn update_thread(
 
 #[derive(Debug, Deserialize)]
 pub struct ReplyRequest {
+    #[serde(alias = "from")]
     pub from_agent: String,
     pub content: String,
     #[serde(default = "default_normal")]
@@ -333,21 +389,81 @@ pub struct ReplyRequest {
 
 /// Reply to a thread
 pub async fn reply_to_thread(
-    Path(id): Path<String>,
+    State(state): State<AppState>,
+    Path(thread_id): Path<String>,
     Json(req): Json<ReplyRequest>,
 ) -> impl IntoResponse {
-    // TODO: Add message to thread in event log
+    let event_id = Uuid::now_v7();
+    let now = Utc::now();
+
+    // Look up thread to find the recipient and subject
+    let (to_agent, subject) = {
+        let indexer = state.indexer().await;
+        match indexer.get_thread(&thread_id) {
+            Some(thread) => {
+                let to = thread
+                    .participants
+                    .iter()
+                    .find(|p| *p != &req.from_agent)
+                    .cloned()
+                    .unwrap_or_else(|| req.from_agent.clone());
+                (to, thread.subject.clone())
+            }
+            None => {
+                return (
+                    StatusCode::NOT_FOUND,
+                    Json(serde_json::json!({
+                        "error": { "code": "NOT_FOUND", "message": format!("Thread not found: {}", thread_id) }
+                    })),
+                );
+            }
+        }
+    };
+
+    let priority = parse_priority(&req.priority);
+
+    let event = EventEnvelope {
+        id: event_id,
+        timestamp: now,
+        event_type: EventType::MessageSent,
+        agent_id: req.from_agent.clone(),
+        payload: EventPayload::Message(MessageEvent {
+            from: req.from_agent,
+            to: to_agent,
+            subject,
+            content: req.content,
+            thread_id: Some(thread_id.clone()),
+            priority,
+        }),
+    };
+
+    // Persist to SurrealDB
+    if let Err(e) = state.persistence().store_event(&event).await {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({
+                "error": { "code": "STORE_FAILED", "message": format!("Failed to persist event: {}", e) }
+            })),
+        );
+    }
+
+    // Update in-memory indexer
+    {
+        let mut indexer = state.indexer_mut().await;
+        if let Err(e) = indexer.process_event(&event) {
+            warn!("Indexer failed to process event: {}", e);
+        }
+    }
+
+    // Broadcast to WebSocket listeners
+    state.broadcast_event(event);
+
     (
         StatusCode::CREATED,
         Json(serde_json::json!({
-            "message_id": "msg-stub-456",
-            "thread_id": id,
-            "sent_at": chrono::Utc::now(),
-            "_stub": true,
-            "_request": {
-                "from": req.from_agent,
-                "priority": req.priority
-            }
+            "message_id": event_id.to_string(),
+            "thread_id": thread_id,
+            "created_at": now
         })),
     )
 }
