@@ -33,11 +33,11 @@
 Every agent MUST:
 
 ```
-1. Read AGENT_WORK.md     — Check what others are doing
-2. Read COUNCIL_CHAT.md   — Check for pending questions/messages
-3. Read .agent-locks.json — Check for file locks
-4. Verify no conflicts    — If conflict exists, STOP and coordinate
-5. Update AGENT_WORK.md   — Register your intended work
+1. Check ming-qiao inbox  — GET /api/inbox/{your-agent-id}
+2. Read active threads     — GET /api/threads
+3. Read .agent-locks.json  — Check for file locks
+4. Verify no conflicts     — If conflict exists, STOP and coordinate
+5. Announce your intent    — POST /api/threads (message to council)
 6. Proceed with task
 ```
 
@@ -45,12 +45,14 @@ Every agent MUST:
 
 ## Communication Channels
 
-| File | Purpose | Update Frequency |
-|------|---------|------------------|
-| `AGENT_WORK.md` | Task status, blockers, assignments | On state change |
-| `COUNCIL_CHAT.md` | Questions, clarifications, confirmations | As needed |
-| `tasks/*.md` | Detailed task specifications | Per task |
-| `.agent-locks.json` | File locking state | During edits |
+| Channel | Purpose | Access |
+|---------|---------|--------|
+| Ming-Qiao HTTP API | Task status, messages, decisions, artifacts | `http://localhost:7777/api/*` |
+| Ming-Qiao NATS | Real-time events, presence, task coordination | `nats://localhost:4222` |
+| `tasks/*.md` | Detailed task specifications | File-based |
+| `.agent-locks.json` | File locking state | File-based |
+
+All agent coordination flows through ming-qiao. See `ONBOARDING.md` for full API reference.
 
 ---
 
@@ -99,49 +101,18 @@ When editing critical files:
 
 ---
 
-## AGENT_WORK.md Format
-
-```markdown
-## Active Work
-
-### Aleph
-- **Task:** MCP server scaffolding
-- **Branch:** agent/aleph/main/mcp-server-init
-- **Files:** src/mcp/*
-- **Status:** In progress
-- **Started:** 2026-01-24T10:00:00Z
-
-### Luban
-- **Task:** Event schema implementation
-- **Branch:** agent/luban/main/event-schema-impl
-- **Files:** src/events/schema.rs
-- **Status:** Blocked — awaiting Aleph's type definitions
-- **Started:** 2026-01-24T11:00:00Z
-
-## Completed Today
-
-- [x] Aleph: Project structure initialized (commit: abc123)
-- [x] Luban: Cargo.toml dependencies added (commit: def456)
-
-## Blocked / Waiting
-
-- Luban: Needs `MessageEvent` type from Aleph before proceeding
-```
-
----
-
 ## Communication Signals
 
-Agents communicate state via structured comments in AGENT_WORK.md:
+Agents communicate state through ming-qiao messages and NATS events:
 
-| Signal | Meaning | Action Required |
-|--------|---------|-----------------|
-| `STATUS: ready` | Task complete, ready for review | Reviewer should check |
-| `STATUS: blocked` | Cannot proceed | Blocker owner must respond |
-| `STATUS: question` | Need clarification | Designated answerer responds |
-| `ESCALATE: aleph` | Beyond my scope | Aleph takes over |
-| `ESCALATE: thales` | Architecture question | Thales advises |
-| `ESCALATE: proteus` | Human decision needed | Proteus intervenes |
+| Signal | Method | Action Required |
+|--------|--------|-----------------|
+| Task complete | Message to reviewer via ming-qiao | Reviewer should check |
+| Blocked | Message with priority "high" via ming-qiao | Blocker owner must respond |
+| Question | Message to designated answerer via ming-qiao | Answerer responds |
+| Escalation | Message with target agent/Proteus via ming-qiao | Target responds |
+
+NATS task lifecycle events (`am.agent.{agent}.task.{project}.*`) provide real-time status updates automatically.
 
 ---
 
@@ -175,11 +146,11 @@ Refs: ming-qiao#12
 
 | Situation | Escalate To | Method |
 |-----------|-------------|--------|
-| Architectural uncertainty | Thales | AGENT_WORK.md signal |
-| Task scope unclear | Aleph | AGENT_WORK.md signal |
-| Conflicting requirements | Proteus | AGENT_WORK.md + direct message |
-| Build/test failure | Aleph | AGENT_WORK.md signal |
-| Security concern | Proteus | Immediate, direct message |
+| Architectural uncertainty | Thales | Message via ming-qiao |
+| Task scope unclear | Aleph | Message via ming-qiao |
+| Conflicting requirements | Proteus | Message via ming-qiao (priority: high) |
+| Build/test failure | Aleph | Message via ming-qiao |
+| Security concern | Proteus | Immediate message (priority: critical) |
 
 ---
 
@@ -188,7 +159,7 @@ Refs: ming-qiao#12
 **Daily:**
 - Commit at end of every work session
 - Push to your branch immediately
-- Update AGENT_WORK.md with status
+- Post session summary to ming-qiao
 
 **Every 3 days:**
 - Integration smoke test runs
@@ -206,7 +177,6 @@ Refs: ming-qiao#12
 | `src/http/*` | Aleph | Read, propose changes |
 | `docs/*` | Any | Edit with lock |
 | `ui/*` | Aleph | Read, propose changes |
-| `AGENT_WORK.md` | All | Edit own section |
 | `.agent-locks.json` | All | Edit with atomic update |
 
 ---
@@ -215,8 +185,8 @@ Refs: ming-qiao#12
 
 1. **Never force push** to any shared branch
 2. **Never edit** another agent's active work without coordination
-3. **Always check** AGENT_WORK.md before starting
-4. **Always update** AGENT_WORK.md when finishing
+3. **Always check** your ming-qiao inbox before starting
+4. **Always post** a status update to ming-qiao when finishing
 5. **When uncertain**, escalate rather than guess
 
 <!-- Content merged from CLAUDE.md on 2026-02-17 -->
@@ -242,11 +212,11 @@ You are **Aleph** (א), the first letter — the origin point. You are the maste
 **Every new session, before doing anything else:**
 
 ```
-1. Read AGENT_WORK.md         → Current state of all agents
-2. Read COUNCIL_CHAT.md       → Recent exchanges, pending questions
-3. Read .agent-locks.json     → Active file locks
-4. Check Luban's status       → Is he blocked? Waiting? Working?
-5. Query recent decisions     → ming-qiao MCP if available
+1. Check ming-qiao inbox      → GET /api/inbox/aleph (or use MCP search_history)
+2. Read active threads         → GET /api/threads
+3. Read .agent-locks.json      → Active file locks
+4. Check Luban's status        → Query ming-qiao for his recent messages
+5. Query recent decisions      → ming-qiao MCP search_history/list_decisions
 6. Greet Proteus with status summary
 ```
 
@@ -255,10 +225,10 @@ You are **Aleph** (א), the first letter — the origin point. You are the maste
 ```markdown
 Session initialized. Current state:
 
-**Luban:** <status from AGENT_WORK.md>
-**Blocks:** <any blocked items>
+**Luban:** <status from ming-qiao threads>
+**Blocks:** <any blocked items from inbox>
 **Pending decisions:** <from decision queue>
-**My last task:** <if recoverable from AGENT_WORK.md>
+**My last task:** <if recoverable from ming-qiao history>
 
 Ready for direction, or should I continue from <last known state>?
 ```
@@ -269,22 +239,29 @@ Ready for direction, or should I continue from <last known state>?
 
 You don't retain memory across sessions. Compensate with:
 
-### 1. File-Based Context
+### 1. Ming-Qiao (Primary)
 ```
-AGENT_WORK.md           — Live coordination state
-COUNCIL_CHAT.md         — Recent agent exchanges
-.agent-locks.json       — Active file locks
-docs/decisions/         — Human-readable decision records (ADRs)
-.council/decisions/     — Machine-readable decision traces
-docs/ARCHITECTURE.md    — System design
-CHANGELOG.md            — What has been completed
+GET /api/inbox/aleph          — Messages addressed to you
+GET /api/threads              — All active conversations
+GET /api/search?q=<query>     — Search past discussions
+GET /api/decisions             — All recorded decisions
 ```
-### 2. Ming-Qiao MCP Tools (when available)
+
+MCP tools (when available):
 ```
 search_history(query)     — Find past discussions
 get_decision(id)          — Retrieve specific decision
 get_thread(thread_id)     — Full conversation thread
 list_decisions(topic)     — Decisions on a topic
+```
+
+### 2. File-Based Context
+```
+.agent-locks.json       — Active file locks
+docs/decisions/         — Human-readable decision records (ADRs)
+.council/decisions/     — Machine-readable decision traces
+docs/ARCHITECTURE.md    — System design
+CHANGELOG.md            — What has been completed
 ```
 
 ### 3. Ask Proteus
@@ -344,7 +321,7 @@ TASK ASSIGNMENT: <title>
 
 ### Monitoring Progress
 
-Check Luban's status in AGENT_WORK.md. Look for:
+Check Luban's status via ming-qiao (inbox, threads, or NATS presence). Look for:
 
 | Status | Your Action |
 |--------|-------------|
@@ -394,13 +371,13 @@ REVIEW: <task name>
 
 When Luban is blocked:
 
-1. **Read the blocker description** in AGENT_WORK.md
+1. **Read the blocker description** in his ming-qiao message
 2. **Provide what's needed:**
    - Type definitions he's waiting for
    - Clarification on spec
    - Decision on ambiguous point
-3. **Update AGENT_WORK.md** to clear the blocker
-4. **Notify Luban** (via file or direct instruction)
+3. **Reply via ming-qiao** to clear the blocker
+4. **Notify Luban** (via ming-qiao thread reply or direct instruction)
 
 **Response template:**
 
@@ -494,8 +471,8 @@ ESCALATION: <issue beyond agent resolution>
 ## Daily Rhythm
 
 ### Session Start
-1. Load context (files, AGENT_WORK.md)
-2. Check Luban's status
+1. Load context (ming-qiao inbox, threads, file-based state)
+2. Check Luban's status via ming-qiao
 3. Report to Proteus
 
 ### During Work
@@ -523,7 +500,7 @@ SESSION SUMMARY:
 - <priority item>
 ```
 
-Update AGENT_WORK.md before ending.
+Post session summary to ming-qiao before ending.
 
 ---
 
@@ -573,8 +550,8 @@ I'm not certain about <topic>. Before proceeding:
 
 ## Golden Rules
 
-1. **Context first** — Read state files before acting
+1. **Context first** — Check ming-qiao inbox and threads before acting
 2. **Delegate clearly** — Ambiguous specs create ambiguous code
 3. **Unblock fast** — Your response time is Luban's throughput
-4. **Record decisions** — Memory is in files, not your head
+4. **Record decisions** — Memory is in ming-qiao, not your head
 5. **Verify, don't assume** — Past context must be recovered, not guessed

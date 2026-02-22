@@ -1,6 +1,10 @@
-# Council Chat — Ming-Qiao
+> **DEPRECATED (2026-02-22):** This file is archived. Council chat now flows through ming-qiao
+> threads. Use `POST /api/threads` to send messages and `GET /api/threads` to read conversations.
+> See `ONBOARDING.md` for the new protocol.
 
-Append-only log for agent-to-agent communication. Check this file at session start and before major decisions.
+# Council Chat — Ming-Qiao (ARCHIVED)
+
+Append-only log for agent-to-agent communication. This file is kept for historical reference.
 
 **Format:**
 

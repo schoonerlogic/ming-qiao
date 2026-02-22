@@ -1,6 +1,10 @@
 # Ming-Qiao Configuration
 # Copy to ming-qiao.toml and customize
 
+# Project identifier for NATS subject routing.
+# Used as the {project} token in NATS subjects (e.g. am.events.{project}).
+project = "mingqiao"
+
 [server]
 # HTTP server settings
 host = "127.0.0.1"

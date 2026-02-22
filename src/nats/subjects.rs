@@ -1,24 +1,34 @@
 //! NATS subject hierarchy for AstralMaris agent coordination
 //!
-//! All subjects follow the `am.` prefix convention. Subject hierarchy:
+//! All subjects follow the `am.` prefix convention. The `{project}` token
+//! scopes subjects to a specific AstralMaris project (e.g. `mingqiao`,
+//! `buildermoon`, `echoessence`). Set via `project` in `ming-qiao.toml`.
+//!
+//! ## Full subject hierarchy
 //!
 //! ```text
 //! am.agent.{agent}.presence                          — Heartbeat (core NATS, ephemeral)
 //! am.agent.{agent}.task.{project}.assigned           — Task assigned to agent
 //! am.agent.{agent}.task.{project}.started            — Agent started working on task
 //! am.agent.{agent}.task.{project}.update             — Progress update on task
-//! am.agent.{agent}.task.{project}.complete            — Task completed
+//! am.agent.{agent}.task.{project}.complete           — Task completed
 //! am.agent.{agent}.task.{project}.blocked            — Agent blocked on task
 //! am.agent.{agent}.notes.{project}                   — Session notes
+//! am.events.{project}                                — Per-project event broadcast
+//! am.observe.{type}.{target}                         — Observations (target = project or topic)
+//! am.council.announce                                — System-wide announcements (not project-scoped)
 //! ```
 //!
-//! Subscribe patterns:
+//! ## Subscribe patterns
 //!
 //! ```text
 //! am.agent.*.presence                                — All agents' heartbeats
 //! am.agent.{agent}.task.{project}.>                  — Everything one agent does on a project
 //! am.agent.*.task.{project}.>                        — All agents on a project
 //! am.agent.*.notes.>                                 — All agents' session notes
+//! am.events.>                                        — All projects' event broadcasts
+//! am.observe.>                                       — All observations
+//! am.council.>                                       — All council-wide messages
 //! ```
 
 /// Subject builder for a specific agent on a specific project.
@@ -176,6 +186,20 @@ impl AgentSubjects {
     }
 
     // ========================================================================
+    // Council-wide (core NATS — not project-scoped)
+    // ========================================================================
+
+    /// System-wide announcement subject for cross-project messages.
+    ///
+    /// Used for new agent introductions, policy changes, and coordination
+    /// that isn't scoped to any single project.
+    ///
+    /// `am.council.announce`
+    pub fn council_announce() -> String {
+        "am.council.announce".to_string()
+    }
+
+    // ========================================================================
     // Echo suppression helpers
     // ========================================================================
 
@@ -226,6 +250,7 @@ mod tests {
         assert!(AgentSubjects::all_agents_presence().starts_with("am."));
         assert!(AgentSubjects::all_agents_task_wildcard("mingqiao").starts_with("am."));
         assert!(AgentSubjects::all_agents_notes().starts_with("am."));
+        assert!(AgentSubjects::council_announce().starts_with("am."));
     }
 
     // ========================================================================
@@ -301,6 +326,15 @@ mod tests {
             AgentSubjects::all_agents_notes_for_project("mingqiao"),
             "am.agent.*.notes.mingqiao"
         );
+    }
+
+    // ========================================================================
+    // Council-wide
+    // ========================================================================
+
+    #[test]
+    fn test_council_announce() {
+        assert_eq!(AgentSubjects::council_announce(), "am.council.announce");
     }
 
     // ========================================================================

@@ -108,6 +108,15 @@ impl Default for DatabaseConfig {
 /// Runtime configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
+    /// Project identifier for NATS subject routing.
+    ///
+    /// Used as the `{project}` token in NATS subjects like
+    /// `am.agent.{agent}.task.{project}.*` and `am.events.{project}`.
+    /// Different ming-qiao instances serving different AstralMaris projects
+    /// should use distinct project tokens.
+    #[serde(default = "default_project")]
+    pub project: String,
+
     /// Current observation mode
     #[serde(default)]
     pub mode: ObservationMode,
@@ -141,6 +150,10 @@ pub struct Config {
     pub watchers: Vec<crate::watcher::WatcherConfig>,
 }
 
+fn default_project() -> String {
+    "mingqiao".to_string()
+}
+
 fn default_data_dir() -> String {
     "data".to_string()
 }
@@ -152,6 +165,7 @@ fn default_port() -> u16 {
 impl Default for Config {
     fn default() -> Self {
         Self {
+            project: default_project(),
             mode: ObservationMode::default(),
             notify_on: NotifyOn {
                 priority: vec!["high".to_string(), "critical".to_string()],
@@ -239,6 +253,7 @@ mod tests {
     #[test]
     fn test_default_config() {
         let config = Config::default();
+        assert_eq!(config.project, "mingqiao");
         assert_eq!(config.mode, ObservationMode::Passive);
         assert_eq!(config.port, 7777);
         assert_eq!(config.data_dir, "data");
@@ -295,8 +310,21 @@ mod tests {
             port = 7777
         "#;
         let config: Config = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.project, "mingqiao");
         assert!(!config.nats.enabled);
         assert_eq!(config.nats.url, "nats://localhost:4222");
+    }
+
+    #[test]
+    fn test_config_with_custom_project() {
+        let toml_str = r#"
+            project = "buildermoon"
+            mode = "passive"
+            data_dir = "data"
+            port = 7777
+        "#;
+        let config: Config = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.project, "buildermoon");
     }
 
     #[test]
