@@ -2,7 +2,7 @@
  * WebSocket connection management with Svelte 5 runes
  */
 
-import type { WSMessage, WSConnected, ObservationMode } from '$lib/types';
+import type { WSMessage, WSConnected, ObservationMode, EventEnvelope } from '$lib/types';
 
 // ============================================================================
 // State
@@ -14,7 +14,7 @@ let reconnectAttempts = $state(0);
 let maxReconnectAttempts = 5;
 let reconnectDelay = 1000; // Start with 1 second
 
-const WS_URL = 'ws://localhost:3000/ws';
+const WS_URL = 'ws://localhost:7777/merlin/notifications';
 
 // ============================================================================
 // Event Handlers
@@ -38,14 +38,25 @@ export function onMessage(handler: MessageHandler) {
 
 function handleMessage(event: MessageEvent) {
   try {
-    const message = JSON.parse(event.data) as WSMessage;
+    const raw = JSON.parse(event.data);
+    console.log('WebSocket message received:', raw);
 
-    // Notify all registered handlers
+    // Handle the connected message specially
+    if (raw.type === 'connected') {
+      const message: WSMessage = raw as WSMessage;
+      for (const handler of handlers) {
+        handler(message);
+      }
+      return;
+    }
+
+    // Handle all Merlin notification types
+    const message = raw as WSMessage;
     for (const handler of handlers) {
       handler(message);
     }
   } catch (e) {
-    console.error('Error parsing WebSocket message:', e);
+    console.error('Error parsing WebSocket message:', event.data, e);
   }
 }
 
@@ -123,28 +134,29 @@ export function send(message: object) {
 }
 
 // ============================================================================
-// WebSocket Message Helpers
+// WebSocket Message Helpers (Merlin Interventions)
 // ============================================================================
 
-export function injectMessage(threadId: string, content: string, action: string = 'comment') {
+export function injectMessage(threadId: string, from: string, content: string) {
   send({
-    type: 'inject',
+    action: 'inject_message',
     thread_id: threadId,
+    from,
     content,
-    action,
   });
 }
 
-export function approveDecision(decisionId: string) {
+export function approveDecision(decisionId: string, reason?: string) {
   send({
-    type: 'approve',
+    action: 'approve_decision',
     decision_id: decisionId,
+    reason,
   });
 }
 
-export function rejectDecision(decisionId: string, reason: string) {
+export function rejectDecision(decisionId: string, reason?: string) {
   send({
-    type: 'reject',
+    action: 'reject_decision',
     decision_id: decisionId,
     reason,
   });
@@ -152,22 +164,8 @@ export function rejectDecision(decisionId: string, reason: string) {
 
 export function setMode(mode: ObservationMode) {
   send({
-    type: 'set_mode',
+    action: 'set_mode',
     mode,
-  });
-}
-
-export function subscribeToThread(threadId: string) {
-  send({
-    type: 'subscribe',
-    thread_id: threadId,
-  });
-}
-
-export function markMessageRead(messageId: string) {
-  send({
-    type: 'mark_read',
-    message_id: messageId,
   });
 }
 

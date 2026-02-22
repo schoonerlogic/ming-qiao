@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { threadsStore, loadThreads } from '$stores/threads';
+  import { threadsStore, loadThreads } from '$stores/threads.svelte';
   import type { Thread } from '$lib/types';
 
   interface Props {

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { configStore, setMode } from '$stores/config';
+  import { configStore, setMode } from '$stores/config.svelte';
   import type { ObservationMode } from '$lib/types';
 
   let loading = $state(false);

@@ -46,15 +46,17 @@ export interface ArtifactRef {
 }
 
 export interface Thread {
-  thread_id: string;
+  id: string;
+  thread_id?: string; // Optional alias for compatibility
   subject: string;
   participants: string[];
   status: ThreadStatus;
-  started_at: string;
-  last_message_at: string;
+  started_at?: string;
+  created_at: string; // Backend uses created_at
+  last_message_at?: string;
   message_count: number;
-  decision_count: number;
-  unread_count: number;
+  decision_count?: number;
+  unread_count?: number;
 }
 
 export interface ThreadDetail {
@@ -164,50 +166,66 @@ export interface ConfigResponse {
 }
 
 // ============================================================================
-// WebSocket Types
+// WebSocket Types - Merlin Notifications
 // ============================================================================
 
 export type WSMessage =
   | WSConnected
-  | WSMessageEvent
-  | WSDecisionPending
-  | WSThreadStatus
-  | WSAgentTyping
-  | WSModeChanged;
+  | WSPriorityAlert
+  | WSKeywordDetected
+  | WSDecisionReview
+  | WSActionBlocked
+  | WSStatusUpdate
+  | WSError;
 
 export interface WSConnected {
   type: 'connected';
+  message: string;
   mode: ObservationMode;
-  unread_count: number;
 }
 
-export interface WSMessageEvent {
-  type: 'message';
-  thread_id: string;
-  message: Message;
+export interface WSPriorityAlert {
+  type: 'priority_alert';
+  event: EventEnvelope;
+  reason: string;
 }
 
-export interface WSDecisionPending {
-  type: 'decision_pending';
-  decision: Decision;
+export interface WSKeywordDetected {
+  type: 'keyword_detected';
+  event: EventEnvelope;
+  keyword: string;
 }
 
-export interface WSThreadStatus {
-  type: 'thread_status';
-  thread_id: string;
-  status: ThreadStatus;
+export interface WSDecisionReview {
+  type: 'decision_review';
+  event: EventEnvelope;
+  decision_type: string;
 }
 
-export interface WSAgentTyping {
-  type: 'agent_typing';
-  agent: string;
-  thread_id: string;
+export interface WSActionBlocked {
+  type: 'action_blocked';
+  event: EventEnvelope;
+  reason: string;
 }
 
-export interface WSModeChanged {
-  type: 'mode_changed';
-  old_mode: ObservationMode;
-  new_mode: ObservationMode;
+export interface WSStatusUpdate {
+  type: 'status_update';
+  message: string;
+  timestamp: string;
+}
+
+export interface WSError {
+  type: 'error';
+  message: string;
+}
+
+// Backend event envelope (from Rust)
+export interface EventEnvelope {
+  event_id: string;
+  event_type: string;
+  agent_id: string;
+  timestamp: string;
+  payload: any;
 }
 
 // ============================================================================

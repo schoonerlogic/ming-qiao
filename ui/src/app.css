@@ -1,6 +1,4 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+@import "tailwindcss";
 
 /* Custom styles for Ming-Qiao UI */
 :root {
@@ -11,8 +9,4 @@
   --color-border: #e5e7eb;
   --color-accent: #3b82f6;
   --color-accent-hover: #2563eb;
-}
-
-body {
-  @apply bg-gray-50 text-gray-900;
 }

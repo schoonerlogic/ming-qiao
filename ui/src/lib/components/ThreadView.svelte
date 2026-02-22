@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { threadsStore } from '$stores/threads';
+  import { threadsStore } from '$stores/threads.svelte';
   import Message from './Message.svelte';
   import DecisionCard from './DecisionCard.svelte';
   import MerlinInput from './MerlinInput.svelte';
