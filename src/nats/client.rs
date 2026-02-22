@@ -98,6 +98,11 @@ impl NatsAgentClient {
         &self.client
     }
 
+    /// Get the JetStream context for durable publishing (e.g. observations).
+    pub fn jetstream(&self) -> &jetstream::Context {
+        &self.jetstream
+    }
+
     /// Return the raw NATS client and events broadcast subject for the
     /// event sync bridge.  The client is cloned (cheap Arc bump), following
     /// the same pattern used by `start_presence_heartbeat`.

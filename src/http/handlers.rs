@@ -929,7 +929,7 @@ pub async fn submit_observation(
     // Broadcast to watchers, WebSocket, etc.
     state.broadcast_event(event);
 
-    // Publish to dedicated NATS observe subject if connected
+    // Publish to JetStream AGENT_OBSERVATIONS stream (durable, 30-day retention)
     {
         let nats_guard = state.nats_client_mut().await;
         if let Some(ref client) = *nats_guard {
@@ -941,12 +941,19 @@ pub async fn submit_observation(
                 "timestamp": now,
             });
             if let Ok(bytes) = serde_json::to_vec(&payload) {
-                if let Err(e) = client
-                    .raw_client()
+                match client
+                    .jetstream()
                     .publish(nats_subject.clone(), bytes.into())
                     .await
                 {
-                    warn!("NATS observe publish failed: {}", e);
+                    Ok(ack_future) => {
+                        if let Err(e) = ack_future.await {
+                            warn!("NATS observe JetStream ack failed: {}", e);
+                        }
+                    }
+                    Err(e) => {
+                        warn!("NATS observe JetStream publish failed: {}", e);
+                    }
                 }
             }
         }
