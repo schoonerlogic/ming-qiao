@@ -1,6 +1,12 @@
 # Ming-Qiao Configuration
 # Copy this file to ming-qiao.toml and customize as needed.
 
+# Project identifier for NATS subject routing.
+# Used as the {project} token in NATS subjects (e.g. am.events.{project}).
+# Different ming-qiao instances serving different AstralMaris projects
+# should use distinct project tokens.
+project = "mingqiao"
+
 # Observation mode for Merlin oversight
 # Options: "passive", "advisory", "gated"
 #   passive  - All messages flow freely. Events logged. Merlin reviews async.

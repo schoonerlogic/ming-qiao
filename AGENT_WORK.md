@@ -1,7 +1,12 @@
-# Agent Work Coordination — Ming-Qiao
+> **DEPRECATED (2026-02-22):** This file is archived. All agent coordination now flows through
+> ming-qiao. Use the HTTP API (`GET /api/inbox/{agent}`, `GET /api/threads`) or MCP tools
+> (`search_history`, `get_thread`) instead. See `ONBOARDING.md` for the new protocol.
+
+# Agent Work Coordination — Ming-Qiao (ARCHIVED)
 
 **Last Updated:** 2026-02-19T12:00:00Z
 **Updated By:** aleph
+**Status:** Archived — replaced by ming-qiao
 
 ---
 

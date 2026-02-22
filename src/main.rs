@@ -64,9 +64,10 @@ EXAMPLES:
 }
 
 /// Spawn a background task that persists incoming NATS messages to SurrealDB.
-fn spawn_nats_persistence_bridge(state: &AppState) {
+fn spawn_nats_persistence_bridge(state: &AppState, project: &str) {
     let mut rx = state.subscribe_nats_messages();
     let persistence = state.persistence().clone();
+    let project = project.to_string();
 
     tokio::spawn(async move {
         loop {
@@ -77,11 +78,10 @@ fn spawn_nats_persistence_bridge(state: &AppState) {
                             persistence.store_presence(p).await
                         }
                         NatsMessage::TaskAssignment(ta) => {
-                            // Use "mingqiao" as default project for now
-                            persistence.store_task_assignment(ta, "mingqiao").await
+                            persistence.store_task_assignment(ta, &project).await
                         }
                         NatsMessage::TaskStatusUpdate(ts) => {
-                            persistence.store_task_status(ts, "mingqiao").await
+                            persistence.store_task_status(ts, &project).await
                         }
                         NatsMessage::SessionNote(sn) => {
                             persistence.store_session_note(sn).await
@@ -241,12 +241,14 @@ async fn run_http_server() -> Result<(), Box<dyn std::error::Error>> {
     state.ensure_dirs()?;
 
     // Connect NATS agent client if enabled
-    let nats_config = state.config().await.nats;
+    let config_snapshot = state.config().await;
+    let nats_config = config_snapshot.nats;
+    let project = config_snapshot.project;
     let agent_id = state
         .agent_id()
         .unwrap_or("http-server")
         .to_string();
-    if let Some(mut client) = NatsAgentClient::connect(&nats_config, &agent_id, "mingqiao").await {
+    if let Some(mut client) = NatsAgentClient::connect(&nats_config, &agent_id, &project).await {
         // Extract event sync parts before moving client into state
         let (nats_raw, events_subject) = client.event_sync_parts();
 
@@ -270,7 +272,7 @@ async fn run_http_server() -> Result<(), Box<dyn std::error::Error>> {
         state.set_nats_client(client).await;
 
         // Bridge NATS messages → SurrealDB persistence
-        spawn_nats_persistence_bridge(&state);
+        spawn_nats_persistence_bridge(&state, &project);
 
         // Bridge local events ↔ NATS for cross-process Indexer sync
         spawn_event_nats_publisher(&state, nats_raw.clone(), events_subject.clone(), true);
@@ -282,7 +284,7 @@ async fn run_http_server() -> Result<(), Box<dyn std::error::Error>> {
     // Start watcher dispatcher for observer agents (e.g. Laozi-Jung)
     let config = state.config().await;
     let _watcher_dispatcher =
-        ming_qiao::watcher::WatcherDispatcher::start(&state, &config.watchers, "mingqiao").await;
+        ming_qiao::watcher::WatcherDispatcher::start(&state, &config.watchers, &config.project).await;
 
     let server = HttpServer::new(state);
     info!("Starting HTTP server at http://{}", server.address());
@@ -316,9 +318,11 @@ async fn run_mcp_server() -> Result<(), Box<dyn std::error::Error>> {
     eprintln!("[ming-qiao] State initialized, connecting NATS...");
 
     // Connect NATS agent client if enabled
-    let nats_config = state.config().await.nats;
+    let config_snapshot = state.config().await;
+    let nats_config = config_snapshot.nats;
+    let project = config_snapshot.project;
     eprintln!("[ming-qiao] NATS config: enabled={}, url={}", nats_config.enabled, nats_config.url);
-    if let Some(mut client) = NatsAgentClient::connect(&nats_config, &agent_id, "mingqiao").await {
+    if let Some(mut client) = NatsAgentClient::connect(&nats_config, &agent_id, &project).await {
         // Extract event sync parts before moving client into state
         let (nats_raw, events_subject) = client.event_sync_parts();
 
@@ -350,7 +354,7 @@ async fn run_mcp_server() -> Result<(), Box<dyn std::error::Error>> {
         state.set_nats_client(client).await;
 
         // Bridge NATS messages → SurrealDB persistence
-        spawn_nats_persistence_bridge(&state);
+        spawn_nats_persistence_bridge(&state, &project);
 
         // Bridge local events ↔ NATS for cross-process Indexer sync
         spawn_event_nats_publisher(&state, nats_raw.clone(), events_subject.clone(), false);
@@ -364,7 +368,7 @@ async fn run_mcp_server() -> Result<(), Box<dyn std::error::Error>> {
     // Start watcher dispatcher for observer agents (e.g. Laozi-Jung)
     let config = state.config().await;
     let _watcher_dispatcher =
-        ming_qiao::watcher::WatcherDispatcher::start(&state, &config.watchers, "mingqiao").await;
+        ming_qiao::watcher::WatcherDispatcher::start(&state, &config.watchers, &config.project).await;
 
     let mut server = McpServer::with_state(agent_id, state);
     server.run().await?;

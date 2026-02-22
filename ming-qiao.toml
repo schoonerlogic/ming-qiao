@@ -1,3 +1,6 @@
+# Project identifier for NATS subject routing
+project = "mingqiao"
+
 mode = "passive"
 data_dir = "data"
 port = 7777
