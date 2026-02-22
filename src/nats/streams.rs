@@ -6,6 +6,7 @@
 //! |--------|----------|----------|-----------|---------|
 //! | `AGENT_TASKS` | `am.agent.*.task.>` | Work queue | 7 days | Task coordination |
 //! | `AGENT_NOTES` | `am.agent.*.notes.>` | Standard | 30 days | Session notes |
+//! | `AGENT_OBSERVATIONS` | `am.observe.>` | Standard | 30 days | Observer insights |
 //!
 //! Presence heartbeats use core NATS (no JetStream) — they are ephemeral
 //! and don't need persistence or replay.
@@ -22,6 +23,9 @@ pub const STREAM_AGENT_TASKS: &str = "AGENT_TASKS";
 
 /// Stream name for session notes.
 pub const STREAM_AGENT_NOTES: &str = "AGENT_NOTES";
+
+/// Stream name for observer insights (Laozi-Jung, future observers).
+pub const STREAM_AGENT_OBSERVATIONS: &str = "AGENT_OBSERVATIONS";
 
 // ============================================================================
 // Stream configurations
@@ -60,6 +64,26 @@ pub fn agent_notes_stream() -> jetstream::stream::Config {
     jetstream::stream::Config {
         name: STREAM_AGENT_NOTES.to_string(),
         subjects: vec!["am.agent.*.notes.>".to_string()],
+        retention: jetstream::stream::RetentionPolicy::Limits,
+        max_age: Duration::from_secs(30 * 24 * 3600), // 30 days
+        storage: jetstream::stream::StorageType::File,
+        ..Default::default()
+    }
+}
+
+/// Configuration for the AGENT_OBSERVATIONS JetStream stream.
+///
+/// Captures all observation subjects (`am.observe.>`).
+/// Observations are curated synthesis from observer agents (e.g. Laozi-Jung)
+/// — too valuable to lose if a subscriber is down.
+///
+/// - Retention: limits (standard — messages persist until max_age)
+/// - Max age: 30 days
+/// - Storage: file
+pub fn agent_observations_stream() -> jetstream::stream::Config {
+    jetstream::stream::Config {
+        name: STREAM_AGENT_OBSERVATIONS.to_string(),
+        subjects: vec!["am.observe.>".to_string()],
         retention: jetstream::stream::RetentionPolicy::Limits,
         max_age: Duration::from_secs(30 * 24 * 3600), // 30 days
         storage: jetstream::stream::StorageType::File,
@@ -152,13 +176,32 @@ pub fn notes_all_consumer_config(agent: &str) -> (String, jetstream::consumer::p
     (consumer_name, config)
 }
 
+/// Create a durable pull consumer for all observations.
+///
+/// Subscribes to `am.observe.>`. Used by agents that want to receive
+/// all observation types (scans, insights, drift alerts, onboarding briefs).
+///
+/// Consumer name: `observations-all-{agent}`
+pub fn observations_all_consumer_config(agent: &str) -> (String, jetstream::consumer::pull::Config) {
+    let consumer_name = format!("observations-all-{}", agent);
+
+    let config = jetstream::consumer::pull::Config {
+        durable_name: Some(consumer_name.clone()),
+        filter_subject: "am.observe.>".to_string(),
+        ack_policy: jetstream::consumer::AckPolicy::Explicit,
+        ..Default::default()
+    };
+
+    (consumer_name, config)
+}
+
 // ============================================================================
 // Helper for ensuring all streams exist
 // ============================================================================
 
-/// Ensure both JetStream streams exist, creating them if necessary.
+/// Ensure all JetStream streams exist, creating them if necessary.
 ///
-/// Returns `Ok(())` if both streams are ready, or the first error encountered.
+/// Returns `Ok(())` if all streams are ready, or the first error encountered.
 /// Call this during agent startup after connecting to NATS.
 pub async fn ensure_streams(js: &jetstream::Context) -> Result<(), StreamSetupError> {
     let tasks = js
@@ -187,6 +230,20 @@ pub async fn ensure_streams(js: &jetstream::Context) -> Result<(), StreamSetupEr
         "Stream '{}' ready ({} messages)",
         STREAM_AGENT_NOTES,
         notes.cached_info().state.messages
+    );
+
+    let observations = js
+        .get_or_create_stream(agent_observations_stream())
+        .await
+        .map_err(|e| StreamSetupError::Create {
+            stream: STREAM_AGENT_OBSERVATIONS.to_string(),
+            reason: e.to_string(),
+        })?;
+
+    tracing::info!(
+        "Stream '{}' ready ({} messages)",
+        STREAM_AGENT_OBSERVATIONS,
+        observations.cached_info().state.messages
     );
 
     Ok(())
@@ -234,11 +291,30 @@ mod tests {
     }
 
     #[test]
+    fn test_agent_observations_stream_config() {
+        let config = agent_observations_stream();
+        assert_eq!(config.name, "AGENT_OBSERVATIONS");
+        assert_eq!(config.subjects, vec!["am.observe.>"]);
+        assert_eq!(
+            config.retention,
+            jetstream::stream::RetentionPolicy::Limits
+        );
+        assert_eq!(config.max_age, Duration::from_secs(30 * 24 * 3600));
+        assert_eq!(config.storage, jetstream::stream::StorageType::File);
+    }
+
+    #[test]
     fn test_streams_use_am_prefix() {
         let tasks = agent_tasks_stream();
         let notes = agent_notes_stream();
+        let observations = agent_observations_stream();
 
-        for subject in tasks.subjects.iter().chain(notes.subjects.iter()) {
+        for subject in tasks
+            .subjects
+            .iter()
+            .chain(notes.subjects.iter())
+            .chain(observations.subjects.iter())
+        {
             assert!(
                 subject.starts_with("am."),
                 "Stream subject '{}' does not use am. prefix",
@@ -316,6 +392,17 @@ mod tests {
     // ========================================================================
 
     #[test]
+    fn test_observations_all_consumer_config() {
+        let (name, config) = observations_all_consumer_config("aleph");
+        assert_eq!(name, "observations-all-aleph");
+        assert_eq!(config.filter_subject, "am.observe.>");
+        assert_eq!(
+            config.ack_policy,
+            jetstream::consumer::AckPolicy::Explicit
+        );
+    }
+
+    #[test]
     fn test_consumer_names_are_nats_safe() {
         // NATS consumer names must be alphanumeric + hyphens + underscores
         let names = vec![
@@ -323,6 +410,7 @@ mod tests {
             task_observer_consumer_config("aleph", "mingqiao").0,
             notes_consumer_config("thales", "mingqiao").0,
             notes_all_consumer_config("laozi-jung").0,
+            observations_all_consumer_config("laozi-jung").0,
         ];
 
         for name in &names {
@@ -342,6 +430,7 @@ mod tests {
             task_observer_consumer_config("a", "p").1,
             notes_consumer_config("a", "p").1,
             notes_all_consumer_config("a").1,
+            observations_all_consumer_config("a").1,
         ];
 
         for config in &configs {
