@@ -29,3 +29,42 @@ decision_type = ["architectural"]
 [gate]
 # Decision types that require Merlin approval
 decision_type = ["architectural", "external"]
+
+# --- Watchers ---
+# Observer agents that receive real-time event streams.
+# Each watcher subscribes to NATS-style subject patterns.
+# Subjects generated per event:
+#   am.events.{project}                         — main event stream
+#   am.agent.{agent_id}.events.{event_type}     — agent+type specific
+# Wildcards: * = one token, > = one or more trailing tokens
+
+# Example: Laozi-Jung file append watcher (all events)
+# [[watchers]]
+# agent = "laozi-jung"
+# role = "observer"
+# subjects = ["am.events.mingqiao"]
+#
+# [watchers.action]
+# type = "file_append"
+# path = "/path/to/observations/stream.jsonl"
+
+# Example: Laozi-Jung with event type filter
+# [[watchers]]
+# agent = "laozi-jung"
+# role = "observer"
+# subjects = ["am.events.mingqiao"]
+# filter = { event_types = ["message_sent", "decision_recorded"] }
+#
+# [watchers.action]
+# type = "file_append"
+# path = "/path/to/observations/stream.jsonl"
+
+# Example: Webhook watcher (full EventEnvelope POSTed as JSON)
+# [[watchers]]
+# agent = "external-service"
+# role = "participant"
+# subjects = ["am.agent.*.events.>"]
+#
+# [watchers.action]
+# type = "webhook"
+# url = "http://localhost:9000/events"

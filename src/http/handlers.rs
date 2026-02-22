@@ -834,6 +834,135 @@ pub async fn update_config(
 }
 
 // ============================================================================
+// Observation Handler (Laozi-Jung return path)
+// ============================================================================
+
+/// Observation types that Laozi-Jung can publish.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ObservationType {
+    /// Scan results for a project
+    Scan,
+    /// Pattern observations / insights
+    Insight,
+    /// Direction drift detected
+    Drift,
+    /// Onboarding brief generated
+    Onboard,
+}
+
+impl std::fmt::Display for ObservationType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Scan => write!(f, "scan"),
+            Self::Insight => write!(f, "insight"),
+            Self::Drift => write!(f, "drift"),
+            Self::Onboard => write!(f, "onboard"),
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ObserveRequest {
+    /// Type of observation
+    #[serde(rename = "type")]
+    pub observation_type: ObservationType,
+    /// Target project or agent name
+    pub target: String,
+    /// Short observation title
+    pub title: String,
+    /// Full observation content (markdown)
+    pub content: String,
+    /// Priority (defaults to normal)
+    #[serde(default = "default_normal")]
+    pub priority: String,
+}
+
+/// Submit an observation from a watcher agent.
+///
+/// Creates a message event and publishes to NATS `am.observe.{type}.{target}`.
+/// This is the return path for observer agents like Laozi-Jung.
+pub async fn submit_observation(
+    State(state): State<AppState>,
+    Json(req): Json<ObserveRequest>,
+) -> impl IntoResponse {
+    let event_id = Uuid::now_v7();
+    let now = Utc::now();
+    let obs_type = req.observation_type.to_string();
+    let nats_subject = format!("am.observe.{}.{}", obs_type, req.target);
+
+    let priority = parse_priority(&req.priority);
+
+    let event = EventEnvelope {
+        id: event_id,
+        timestamp: now,
+        event_type: EventType::MessageSent,
+        agent_id: "laozi-jung".to_string(),
+        payload: EventPayload::Message(MessageEvent {
+            from: "laozi-jung".to_string(),
+            to: "council".to_string(),
+            subject: format!("[observe:{}] {}", obs_type, req.title),
+            content: req.content,
+            thread_id: None,
+            priority,
+        }),
+    };
+
+    // Persist to SurrealDB
+    if let Err(e) = state.persistence().store_event(&event).await {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({
+                "error": { "code": "STORE_FAILED", "message": format!("Failed to persist: {}", e) }
+            })),
+        );
+    }
+
+    // Update in-memory indexer
+    {
+        let mut indexer = state.indexer_mut().await;
+        if let Err(e) = indexer.process_event(&event) {
+            warn!("Indexer failed to process observation: {}", e);
+        }
+    }
+
+    // Broadcast to watchers, WebSocket, etc.
+    state.broadcast_event(event);
+
+    // Publish to dedicated NATS observe subject if connected
+    {
+        let nats_guard = state.nats_client_mut().await;
+        if let Some(ref client) = *nats_guard {
+            let payload = serde_json::json!({
+                "event_id": event_id.to_string(),
+                "observation_type": obs_type,
+                "target": req.target,
+                "title": req.title,
+                "timestamp": now,
+            });
+            if let Ok(bytes) = serde_json::to_vec(&payload) {
+                if let Err(e) = client
+                    .raw_client()
+                    .publish(nats_subject.clone(), bytes.into())
+                    .await
+                {
+                    warn!("NATS observe publish failed: {}", e);
+                }
+            }
+        }
+    }
+
+    (
+        StatusCode::CREATED,
+        Json(serde_json::json!({
+            "event_id": event_id.to_string(),
+            "nats_subject": nats_subject,
+            "created_at": now
+        })),
+    )
+}
+
+// ============================================================================
 // Search Handler
 // ============================================================================
 

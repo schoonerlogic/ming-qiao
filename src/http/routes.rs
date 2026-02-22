@@ -49,6 +49,8 @@ pub fn api_routes() -> Router<AppState> {
         .route("/api/annotate", post(handlers::add_annotation))
         .route("/api/config", get(handlers::get_config))
         .route("/api/config", patch(handlers::update_config))
+        // Observations (Laozi-Jung return path)
+        .route("/api/observe", post(handlers::submit_observation))
         // Search
         .route("/api/search", get(handlers::search))
 }
