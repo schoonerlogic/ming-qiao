@@ -135,6 +135,10 @@ pub struct Config {
     /// Database connection configuration
     #[serde(default)]
     pub database: DatabaseConfig,
+
+    /// Watcher configurations for real-time event observers
+    #[serde(default)]
+    pub watchers: Vec<crate::watcher::WatcherConfig>,
 }
 
 fn default_data_dir() -> String {
@@ -165,6 +169,7 @@ impl Default for Config {
             port: default_port(),
             nats: NatsConfig::default(),
             database: DatabaseConfig::default(),
+            watchers: Vec::new(),
         }
     }
 }

@@ -55,6 +55,11 @@ impl ToolRegistry {
         self.definitions.values().collect()
     }
 
+    /// Get a reference to the shared application state
+    pub fn state(&self) -> &AppState {
+        &self.state
+    }
+
     /// Call a tool by name
     pub async fn call(
         &self,

@@ -5,14 +5,16 @@
 //! handlers, and writes responses to stdout.
 
 use std::io::{self, BufRead, Write};
+use std::sync::Mutex;
 
+use chrono::{DateTime, Utc};
 use serde_json::Value;
 use tracing::{debug, error, info, warn};
 
 use crate::mcp::protocol::{
     CallToolParams, InitializeParams, InitializeResult, JsonRpcError, JsonRpcNotification,
     JsonRpcRequest, JsonRpcResponse, McpError, McpErrorCode, RequestId, ServerCapabilities,
-    ServerInfo, ToolsCapability,
+    ServerInfo, ToolContent, ToolsCapability,
 };
 use crate::mcp::tools::ToolRegistry;
 use crate::state::AppState;
@@ -26,6 +28,9 @@ pub const SERVER_NAME: &str = "ming-qiao";
 /// Server version
 pub const SERVER_VERSION: &str = env!("CARGO_PKG_VERSION");
 
+/// Tools that reset the inbox check timestamp (agent is already looking at messages)
+const INBOX_TOOLS: &[&str] = &["check_messages", "read_inbox", "read_message"];
+
 /// MCP server that handles stdio transport
 pub struct McpServer {
     /// Tool registry
@@ -36,6 +41,9 @@ pub struct McpServer {
 
     /// Whether the server has been initialized
     initialized: bool,
+
+    /// Timestamp of last inbox check — messages newer than this are "new"
+    last_inbox_check: Mutex<DateTime<Utc>>,
 }
 
 impl McpServer {
@@ -48,6 +56,7 @@ impl McpServer {
             tools: ToolRegistry::with_state(state),
             agent_id,
             initialized: false,
+            last_inbox_check: Mutex::new(Utc::now()),
         }
     }
 
@@ -238,12 +247,58 @@ impl McpServer {
         info!("Tool call: {}", params.name);
         debug!("Arguments: {:?}", params.arguments);
 
-        let result = self
+        let mut result = self
             .tools
             .call(&params.name, params.arguments, &self.agent_id)
             .await?;
 
+        if INBOX_TOOLS.contains(&params.name.as_str()) {
+            // Agent is reading messages — reset the timestamp
+            *self.last_inbox_check.lock().expect("poisoned") = Utc::now();
+        } else if let Some(hint) = self.build_message_hint().await {
+            result.content.push(ToolContent::Text { text: hint });
+        }
+
         Ok(serde_json::to_value(result)?)
+    }
+
+    /// Build a hint string summarizing unread messages for this agent.
+    ///
+    /// Returns `None` if there are no new messages since the last inbox check.
+    async fn build_message_hint(&self) -> Option<String> {
+        let cutoff = *self.last_inbox_check.lock().expect("poisoned");
+
+        let indexer = self.tools.state().indexer().await;
+        let new_messages: Vec<_> = indexer
+            .get_messages_to_agent(&self.agent_id)
+            .into_iter()
+            .filter(|m| m.created_at > cutoff)
+            .collect();
+
+        if new_messages.is_empty() {
+            return None;
+        }
+
+        // Group by (thread_id, from) → collect subjects
+        let mut groups: std::collections::BTreeMap<(&str, &str), &str> =
+            std::collections::BTreeMap::new();
+        for msg in &new_messages {
+            groups
+                .entry((&msg.thread_id, &msg.from))
+                .or_insert(&msg.subject);
+        }
+
+        let summaries: Vec<String> = groups
+            .iter()
+            .map(|((_tid, from), subject)| format!("\"{}\" from {}", subject, from))
+            .collect();
+
+        Some(format!(
+            "\n---\n[New: {} message{} — {}]",
+            new_messages.len(),
+            if new_messages.len() == 1 { "" } else { "s" },
+            summaries.join(", ")
+        ))
     }
 }
 

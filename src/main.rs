@@ -279,6 +279,11 @@ async fn run_http_server() -> Result<(), Box<dyn std::error::Error>> {
         info!("NATS agent client active for HTTP server (subscriptions + heartbeat + persistence + event sync)");
     }
 
+    // Start watcher dispatcher for observer agents (e.g. Laozi-Jung)
+    let config = state.config().await;
+    let _watcher_dispatcher =
+        ming_qiao::watcher::WatcherDispatcher::start(&state, &config.watchers, "mingqiao").await;
+
     let server = HttpServer::new(state);
     info!("Starting HTTP server at http://{}", server.address());
 
@@ -355,6 +360,11 @@ async fn run_mcp_server() -> Result<(), Box<dyn std::error::Error>> {
     } else {
         eprintln!("[ming-qiao] NATS not enabled or connection failed, running without NATS");
     }
+
+    // Start watcher dispatcher for observer agents (e.g. Laozi-Jung)
+    let config = state.config().await;
+    let _watcher_dispatcher =
+        ming_qiao::watcher::WatcherDispatcher::start(&state, &config.watchers, "mingqiao").await;
 
     let mut server = McpServer::with_state(agent_id, state);
     server.run().await?;

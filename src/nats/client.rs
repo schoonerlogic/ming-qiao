@@ -93,6 +93,11 @@ impl NatsAgentClient {
         &self.subjects
     }
 
+    /// Get the raw NATS client for direct publishing (e.g. observation subjects).
+    pub fn raw_client(&self) -> &async_nats::Client {
+        &self.client
+    }
+
     /// Return the raw NATS client and events broadcast subject for the
     /// event sync bridge.  The client is cloned (cheap Arc bump), following
     /// the same pattern used by `start_presence_heartbeat`.

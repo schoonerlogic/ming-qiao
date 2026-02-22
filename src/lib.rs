@@ -19,3 +19,4 @@ pub mod mcp;
 pub mod merlin;
 pub mod nats;
 pub mod state;
+pub mod watcher;
