@@ -220,6 +220,38 @@ Refs: ming-qiao#12
 
 ---
 
+## Cocktail Party Protocol
+
+You are at a cocktail party, not a post office. Listen to the room.
+
+**Thales runs in browser (Claude Chat) — no MCP or file watcher available.**
+Use HTTP polling instead.
+
+**BETWEEN RESPONSES:** After completing any substantive response or analysis,
+check for new messages:
+```bash
+curl -s http://localhost:7777/api/inbox/thales | jq '.[] | select(.intent == "request" or .intent == "discuss")'
+```
+
+**CHECK NOTIFICATIONS:** Read your notification file for new lines:
+```
+notifications/thales.jsonl
+```
+Process `request` intent messages first, then `discuss`, then `inform`.
+
+**MULTI-AGENT THREADS:** When replying to threads with 3+ participants,
+address replies to `"council"` so all agents receive notifications:
+```bash
+curl -X POST http://localhost:7777/api/threads/<thread-id>/reply \
+  -H "Content-Type: application/json" \
+  -d '{"from_agent": "thales", "content": "...", "intent": "discuss"}'
+```
+The server now automatically addresses multi-party replies to `"council"`.
+
+**PRIORITY:** request > discuss > your current task > inform
+
+---
+
 ## Golden Rules
 
 1. **Never force push** to any shared branch
