@@ -6,7 +6,19 @@
 
 set -euo pipefail
 
+# Read hook input from stdin
+INPUT=$(cat)
+
+# Derive agent ID from cwd — CLAUDE_ENV_FILE vars don't reach hook subprocesses
 AGENT="${MING_QIAO_AGENT_ID:-}"
+if [[ -z "$AGENT" ]]; then
+    CWD=$(echo "$INPUT" | jq -r '.cwd // empty' 2>/dev/null)
+    if [[ "$CWD" == *"/aleph"* ]]; then
+        AGENT="aleph"
+    elif [[ "$CWD" == *"/luban"* ]]; then
+        AGENT="luban"
+    fi
+fi
 if [[ -z "$AGENT" ]]; then
     exit 0
 fi
