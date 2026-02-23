@@ -14,7 +14,11 @@ url = "ws://localhost:8000"
 username = "root"
 password = "root"
 
-# Laozi-Jung: real-time event stream for witnessing
+# ============================================================================
+# Watchers — real-time event dispatch
+# ============================================================================
+
+# Laozi-Jung: full event stream for witnessing (existing)
 [[watchers]]
 agent = "laozi-jung"
 role = "observer"
@@ -23,3 +27,78 @@ subjects = ["am.events.mingqiao"]
 [watchers.action]
 type = "file_append"
 path = "/Users/proteus/astralmaris/echoessence/merlin/observations/stream.jsonl"
+
+# ============================================================================
+# Per-agent notification watchers — message delivery without human relay
+# ============================================================================
+
+# Aleph notification
+[[watchers]]
+agent = "aleph-notify"
+role = "observer"
+subjects = ["am.events.mingqiao"]
+
+[watchers.filter]
+event_types = ["message_sent"]
+recipients = ["aleph", "council", "all"]
+
+[watchers.action]
+type = "file_append"
+path = "/Users/proteus/astralmaris/ming-qiao/notifications/aleph.jsonl"
+
+# Thales notification
+[[watchers]]
+agent = "thales-notify"
+role = "observer"
+subjects = ["am.events.mingqiao"]
+
+[watchers.filter]
+event_types = ["message_sent"]
+recipients = ["thales", "council", "all"]
+
+[watchers.action]
+type = "file_append"
+path = "/Users/proteus/astralmaris/ming-qiao/notifications/thales.jsonl"
+
+# Luban notification
+[[watchers]]
+agent = "luban-notify"
+role = "observer"
+subjects = ["am.events.mingqiao"]
+
+[watchers.filter]
+event_types = ["message_sent"]
+recipients = ["luban", "council", "all"]
+
+[watchers.action]
+type = "file_append"
+path = "/Users/proteus/astralmaris/ming-qiao/notifications/luban.jsonl"
+
+# Laozi-Jung notification (in addition to full stream above)
+[[watchers]]
+agent = "laozi-jung-notify"
+role = "observer"
+subjects = ["am.events.mingqiao"]
+
+[watchers.filter]
+event_types = ["message_sent"]
+recipients = ["laozi-jung", "council", "all"]
+
+[watchers.action]
+type = "file_append"
+path = "/Users/proteus/astralmaris/ming-qiao/notifications/laozi-jung.jsonl"
+
+# ============================================================================
+# Merlin (human) — macOS desktop notification for all council messages
+# ============================================================================
+[[watchers]]
+agent = "merlin-notify"
+role = "observer"
+subjects = ["am.events.mingqiao"]
+
+[watchers.filter]
+event_types = ["message_sent"]
+
+[watchers.action]
+type = "system_notify"
+title = "Ming-Qiao Council"

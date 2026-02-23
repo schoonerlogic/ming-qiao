@@ -125,6 +125,7 @@ impl Indexer {
             subject: msg.subject.clone(),
             content: msg.content.clone(),
             priority: msg.priority.clone(),
+            intent: msg.intent.clone(),
             created_at: event.timestamp,
             read_by: vec![],
         };
@@ -273,7 +274,7 @@ impl Indexer {
     pub fn get_messages_to_agent(&self, agent_id: &str) -> Vec<&Message> {
         self.messages
             .values()
-            .filter(|m| &m.to == agent_id || m.to == "all")
+            .filter(|m| m.to == agent_id || m.to == "all" || m.to == "council")
             .collect()
     }
 

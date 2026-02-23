@@ -410,7 +410,7 @@ mod tests {
     use chrono::Utc;
     use uuid::Uuid;
 
-    use crate::events::{EventPayload, EventType, MessageEvent, Priority};
+    use crate::events::{EventPayload, EventType, MessageEvent, MessageIntent, Priority};
 
     fn make_test_event(agent: &str, subject: &str) -> EventEnvelope {
         EventEnvelope {
@@ -425,6 +425,7 @@ mod tests {
                 content: "test content".to_string(),
                 thread_id: None,
                 priority: Priority::Normal,
+                intent: MessageIntent::Inform,
             }),
         }
     }

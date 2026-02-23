@@ -79,6 +79,17 @@ pub struct JsonRpcError {
     pub data: Option<Value>,
 }
 
+impl JsonRpcNotification {
+    /// Create a new outbound notification (no `id` field — no response expected).
+    pub fn new(method: impl Into<String>, params: Option<Value>) -> Self {
+        Self {
+            jsonrpc: "2.0".to_string(),
+            method: method.into(),
+            params,
+        }
+    }
+}
+
 impl JsonRpcRequest {
     /// Create a new request
     pub fn new(id: impl Into<RequestId>, method: impl Into<String>, params: Option<Value>) -> Self {
@@ -442,5 +453,28 @@ mod tests {
 
         let error = CallToolResult::error("Failed!");
         assert_eq!(error.is_error, Some(true));
+    }
+
+    #[test]
+    fn test_notification_new() {
+        let n = JsonRpcNotification::new(
+            "notifications/message",
+            Some(serde_json::json!({"level": "info", "logger": "ming-qiao"})),
+        );
+        assert_eq!(n.jsonrpc, "2.0");
+        assert_eq!(n.method, "notifications/message");
+        assert!(n.params.is_some());
+
+        // Must have no "id" field when serialized
+        let json = serde_json::to_string(&n).unwrap();
+        assert!(!json.contains("\"id\""));
+        assert!(json.contains("\"method\":\"notifications/message\""));
+    }
+
+    #[test]
+    fn test_notification_without_params() {
+        let n = JsonRpcNotification::new("notifications/cancelled", None);
+        let json = serde_json::to_string(&n).unwrap();
+        assert!(!json.contains("\"params\""));
     }
 }

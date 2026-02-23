@@ -10,9 +10,10 @@ use std::collections::HashMap;
 use uuid::Uuid;
 
 use crate::events::{
-    EventEnvelope, EventPayload, EventType, MessageEvent, Priority,
+    EventEnvelope, EventPayload, EventType, MessageEvent, MessageIntent, Priority,
 };
 use crate::mcp::protocol::{CallToolResult, McpError};
+use crate::nats::messages::MessageNotification;
 use crate::state::AppState;
 
 /// Tool definition as exposed to MCP clients
@@ -139,6 +140,12 @@ impl ToolRegistry {
                         "enum": ["low", "normal", "high", "critical"],
                         "default": "normal",
                         "description": "Message priority"
+                    },
+                    "intent": {
+                        "type": "string",
+                        "enum": ["discuss", "request", "inform"],
+                        "default": "inform",
+                        "description": "Message intent: discuss (respond when ready), request (action needed), inform (FYI)"
                     }
                 },
                 "required": ["to", "subject", "content"]
@@ -363,6 +370,18 @@ impl ToolRegistry {
                     "content": {
                         "type": "string",
                         "description": "Message body (markdown supported)"
+                    },
+                    "priority": {
+                        "type": "string",
+                        "enum": ["low", "normal", "high", "critical"],
+                        "default": "normal",
+                        "description": "Message priority"
+                    },
+                    "intent": {
+                        "type": "string",
+                        "enum": ["discuss", "request", "inform"],
+                        "default": "inform",
+                        "description": "Message intent: discuss (respond when ready), request (action needed), inform (FYI)"
                     }
                 },
                 "required": ["from_agent", "to_agent", "subject", "content"]
@@ -405,6 +424,18 @@ impl ToolRegistry {
                     "content": {
                         "type": "string",
                         "description": "Reply body (markdown supported)"
+                    },
+                    "priority": {
+                        "type": "string",
+                        "enum": ["low", "normal", "high", "critical"],
+                        "default": "normal",
+                        "description": "Message priority"
+                    },
+                    "intent": {
+                        "type": "string",
+                        "enum": ["discuss", "request", "inform"],
+                        "default": "inform",
+                        "description": "Message intent: discuss (respond when ready), request (action needed), inform (FYI)"
                     }
                 },
                 "required": ["thread_id", "from_agent", "content"]
@@ -455,6 +486,25 @@ impl ToolRegistry {
         self.state.broadcast_event(event.clone());
         self.state.merlin_notifier().notify(event.clone(), &self.state);
 
+        // 4. Publish NATS message notification for MessageSent events
+        if event.event_type == EventType::MessageSent {
+            if let EventPayload::Message(ref msg) = event.payload {
+                let notification = MessageNotification {
+                    event_id: event_id.clone(),
+                    from: msg.from.clone(),
+                    subject: msg.subject.clone(),
+                    intent: msg.intent.clone(),
+                    timestamp: event.timestamp,
+                };
+                let nats_guard = self.state.nats_client_mut().await;
+                if let Some(ref client) = *nats_guard {
+                    if let Err(e) = client.publish_message_notification(&msg.to, &notification).await {
+                        tracing::warn!("NATS message notification failed: {}", e);
+                    }
+                }
+            }
+        }
+
         Ok(event_id)
     }
 
@@ -465,6 +515,15 @@ impl ToolRegistry {
             Some("high") => Priority::High,
             Some("critical") => Priority::Critical,
             _ => Priority::Normal,
+        }
+    }
+
+    /// Helper to parse message intent from string
+    fn parse_intent(s: Option<&str>) -> MessageIntent {
+        match s {
+            Some("discuss") => MessageIntent::Discuss,
+            Some("request") => MessageIntent::Request,
+            _ => MessageIntent::Inform,
         }
     }
 
@@ -493,6 +552,7 @@ impl ToolRegistry {
             .and_then(|v| v.as_str())
             .map(String::from);
         let priority = Self::parse_priority(args.get("priority").and_then(|v| v.as_str()));
+        let intent = Self::parse_intent(args.get("intent").and_then(|v| v.as_str()));
 
         let event = EventEnvelope {
             id: Uuid::now_v7(),
@@ -506,6 +566,7 @@ impl ToolRegistry {
                 content: content.to_string(),
                 thread_id,
                 priority,
+                intent,
             }),
         };
 
@@ -560,11 +621,12 @@ impl ToolRegistry {
         let mut output = format!("## Inbox for {}\n\n", agent_id);
         for msg in messages {
             output.push_str(&format!(
-                "### {} [{}]\n**From:** {} | **Priority:** {:?}\n**ID:** {}\n\n---\n\n",
+                "### {} [{}]\n**From:** {} | **Priority:** {:?} | **Intent:** {:?}\n**ID:** {}\n\n---\n\n",
                 msg.subject,
                 msg.created_at.format("%Y-%m-%d %H:%M"),
                 msg.from,
                 msg.priority,
+                msg.intent,
                 msg.id
             ));
         }
@@ -588,12 +650,13 @@ impl ToolRegistry {
 
         match msg {
             Some(msg) => Ok(CallToolResult::text(format!(
-                "## {}\n\n**From:** {}\n**To:** {}\n**Date:** {}\n**Priority:** {:?}\n\n---\n\n{}",
+                "## {}\n\n**From:** {}\n**To:** {}\n**Date:** {}\n**Priority:** {:?}\n**Intent:** {:?}\n\n---\n\n{}",
                 msg.subject,
                 msg.from,
                 msg.to,
                 msg.created_at.format("%Y-%m-%d %H:%M:%S UTC"),
                 msg.priority,
+                msg.intent,
                 msg.content
             ))),
             None => Ok(CallToolResult::text(format!(
@@ -638,6 +701,7 @@ impl ToolRegistry {
                 content,
                 thread_id: None,
                 priority,
+                intent: MessageIntent::Request,
             }),
         };
 
@@ -907,6 +971,9 @@ impl ToolRegistry {
             .and_then(|v| v.as_str())
             .ok_or_else(|| McpError::InvalidInput("'content' is required".to_string()))?;
 
+        let priority = Self::parse_priority(args.get("priority").and_then(|v| v.as_str()));
+        let intent = Self::parse_intent(args.get("intent").and_then(|v| v.as_str()));
+
         let event_id = Uuid::now_v7();
         let now = Utc::now();
 
@@ -921,7 +988,8 @@ impl ToolRegistry {
                 subject: subject.to_string(),
                 content: content.to_string(),
                 thread_id: None,
-                priority: Priority::Normal,
+                priority,
+                intent,
             }),
         };
 
@@ -966,6 +1034,7 @@ impl ToolRegistry {
                     "from": msg.from,
                     "subject": msg.subject,
                     "content": msg.content,
+                    "intent": msg.intent,
                     "created_at": msg.created_at.to_rfc3339()
                 })
             })
@@ -996,6 +1065,9 @@ impl ToolRegistry {
             .get("content")
             .and_then(|v| v.as_str())
             .ok_or_else(|| McpError::InvalidInput("'content' is required".to_string()))?;
+
+        let priority = Self::parse_priority(args.get("priority").and_then(|v| v.as_str()));
+        let intent = Self::parse_intent(args.get("intent").and_then(|v| v.as_str()));
 
         // Look up thread for recipient and subject
         let (to_agent, subject) = {
@@ -1033,7 +1105,8 @@ impl ToolRegistry {
                 subject,
                 content: content.to_string(),
                 thread_id: Some(thread_id.to_string()),
-                priority: Priority::Normal,
+                priority,
+                intent,
             }),
         };
 

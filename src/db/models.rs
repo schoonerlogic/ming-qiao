@@ -9,7 +9,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 // Re-use types from events (re-exported from schema)
-use crate::events::{AgentStatus, DecisionOption, Priority};
+use crate::events::{AgentStatus, DecisionOption, MessageIntent, Priority};
 
 // ============================================================================
 // NEW ENUMS
@@ -113,6 +113,9 @@ pub struct Message {
 
     /// Message priority level
     pub priority: Priority,
+
+    /// Message intent (discuss, request, inform)
+    pub intent: MessageIntent,
 
     /// When this message was sent
     pub created_at: DateTime<Utc>,

@@ -31,6 +31,8 @@ pub struct EventLine {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub subject: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub intent: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub content_preview: Option<String>,
     pub event_id: String,
 }
@@ -62,6 +64,10 @@ impl EventLine {
                 from: Some(m.from.clone()),
                 to: Some(m.to.clone()),
                 subject: Some(m.subject.clone()),
+                intent: Some(serde_json::to_value(&m.intent)
+                    .ok()
+                    .and_then(|v| v.as_str().map(String::from))
+                    .unwrap_or_else(|| "inform".to_string())),
                 content_preview: Some(truncate_utf8(&m.content, 200)),
                 event_id,
             },
@@ -72,6 +78,7 @@ impl EventLine {
                 from: None,
                 to: None,
                 subject: Some(d.title.clone()),
+                intent: None,
                 content_preview: Some(truncate_utf8(&d.rationale, 200)),
                 event_id,
             },
@@ -82,6 +89,7 @@ impl EventLine {
                 from: None,
                 to: None,
                 subject: Some(a.path.clone()),
+                intent: None,
                 content_preview: Some(truncate_utf8(&a.description, 200)),
                 event_id,
             },
@@ -92,6 +100,7 @@ impl EventLine {
                 from: Some(t.assigned_by.clone()),
                 to: Some(t.assigned_to.clone()),
                 subject: Some(t.title.clone()),
+                intent: None,
                 content_preview: None,
                 event_id,
             },
@@ -102,6 +111,7 @@ impl EventLine {
                 from: Some(s.agent_id.clone()),
                 to: None,
                 subject: None,
+                intent: None,
                 content_preview: s.reason.as_ref().map(|r| truncate_utf8(r, 200)),
                 event_id,
             },
@@ -203,6 +213,75 @@ impl WebhookAction {
     }
 }
 
+/// System notification action: sends macOS desktop notifications via osascript.
+///
+/// Fire-and-forget: errors are logged but never block the event pipeline.
+/// Extracts sender and subject from message events for the notification body.
+pub struct SystemNotifyAction {
+    title: String,
+}
+
+impl SystemNotifyAction {
+    pub fn new(title: String) -> Self {
+        Self { title }
+    }
+
+    /// Send a macOS notification for an event.
+    pub async fn notify(&self, event: &EventEnvelope) {
+        let (body, subtitle) = match &event.payload {
+            EventPayload::Message(m) => {
+                let body = format!("From {}: {}", m.from, m.subject);
+                let subtitle = match m.intent {
+                    crate::events::MessageIntent::Request => "Action needed",
+                    crate::events::MessageIntent::Discuss => "Discussion",
+                    crate::events::MessageIntent::Inform => "FYI",
+                };
+                (body, subtitle)
+            }
+            EventPayload::Decision(d) => {
+                (format!("Decision: {}", d.title), "Decision recorded")
+            }
+            EventPayload::Task(t) => {
+                (format!("Task: {} → {}", t.title, t.assigned_to), "Task update")
+            }
+            EventPayload::Artifact(a) => {
+                (format!("Artifact: {}", a.path), "Artifact shared")
+            }
+            EventPayload::Status(s) => {
+                (format!("Status: {} → {:?}", s.agent_id, s.current), "Status change")
+            }
+        };
+
+        // Escape for osascript: use double quotes with backslash-escaped inner quotes
+        let body_escaped = body.replace('\\', "\\\\").replace('"', "\\\"");
+        let title_escaped = self.title.replace('\\', "\\\\").replace('"', "\\\"");
+        let subtitle_escaped = subtitle.replace('\\', "\\\\").replace('"', "\\\"");
+
+        let script = format!(
+            "display notification \"{}\" with title \"{}\" subtitle \"{}\"",
+            body_escaped, title_escaped, subtitle_escaped
+        );
+
+        match tokio::process::Command::new("osascript")
+            .arg("-e")
+            .arg(&script)
+            .output()
+            .await
+        {
+            Ok(output) if !output.status.success() => {
+                warn!(
+                    "SystemNotify osascript failed: {}",
+                    String::from_utf8_lossy(&output.stderr)
+                );
+            }
+            Err(e) => {
+                warn!("SystemNotify failed to spawn osascript: {}", e);
+            }
+            _ => {}
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -223,6 +302,7 @@ mod tests {
                 content: "The MCP server is ready for review.".to_string(),
                 thread_id: Some("thread-001".to_string()),
                 priority: Priority::Normal,
+                intent: MessageIntent::Inform,
             }),
         }
     }

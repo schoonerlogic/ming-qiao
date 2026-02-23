@@ -69,6 +69,7 @@ mod tests {
             subject: "Task Update".to_string(),
             content: "Event schema is complete.".to_string(),
             priority: Priority::Normal,
+            intent: crate::events::MessageIntent::Inform,
             created_at: Utc::now(),
             read_by: vec!["aleph".to_string()],
         };
@@ -100,6 +101,7 @@ mod tests {
                 subject: "Test".to_string(),
                 content: "Test".to_string(),
                 priority: priority.clone(),
+                intent: crate::events::MessageIntent::Inform,
                 created_at: Utc::now(),
                 read_by: vec![],
             };
@@ -312,6 +314,7 @@ mod tests {
             subject: "Test".to_string(),
             content: "Test".to_string(),
             priority: Priority::Normal,
+            intent: crate::events::MessageIntent::Inform,
             created_at: Utc::now(),
             read_by: vec![],
         };
@@ -354,6 +357,7 @@ mod tests {
                 content: "Test message".to_string(),
                 thread_id: None,
                 priority: Priority::Normal,
+                intent: crate::events::MessageIntent::Inform,
             }),
         };
 
@@ -457,6 +461,7 @@ mod tests {
                     content: "First message".to_string(),
                     thread_id: None,
                     priority: Priority::Normal,
+                    intent: crate::events::MessageIntent::Inform,
                 }),
             },
             EventEnvelope {
@@ -500,6 +505,7 @@ mod tests {
                     content: "Message from Aleph".to_string(),
                     thread_id: None,
                     priority: Priority::Normal,
+                    intent: crate::events::MessageIntent::Inform,
                 }),
             },
             EventEnvelope {
@@ -514,6 +520,7 @@ mod tests {
                     content: "Message from Thales".to_string(),
                     thread_id: None,
                     priority: Priority::Normal,
+                    intent: crate::events::MessageIntent::Inform,
                 }),
             },
             EventEnvelope {
@@ -528,6 +535,7 @@ mod tests {
                     content: "Another message from Aleph".to_string(),
                     thread_id: None,
                     priority: Priority::Normal,
+                    intent: crate::events::MessageIntent::Inform,
                 }),
             },
         ];
@@ -616,6 +624,7 @@ mod tests {
                     content: "Message 1".to_string(),
                     thread_id: None,
                     priority: Priority::Normal,
+                    intent: crate::events::MessageIntent::Inform,
                 }),
             },
             EventEnvelope {
@@ -630,6 +639,7 @@ mod tests {
                     content: "Message 2".to_string(),
                     thread_id: None,
                     priority: Priority::Normal,
+                    intent: crate::events::MessageIntent::Inform,
                 }),
             },
         ];
@@ -658,6 +668,7 @@ mod tests {
                 content: "Hello".to_string(),
                 thread_id: None,
                 priority: Priority::Normal,
+                intent: crate::events::MessageIntent::Inform,
             }),
         };
 
@@ -741,6 +752,7 @@ mod tests {
                 content: "Should only count once".to_string(),
                 thread_id: None,
                 priority: Priority::Normal,
+                intent: crate::events::MessageIntent::Inform,
             }),
         };
 
@@ -789,5 +801,90 @@ mod tests {
 
         let all_artifacts = indexer.get_all_artifacts();
         assert_eq!(all_artifacts.len(), 2);
+    }
+
+    #[test]
+    fn test_indexer_get_messages_to_agent_includes_council_broadcast() {
+        let mut indexer = Indexer::new();
+
+        // Direct message to aleph
+        let e1 = EventEnvelope {
+            id: Uuid::now_v7(),
+            timestamp: Utc::now(),
+            event_type: EventType::MessageSent,
+            agent_id: "thales".to_string(),
+            payload: EventPayload::Message(crate::events::MessageEvent {
+                from: "thales".to_string(),
+                to: "aleph".to_string(),
+                subject: "Direct".to_string(),
+                content: "For you".to_string(),
+                thread_id: None,
+                priority: Priority::Normal,
+                intent: crate::events::MessageIntent::Inform,
+            }),
+        };
+
+        // Broadcast to "all"
+        let e2 = EventEnvelope {
+            id: Uuid::now_v7(),
+            timestamp: Utc::now(),
+            event_type: EventType::MessageSent,
+            agent_id: "luban".to_string(),
+            payload: EventPayload::Message(crate::events::MessageEvent {
+                from: "luban".to_string(),
+                to: "all".to_string(),
+                subject: "All broadcast".to_string(),
+                content: "Everyone".to_string(),
+                thread_id: None,
+                priority: Priority::Normal,
+                intent: crate::events::MessageIntent::Inform,
+            }),
+        };
+
+        // Broadcast to "council"
+        let e3 = EventEnvelope {
+            id: Uuid::now_v7(),
+            timestamp: Utc::now(),
+            event_type: EventType::MessageSent,
+            agent_id: "laozi-jung".to_string(),
+            payload: EventPayload::Message(crate::events::MessageEvent {
+                from: "laozi-jung".to_string(),
+                to: "council".to_string(),
+                subject: "Council broadcast".to_string(),
+                content: "Observation".to_string(),
+                thread_id: None,
+                priority: Priority::Normal,
+                intent: crate::events::MessageIntent::Inform,
+            }),
+        };
+
+        // Message to luban (should not appear for aleph)
+        let e4 = EventEnvelope {
+            id: Uuid::now_v7(),
+            timestamp: Utc::now(),
+            event_type: EventType::MessageSent,
+            agent_id: "thales".to_string(),
+            payload: EventPayload::Message(crate::events::MessageEvent {
+                from: "thales".to_string(),
+                to: "luban".to_string(),
+                subject: "Not for aleph".to_string(),
+                content: "Private".to_string(),
+                thread_id: None,
+                priority: Priority::Normal,
+                intent: crate::events::MessageIntent::Inform,
+            }),
+        };
+
+        for event in &[&e1, &e2, &e3, &e4] {
+            indexer.process_event(event).unwrap();
+        }
+
+        let aleph_inbox = indexer.get_messages_to_agent("aleph");
+        assert_eq!(aleph_inbox.len(), 3, "aleph should see direct + all + council");
+
+        let subjects: Vec<&str> = aleph_inbox.iter().map(|m| m.subject.as_str()).collect();
+        assert!(subjects.contains(&"Direct"));
+        assert!(subjects.contains(&"All broadcast"));
+        assert!(subjects.contains(&"Council broadcast"));
     }
 }
