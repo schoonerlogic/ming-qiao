@@ -28,6 +28,12 @@ pub struct WatcherFilter {
     /// Event types to include. Empty means all event types pass.
     #[serde(default)]
     pub event_types: Vec<String>,
+
+    /// Only match messages addressed TO these agents.
+    /// Empty means all recipients pass.
+    /// Supports: specific agent ID, "council", "all"
+    #[serde(default)]
+    pub recipients: Vec<String>,
 }
 
 /// Action to perform when an event matches a watcher's subscription.
@@ -44,6 +50,14 @@ pub enum WatcherAction {
     Webhook {
         /// Target URL for the HTTP POST.
         url: String,
+    },
+
+    /// macOS system notification via osascript.
+    /// Sends a notification to the desktop — useful for alerting the human
+    /// (Merlin/Proteus) when agents need attention.
+    SystemNotify {
+        /// Title for the notification banner (e.g. "Ming-Qiao Council").
+        title: String,
     },
 }
 
@@ -156,5 +170,35 @@ mod tests {
 
         let wrapper: Wrapper = toml::from_str(toml_str).unwrap();
         assert!(wrapper.watchers[0].filter.event_types.is_empty());
+        assert!(wrapper.watchers[0].filter.recipients.is_empty());
+    }
+
+    #[test]
+    fn test_recipient_filter_deserialization() {
+        let toml_str = r#"
+            [[watchers]]
+            agent = "aleph-notify"
+            role = "observer"
+            subjects = ["am.events.mingqiao"]
+
+            [watchers.filter]
+            event_types = ["message_sent"]
+            recipients = ["aleph", "council", "all"]
+
+            [watchers.action]
+            type = "file_append"
+            path = "/tmp/aleph.jsonl"
+        "#;
+
+        #[derive(Deserialize)]
+        struct Wrapper {
+            watchers: Vec<WatcherConfig>,
+        }
+
+        let wrapper: Wrapper = toml::from_str(toml_str).unwrap();
+        let w = &wrapper.watchers[0];
+        assert_eq!(w.agent, "aleph-notify");
+        assert_eq!(w.filter.recipients, vec!["aleph", "council", "all"]);
+        assert_eq!(w.filter.event_types, vec!["message_sent"]);
     }
 }

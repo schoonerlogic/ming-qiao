@@ -13,6 +13,7 @@
 //! am.agent.{agent}.task.{project}.update             — Progress update on task
 //! am.agent.{agent}.task.{project}.complete           — Task completed
 //! am.agent.{agent}.task.{project}.blocked            — Agent blocked on task
+//! am.agent.{agent}.message.{project}                  — Message notification hint (core NATS, ephemeral)
 //! am.agent.{agent}.notes.{project}                   — Session notes
 //! am.events.{project}                                — Per-project event broadcast
 //! am.observe.{type}.{target}                         — Observations (target = project or topic)
@@ -25,6 +26,7 @@
 //! am.agent.*.presence                                — All agents' heartbeats
 //! am.agent.{agent}.task.{project}.>                  — Everything one agent does on a project
 //! am.agent.*.task.{project}.>                        — All agents on a project
+//! am.agent.*.message.{project}                        — All agents' message notifications on a project
 //! am.agent.*.notes.>                                 — All agents' session notes
 //! am.events.>                                        — All projects' event broadcasts
 //! am.observe.>                                       — All observations
@@ -136,6 +138,27 @@ impl AgentSubjects {
     }
 
     // ========================================================================
+    // Message notifications (core NATS — ephemeral, notification hint)
+    // ========================================================================
+
+    /// Notification hint when a message is sent to this agent.
+    ///
+    /// Core NATS (ephemeral, not JetStream). Actual message content lives in
+    /// SurrealDB; this is a "you have mail" nudge for cross-process MCP servers.
+    ///
+    /// `am.agent.{agent}.message.{project}`
+    pub fn message(&self) -> String {
+        format!("am.agent.{}.message.{}", self.agent, self.project)
+    }
+
+    /// Subscribe to message notifications for all agents on a project.
+    ///
+    /// `am.agent.*.message.{project}`
+    pub fn all_agents_messages(project: &str) -> String {
+        format!("am.agent.*.message.{}", project)
+    }
+
+    // ========================================================================
     // Session notes (JetStream — persistent, 30-day retention)
     // ========================================================================
 
@@ -230,6 +253,7 @@ mod tests {
         let all = vec![
             s.presence(),
             s.events(),
+            s.message(),
             s.task_assigned(),
             s.task_started(),
             s.task_update(),
@@ -249,6 +273,7 @@ mod tests {
         // Static subscribe patterns too
         assert!(AgentSubjects::all_agents_presence().starts_with("am."));
         assert!(AgentSubjects::all_agents_task_wildcard("mingqiao").starts_with("am."));
+        assert!(AgentSubjects::all_agents_messages("mingqiao").starts_with("am."));
         assert!(AgentSubjects::all_agents_notes().starts_with("am."));
         assert!(AgentSubjects::council_announce().starts_with("am."));
     }
@@ -304,6 +329,33 @@ mod tests {
             AgentSubjects::all_agents_task_wildcard("mingqiao"),
             "am.agent.*.task.mingqiao.>"
         );
+    }
+
+    // ========================================================================
+    // Message notifications
+    // ========================================================================
+
+    #[test]
+    fn test_message_subject() {
+        assert_eq!(subjects().message(), "am.agent.aleph.message.mingqiao");
+    }
+
+    #[test]
+    fn test_all_agents_messages() {
+        assert_eq!(
+            AgentSubjects::all_agents_messages("mingqiao"),
+            "am.agent.*.message.mingqiao"
+        );
+    }
+
+    #[test]
+    fn test_message_subject_scoped_to_recipient() {
+        let aleph = AgentSubjects::new("aleph", "mingqiao");
+        let luban = AgentSubjects::new("luban", "mingqiao");
+
+        // Messages to different agents produce different subjects
+        assert_ne!(aleph.message(), luban.message());
+        assert_eq!(luban.message(), "am.agent.luban.message.mingqiao");
     }
 
     // ========================================================================
@@ -365,6 +417,7 @@ mod tests {
 
         // All our subjects should start with our prefix
         assert!(s.presence().starts_with(&prefix));
+        assert!(s.message().starts_with(&prefix));
         assert!(s.task_assigned().starts_with(&prefix));
         assert!(s.notes().starts_with(&prefix));
     }

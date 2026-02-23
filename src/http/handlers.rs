@@ -14,7 +14,8 @@ use serde::{Deserialize, Serialize};
 use tracing::warn;
 use uuid::Uuid;
 
-use crate::events::{EventEnvelope, EventPayload, EventType, MessageEvent, Priority};
+use crate::events::{EventEnvelope, EventPayload, EventType, MessageEvent, MessageIntent, Priority};
+use crate::nats::messages::MessageNotification;
 use crate::state::AppState;
 
 // ============================================================================
@@ -138,7 +139,10 @@ pub async fn get_inbox(
                 "id": msg.id,
                 "thread_id": msg.thread_id,
                 "from": msg.from,
+                "subject": msg.subject,
                 "content": msg.content,
+                "intent": msg.intent,
+                "priority": msg.priority,
                 "timestamp": msg.created_at
             })
         })
@@ -265,7 +269,10 @@ pub async fn get_thread(
                 "id": msg.id,
                 "from": msg.from,
                 "to": msg.to,
+                "subject": msg.subject,
                 "content": msg.content,
+                "intent": msg.intent,
+                "priority": msg.priority,
                 "created_at": msg.created_at.to_rfc3339()
             })
         }).collect::<Vec<_>>(),
@@ -282,6 +289,8 @@ pub struct CreateThreadRequest {
     pub content: String,
     #[serde(default = "default_normal")]
     pub priority: String,
+    #[serde(default = "default_inform")]
+    pub intent: String,
     /// Optional thread ID to append to an existing thread instead of creating a new one.
     pub thread_id: Option<String>,
 }
@@ -299,6 +308,18 @@ fn parse_priority(s: &str) -> Priority {
     }
 }
 
+fn parse_intent(s: &str) -> MessageIntent {
+    match s {
+        "discuss" => MessageIntent::Discuss,
+        "request" => MessageIntent::Request,
+        _ => MessageIntent::Inform,
+    }
+}
+
+fn default_inform() -> String {
+    "inform".to_string()
+}
+
 /// Create a new thread
 pub async fn create_thread(
     State(state): State<AppState>,
@@ -308,6 +329,7 @@ pub async fn create_thread(
     let now = Utc::now();
 
     let priority = parse_priority(&req.priority);
+    let intent = parse_intent(&req.intent);
 
     let event = EventEnvelope {
         id: event_id,
@@ -321,6 +343,7 @@ pub async fn create_thread(
             content: req.content,
             thread_id: req.thread_id.clone(),
             priority,
+            intent,
         }),
     };
 
@@ -342,8 +365,31 @@ pub async fn create_thread(
         }
     }
 
+    // Extract message fields for NATS notification before broadcast consumes event
+    let (msg_to, msg_from, msg_subject, msg_intent) = match &event.payload {
+        EventPayload::Message(m) => (m.to.clone(), m.from.clone(), m.subject.clone(), m.intent.clone()),
+        _ => unreachable!(),
+    };
+
     // Broadcast to WebSocket listeners
     state.broadcast_event(event);
+
+    // Publish NATS message notification
+    {
+        let nats_guard = state.nats_client_mut().await;
+        if let Some(ref client) = *nats_guard {
+            let notification = MessageNotification {
+                event_id: event_id.to_string(),
+                from: msg_from,
+                subject: msg_subject,
+                intent: msg_intent,
+                timestamp: now,
+            };
+            if let Err(e) = client.publish_message_notification(&msg_to, &notification).await {
+                warn!("NATS message notification failed: {}", e);
+            }
+        }
+    }
 
     // Thread ID = provided thread_id or event ID (indexer convention when thread_id is None)
     let thread_id = req.thread_id.unwrap_or_else(|| event_id.to_string());
@@ -385,6 +431,8 @@ pub struct ReplyRequest {
     pub content: String,
     #[serde(default = "default_normal")]
     pub priority: String,
+    #[serde(default = "default_inform")]
+    pub intent: String,
     #[serde(default)]
     pub artifact_refs: Vec<String>,
 }
@@ -423,6 +471,7 @@ pub async fn reply_to_thread(
     };
 
     let priority = parse_priority(&req.priority);
+    let intent = parse_intent(&req.intent);
 
     let event = EventEnvelope {
         id: event_id,
@@ -436,6 +485,7 @@ pub async fn reply_to_thread(
             content: req.content,
             thread_id: Some(thread_id.clone()),
             priority,
+            intent,
         }),
     };
 
@@ -457,8 +507,31 @@ pub async fn reply_to_thread(
         }
     }
 
+    // Extract message fields for NATS notification before broadcast consumes event
+    let (reply_to, reply_from, reply_subject, reply_intent) = match &event.payload {
+        EventPayload::Message(m) => (m.to.clone(), m.from.clone(), m.subject.clone(), m.intent.clone()),
+        _ => unreachable!(),
+    };
+
     // Broadcast to WebSocket listeners
     state.broadcast_event(event);
+
+    // Publish NATS message notification
+    {
+        let nats_guard = state.nats_client_mut().await;
+        if let Some(ref client) = *nats_guard {
+            let notification = MessageNotification {
+                event_id: event_id.to_string(),
+                from: reply_from,
+                subject: reply_subject,
+                intent: reply_intent,
+                timestamp: now,
+            };
+            if let Err(e) = client.publish_message_notification(&reply_to, &notification).await {
+                warn!("NATS message notification failed: {}", e);
+            }
+        }
+    }
 
     (
         StatusCode::CREATED,
@@ -501,6 +574,7 @@ pub async fn get_message(
         "to_agent": message_clone.to,
         "content": message_clone.content,
         "priority": message_clone.priority,
+        "intent": message_clone.intent,
         "created_at": message_clone.created_at.to_rfc3339(),
         "read_at": null
     }))
@@ -905,6 +979,7 @@ pub async fn submit_observation(
             content: req.content,
             thread_id: None,
             priority,
+            intent: MessageIntent::Inform,
         }),
     };
 

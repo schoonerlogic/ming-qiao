@@ -13,7 +13,7 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use crate::events::{Priority, TaskStatus};
+use crate::events::{MessageIntent, Priority, TaskStatus};
 
 // ============================================================================
 // Presence (core NATS — ephemeral)
@@ -201,6 +201,34 @@ pub struct SessionNote {
 }
 
 // ============================================================================
+// Message notification (core NATS — ephemeral, notification hint)
+// ============================================================================
+
+/// Lightweight notification hint published when a message targets an agent.
+///
+/// Published to `am.agent.{agent}.message.{project}` using core NATS.
+/// This is NOT the message content itself — the actual message lives in
+/// SurrealDB. This notifies cross-process MCP servers that new mail arrived.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MessageNotification {
+    /// Event ID of the stored message event (UUID v7)
+    pub event_id: String,
+
+    /// Agent who sent the message
+    pub from: String,
+
+    /// Subject line of the message
+    pub subject: String,
+
+    /// Message intent
+    #[serde(default)]
+    pub intent: MessageIntent,
+
+    /// When the message was created
+    pub timestamp: DateTime<Utc>,
+}
+
+// ============================================================================
 // Envelope — wraps any message for NATS transport
 // ============================================================================
 
@@ -215,6 +243,7 @@ pub enum NatsMessage {
     TaskAssignment(TaskAssignment),
     TaskStatusUpdate(TaskStatusUpdate),
     SessionNote(SessionNote),
+    MessageNotification(MessageNotification),
 }
 
 #[cfg(test)]
@@ -471,6 +500,51 @@ mod tests {
 
         let json = serde_json::to_string(&msg).unwrap();
         assert!(json.contains(r#""type":"session_note"#));
+    }
+
+    // ========================================================================
+    // Message Notification
+    // ========================================================================
+
+    #[test]
+    fn test_message_notification_serialization_round_trip() {
+        let mn = MessageNotification {
+            event_id: "019c0000-0000-7000-8000-000000000042".to_string(),
+            from: "thales".to_string(),
+            subject: "Architecture review".to_string(),
+            intent: MessageIntent::Request,
+            timestamp: Utc::now(),
+        };
+
+        let json = serde_json::to_string(&mn).unwrap();
+        let deser: MessageNotification = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(deser.event_id, mn.event_id);
+        assert_eq!(deser.from, "thales");
+        assert_eq!(deser.subject, "Architecture review");
+    }
+
+    #[test]
+    fn test_nats_message_notification_variant() {
+        let msg = NatsMessage::MessageNotification(MessageNotification {
+            event_id: "test-event".to_string(),
+            from: "aleph".to_string(),
+            subject: "Task done".to_string(),
+            intent: MessageIntent::Inform,
+            timestamp: Utc::now(),
+        });
+
+        let json = serde_json::to_string(&msg).unwrap();
+        assert!(json.contains(r#""type":"message_notification"#));
+
+        let deser: NatsMessage = serde_json::from_str(&json).unwrap();
+        match deser {
+            NatsMessage::MessageNotification(mn) => {
+                assert_eq!(mn.from, "aleph");
+                assert_eq!(mn.subject, "Task done");
+            }
+            _ => panic!("Expected MessageNotification variant"),
+        }
     }
 
     // ========================================================================

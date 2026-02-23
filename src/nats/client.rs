@@ -16,7 +16,7 @@ use tokio::sync::broadcast;
 use tokio::task::JoinHandle;
 use tracing::{debug, info, warn};
 
-use crate::nats::messages::{NatsMessage, Presence, SessionNote, TaskAssignment, TaskStatusUpdate};
+use crate::nats::messages::{MessageNotification, NatsMessage, Presence, SessionNote, TaskAssignment, TaskStatusUpdate};
 use crate::nats::streams;
 use crate::nats::subjects::AgentSubjects;
 use crate::state::NatsConfig;
@@ -120,6 +120,30 @@ impl NatsAgentClient {
     pub async fn publish_presence(&self, presence: &Presence) -> Result<(), ClientError> {
         let subject = self.subjects.presence();
         let payload = serde_json::to_vec(&NatsMessage::Presence(presence.clone()))?;
+
+        self.client
+            .publish(subject, payload.into())
+            .await
+            .map_err(|e| ClientError::Publish(e.to_string()))?;
+
+        Ok(())
+    }
+
+    /// Publish a message notification hint via core NATS (ephemeral, no JetStream).
+    ///
+    /// Published to the *recipient's* message subject — not our own.
+    /// Subject: `am.agent.{to_agent}.message.{project}`
+    pub async fn publish_message_notification(
+        &self,
+        to_agent: &str,
+        notification: &MessageNotification,
+    ) -> Result<(), ClientError> {
+        let recipient_subjects =
+            AgentSubjects::new(to_agent, self.subjects.project());
+        let subject = recipient_subjects.message();
+
+        let payload =
+            serde_json::to_vec(&NatsMessage::MessageNotification(notification.clone()))?;
 
         self.client
             .publish(subject, payload.into())

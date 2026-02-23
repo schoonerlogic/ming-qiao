@@ -86,6 +86,10 @@ fn spawn_nats_persistence_bridge(state: &AppState, project: &str) {
                         NatsMessage::SessionNote(sn) => {
                             persistence.store_session_note(sn).await
                         }
+                        NatsMessage::MessageNotification(_) => {
+                            // Ephemeral hint — no persistence needed
+                            Ok(())
+                        }
                     };
                     if let Err(e) = result {
                         warn!("Failed to persist NATS message: {}", e);
@@ -370,8 +374,8 @@ async fn run_mcp_server() -> Result<(), Box<dyn std::error::Error>> {
     let _watcher_dispatcher =
         ming_qiao::watcher::WatcherDispatcher::start(&state, &config.watchers, &config.project).await;
 
-    let mut server = McpServer::with_state(agent_id, state);
-    server.run().await?;
+    let mut server = McpServer::with_state(agent_id, state.clone());
+    server.run(&state).await?;
     Ok(())
 }
 

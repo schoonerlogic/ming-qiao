@@ -6,8 +6,9 @@
 use tokio::task::JoinHandle;
 use tracing::{info, warn};
 
+use crate::events::EventPayload;
 use crate::state::AppState;
-use crate::watcher::actions::{FileAppendAction, WebhookAction};
+use crate::watcher::actions::{FileAppendAction, SystemNotifyAction, WebhookAction};
 use crate::watcher::config::{WatcherAction, WatcherConfig, WatcherRole};
 use crate::watcher::subjects::{matches_subject, subjects_for_event};
 
@@ -15,12 +16,14 @@ use crate::watcher::subjects::{matches_subject, subjects_for_event};
 enum ResolvedAction {
     FileAppend(FileAppendAction),
     Webhook(WebhookAction),
+    SystemNotify(SystemNotifyAction),
 }
 
 struct ResolvedWatcher {
     agent: String,
     subjects: Vec<String>,
     event_types: Vec<String>,
+    recipients: Vec<String>,
     action: ResolvedAction,
 }
 
@@ -69,12 +72,19 @@ impl WatcherDispatcher {
                         w.agent.clone(),
                     ))
                 }
+                WatcherAction::SystemNotify { title } => {
+                    info!("Watcher '{}': system_notify → {}", w.agent, title);
+                    ResolvedAction::SystemNotify(SystemNotifyAction::new(
+                        title.clone(),
+                    ))
+                }
             };
 
             resolved.push(ResolvedWatcher {
                 agent: w.agent.clone(),
                 subjects: w.subjects.clone(),
                 event_types: w.filter.event_types.clone(),
+                recipients: w.filter.recipients.clone(),
                 action,
             });
         }
@@ -107,6 +117,20 @@ impl WatcherDispatcher {
                                 continue;
                             }
 
+                            // Check recipient filter (messages only)
+                            if !watcher.recipients.is_empty() {
+                                if let EventPayload::Message(m) = &event.payload {
+                                    let matches_recipient = watcher.recipients.iter().any(|r| {
+                                        r == &m.to
+                                            || (r == "council" && m.to == "council")
+                                            || (r == "all" && m.to == "all")
+                                    });
+                                    if !matches_recipient {
+                                        continue;
+                                    }
+                                }
+                            }
+
                             // Check subject patterns
                             let matches = event_subjects.iter().any(|subj| {
                                 watcher
@@ -130,6 +154,9 @@ impl WatcherDispatcher {
                                 }
                                 ResolvedAction::Webhook(action) => {
                                     action.send_event(&event).await;
+                                }
+                                ResolvedAction::SystemNotify(action) => {
+                                    action.notify(&event).await;
                                 }
                             }
                         }
@@ -193,6 +220,7 @@ mod tests {
                 content: "world".to_string(),
                 thread_id: None,
                 priority: Priority::Normal,
+                intent: MessageIntent::Inform,
             }),
         }
     }
@@ -264,6 +292,7 @@ mod tests {
             subjects: vec!["am.events.mingqiao".to_string()],
             filter: WatcherFilter {
                 event_types: vec!["decision_recorded".to_string()],
+                recipients: vec![],
             },
             action: WatcherAction::FileAppend {
                 path: path_str.clone(),
@@ -313,5 +342,81 @@ mod tests {
 
         warn_observer_write("laozi-jung", &watchers);
         warn_observer_write("aleph", &watchers); // no match, also doesn't panic
+    }
+
+    fn make_message_event_to(to: &str) -> EventEnvelope {
+        EventEnvelope {
+            id: Uuid::now_v7(),
+            timestamp: Utc::now(),
+            event_type: EventType::MessageSent,
+            agent_id: "thales".to_string(),
+            payload: EventPayload::Message(MessageEvent {
+                from: "thales".to_string(),
+                to: to.to_string(),
+                subject: "test".to_string(),
+                content: "hello".to_string(),
+                thread_id: None,
+                priority: Priority::Normal,
+                intent: MessageIntent::Request,
+            }),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_dispatcher_recipient_filter() {
+        let dir = tempfile::tempdir().unwrap();
+        let aleph_path = dir.path().join("aleph.jsonl");
+        let aleph_str = aleph_path.to_str().unwrap().to_string();
+
+        let state = AppState::new().await;
+        let watchers = vec![WatcherConfig {
+            agent: "aleph-notify".to_string(),
+            role: WatcherRole::Observer,
+            subjects: vec!["am.events.mingqiao".to_string()],
+            filter: WatcherFilter {
+                event_types: vec!["message_sent".to_string()],
+                recipients: vec!["aleph".to_string(), "council".to_string(), "all".to_string()],
+            },
+            action: WatcherAction::FileAppend {
+                path: aleph_str.clone(),
+            },
+        }];
+
+        let _dispatcher = WatcherDispatcher::start(&state, &watchers, "mingqiao")
+            .await
+            .expect("dispatcher should start");
+
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        // Message to luban — should NOT match aleph's watcher
+        state.broadcast_event(make_message_event_to("luban"));
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+        let content = tokio::fs::read_to_string(&aleph_path).await.unwrap_or_default();
+        assert!(content.is_empty(), "Expected no lines for luban message, got: {}", content);
+
+        // Message to aleph — should match
+        state.broadcast_event(make_message_event_to("aleph"));
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+        let content = tokio::fs::read_to_string(&aleph_path).await.unwrap();
+        let lines: Vec<&str> = content.lines().collect();
+        assert_eq!(lines.len(), 1, "Expected 1 line for aleph message");
+
+        // Message to council — should also match
+        state.broadcast_event(make_message_event_to("council"));
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+        let content = tokio::fs::read_to_string(&aleph_path).await.unwrap();
+        let lines: Vec<&str> = content.lines().collect();
+        assert_eq!(lines.len(), 2, "Expected 2 lines after council message");
+
+        // Message to all — should also match
+        state.broadcast_event(make_message_event_to("all"));
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+        let content = tokio::fs::read_to_string(&aleph_path).await.unwrap();
+        let lines: Vec<&str> = content.lines().collect();
+        assert_eq!(lines.len(), 3, "Expected 3 lines after 'all' message");
     }
 }
