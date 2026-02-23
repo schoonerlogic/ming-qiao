@@ -1,6 +1,10 @@
 # Ming-Qiao Configuration
 # Copy to ming-qiao.toml and customize
 
+# Project identifier for NATS subject routing.
+# Used as the {project} token in NATS subjects (e.g. am.events.{project}).
+project = "mingqiao"
+
 [server]
 # HTTP server settings
 host = "127.0.0.1"
@@ -84,6 +88,18 @@ summarize = true       # Summarize long threads
 extract_tags = true    # Extract keywords/tags
 classify_priority = true  # Suggest priority
 extract_decisions = false  # Auto-extract decisions (experimental)
+
+[nats]
+# NATS messaging for real-time agent coordination
+# Requires: brew install nats-server && nats-server --jetstream
+#
+# Subject hierarchy and JetStream streams are defined in code
+# (nats::subjects and nats::streams modules). Only connection
+# parameters are configured here.
+enabled = false
+
+# NATS server URL
+url = "nats://localhost:4222"
 
 [logging]
 # Log level: "trace", "debug", "info", "warn", "error"

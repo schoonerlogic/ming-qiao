@@ -57,6 +57,28 @@ pub enum TaskStatus {
     Cancelled,
 }
 
+/// Intent behind a message — signals how the recipient should treat it
+///
+/// Used by the hint system to categorize inbox messages by urgency.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MessageIntent {
+    /// Team discussion — respond when ready
+    Discuss,
+
+    /// Needs a response — action required
+    Request,
+
+    /// FYI / status update — no response needed
+    Inform,
+}
+
+impl Default for MessageIntent {
+    fn default() -> Self {
+        MessageIntent::Inform
+    }
+}
+
 /// Availability and working state of an agent
 ///
 /// Indicates whether an agent can accept new tasks.
@@ -134,6 +156,20 @@ pub enum EventType {
     StatusChanged,
 }
 
+impl std::fmt::Display for EventType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::MessageSent => write!(f, "message_sent"),
+            Self::MessageReceived => write!(f, "message_received"),
+            Self::ArtifactShared => write!(f, "artifact_shared"),
+            Self::DecisionRecorded => write!(f, "decision_recorded"),
+            Self::TaskAssigned => write!(f, "task_assigned"),
+            Self::TaskCompleted => write!(f, "task_completed"),
+            Self::StatusChanged => write!(f, "status_changed"),
+        }
+    }
+}
+
 /// Event payloads contain the specific data for each event type
 ///
 /// The payload variant must match the event_type in the envelope.
@@ -185,6 +221,10 @@ pub struct MessageEvent {
     /// Message priority level
     #[serde(default)]
     pub priority: Priority,
+
+    /// Message intent — signals how the recipient should treat this message
+    #[serde(default)]
+    pub intent: MessageIntent,
 }
 
 /// Data for artifact sharing events

@@ -1,25 +1,29 @@
 //! Application state shared across MCP and HTTP servers
 //!
-//! Provides thread-safe access to the event log, configuration, and in-memory
-//! caches for quick lookups.
+//! Provides thread-safe access to the persistence layer, configuration, and
+//! in-memory caches for quick lookups.
 
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::{broadcast, RwLock};
 
-use crate::db::Indexer;
+use crate::db::{Indexer, Persistence};
 use crate::events::EventEnvelope;
 use crate::merlin::MerlinNotifier;
+use crate::nats::{NatsAgentClient, NatsMessage};
 use crate::state::config::{Config, ObservationMode};
 
 /// Broadcast channel capacity for event notifications
 const EVENT_CHANNEL_CAPACITY: usize = 256;
 
+/// Broadcast channel capacity for NATS messages from other agents
+const NATS_CHANNEL_CAPACITY: usize = 256;
+
 /// Shared application state
 ///
 /// This is the central state object that both MCP and HTTP servers use.
-/// It provides thread-safe access to configuration and will provide access
-/// to the event log once Luban completes the persistence layer.
+/// It provides thread-safe access to configuration, the SurrealDB persistence
+/// layer, and in-memory materialized views via the Indexer.
 #[derive(Clone)]
 pub struct AppState {
     inner: Arc<AppStateInner>,
@@ -29,7 +33,7 @@ struct AppStateInner {
     /// Runtime configuration (can be updated)
     config: RwLock<Config>,
 
-    /// Data directory path
+    /// Data directory path (for artifacts, etc.)
     data_dir: PathBuf,
 
     /// Agent ID for this instance (set from environment)
@@ -38,66 +42,64 @@ struct AppStateInner {
     /// Broadcast channel for real-time event notifications
     event_tx: broadcast::Sender<EventEnvelope>,
 
-    /// Database indexer for O(1) queries (materialized views from event log)
+    /// SurrealDB persistence layer (always available — in-memory)
+    persistence: Persistence,
+
+    /// Database indexer for O(1) queries (materialized views from events)
     indexer: RwLock<Indexer>,
 
     /// Merlin notification system
     merlin_notifier: Arc<MerlinNotifier>,
+
+    /// NATS agent client (None if disabled or unreachable)
+    nats_client: RwLock<Option<NatsAgentClient>>,
+
+    /// Broadcast channel for NATS messages received from other agents
+    nats_tx: broadcast::Sender<NatsMessage>,
 }
 
 impl AppState {
-    /// Create a new application state with default configuration
-    pub fn new() -> Self {
-        Self::with_config(Config::default())
+    /// Create application state with default configuration.
+    ///
+    /// Initializes SurrealDB in-memory persistence and an empty Indexer.
+    pub async fn new() -> Self {
+        Self::with_config(Config::default()).await
     }
 
-    /// Create application state with custom configuration
-    pub fn with_config(config: Config) -> Self {
+    /// Create application state with custom configuration.
+    ///
+    /// Initializes SurrealDB in-memory persistence and an empty Indexer.
+    pub async fn with_config(config: Config) -> Self {
         let data_dir = PathBuf::from(&config.data_dir);
         let (event_tx, _) = broadcast::channel(EVENT_CHANNEL_CAPACITY);
+        let (nats_tx, _) = broadcast::channel(NATS_CHANNEL_CAPACITY);
 
-        // Create indexer with events path
-        let events_path = data_dir.join("events.jsonl");
+        let persistence = Persistence::connect(
+            &config.database.url,
+            config.database.username.as_deref(),
+            config.database.password.as_deref(),
+        )
+        .await
+        .expect("Failed to connect to SurrealDB");
 
-        // Try to create indexer - if event log doesn't exist, that's OK
-        // The indexer will be empty until refresh_indexer() is called
-        let indexer = if events_path.exists() {
-            // Event log exists - create indexer
-            match Indexer::new(&events_path) {
-                Ok(idx) => idx,
-                Err(e) => {
-                    eprintln!(
-                        "Warning: Failed to create indexer from {}: {}. Indexer will start empty.",
-                        events_path.display(),
-                        e
-                    );
-                    // Create empty indexer anyway
-                    Indexer::new(&events_path).unwrap_or_else(|_| {
-                        // This should work now since the file exists
-                        panic!("Failed to create indexer for existing event log")
-                    })
+        // Hydrate Indexer from SurrealDB (replay stored events for cold-start consistency)
+        let mut indexer = Indexer::new();
+        match persistence.get_all_events().await {
+            Ok(events) => {
+                let count = events.len();
+                for event in &events {
+                    if let Err(e) = indexer.process_event(event) {
+                        tracing::warn!("Indexer hydration skipped event {}: {}", event.id, e);
+                    }
+                }
+                if count > 0 {
+                    tracing::info!("Indexer hydrated with {} events from SurrealDB", count);
                 }
             }
-        } else {
-            // Event log doesn't exist yet - indexer will be empty
-            eprintln!(
-                "Info: Event log not found at {}. Indexer will be empty until events are written.",
-                events_path.display()
-            );
-            // Create empty indexer - EventReader will fail but that's OK
-            // We'll catch up when refresh_indexer() is called
-            Indexer::new(&events_path).unwrap_or_else(|_| {
-                // File doesn't exist, create a default empty indexer
-                // This is a workaround - we create the file first
-                if let Some(parent) = events_path.parent() {
-                    let _ = std::fs::create_dir_all(parent);
-                }
-                // Create empty file
-                let _ = std::fs::File::create(&events_path);
-                // Now try again
-                Indexer::new(&events_path).expect("Failed to create indexer after creating file")
-            })
-        };
+            Err(e) => {
+                tracing::warn!("Indexer hydration failed, starting empty: {}", e);
+            }
+        }
 
         Self {
             inner: Arc::new(AppStateInner {
@@ -105,18 +107,21 @@ impl AppState {
                 data_dir,
                 agent_id: std::env::var("MING_QIAO_AGENT_ID").ok(),
                 event_tx,
+                persistence,
                 indexer: RwLock::new(indexer),
                 merlin_notifier: Arc::new(MerlinNotifier::new()),
+                nats_client: RwLock::new(None),
+                nats_tx,
             }),
         }
     }
 
-    /// Load configuration from file and create state
-    pub fn load(
+    /// Load configuration from file and create state.
+    pub async fn load(
         config_path: impl AsRef<std::path::Path>,
     ) -> Result<Self, crate::state::config::ConfigError> {
         let config = Config::load(config_path)?;
-        Ok(Self::with_config(config))
+        Ok(Self::with_config(config).await)
     }
 
     /// Get the current observation mode
@@ -148,11 +153,6 @@ impl AppState {
         &self.inner.data_dir
     }
 
-    /// Get the events file path
-    pub fn events_path(&self) -> PathBuf {
-        self.inner.data_dir.join("events.jsonl")
-    }
-
     /// Get the artifacts directory path
     pub fn artifacts_path(&self) -> PathBuf {
         self.inner.data_dir.join("artifacts")
@@ -170,57 +170,66 @@ impl AppState {
         Ok(())
     }
 
+    /// Get a reference to the persistence layer.
+    pub fn persistence(&self) -> &Persistence {
+        &self.inner.persistence
+    }
+
     /// Broadcast an event to all connected WebSocket clients
-    ///
-    /// Returns the number of receivers that received the event.
-    /// Returns 0 if no receivers are connected (this is not an error).
     pub fn broadcast_event(&self, event: EventEnvelope) -> usize {
-        // send() returns Err if there are no receivers, which is fine
         self.inner.event_tx.send(event).unwrap_or(0)
     }
 
     /// Get the Merlin notifier
-    ///
-    /// Used for sending notifications to the human operator.
     pub fn merlin_notifier(&self) -> &Arc<MerlinNotifier> {
         &self.inner.merlin_notifier
     }
 
     /// Subscribe to the event broadcast channel
-    ///
-    /// Returns a receiver that will receive all events broadcast after subscription.
-    /// Note: Events broadcast before subscription are not received.
     pub fn subscribe_events(&self) -> broadcast::Receiver<EventEnvelope> {
         self.inner.event_tx.subscribe()
     }
 
     /// Get read access to the indexer
-    ///
-    /// Returns a read lock guard for the indexer. Use this to query the materialized views.
     pub async fn indexer(&self) -> tokio::sync::RwLockReadGuard<'_, Indexer> {
         self.inner.indexer.read().await
     }
 
     /// Get write access to the indexer
-    ///
-    /// Returns a write lock guard for the indexer. Use this to refresh or modify the indexer.
     pub async fn indexer_mut(&self) -> tokio::sync::RwLockWriteGuard<'_, Indexer> {
         self.inner.indexer.write().await
     }
 
-    /// Refresh the indexer by catching up with new events from the log
-    ///
-    /// This will process all new events since the last refresh and update the materialized views.
-    /// Returns the number of events processed, or an error if refresh fails.
-    pub async fn refresh_indexer(&self) -> Result<usize, crate::db::IndexerError> {
-        let mut indexer = self.inner.indexer.write().await;
-        indexer.catch_up()
+    /// Store a connected NATS agent client
+    pub async fn set_nats_client(&self, client: NatsAgentClient) {
+        *self.inner.nats_client.write().await = Some(client);
     }
-}
 
-impl Default for AppState {
-    fn default() -> Self {
-        Self::new()
+    /// Get write access to the NATS client
+    pub async fn nats_client_mut(
+        &self,
+    ) -> tokio::sync::RwLockWriteGuard<'_, Option<NatsAgentClient>> {
+        self.inner.nats_client.write().await
+    }
+
+    /// Check if NATS is connected
+    pub async fn nats_connected(&self) -> bool {
+        self.inner.nats_client.read().await.is_some()
+    }
+
+    /// Get the broadcast sender for injecting events into the local bus
+    pub fn event_sender(&self) -> broadcast::Sender<EventEnvelope> {
+        self.inner.event_tx.clone()
+    }
+
+    /// Get the broadcast sender for NATS messages from other agents.
+    pub fn nats_message_sender(&self) -> broadcast::Sender<NatsMessage> {
+        self.inner.nats_tx.clone()
+    }
+
+    /// Subscribe to NATS messages from other agents.
+    pub fn subscribe_nats_messages(&self) -> broadcast::Receiver<NatsMessage> {
+        self.inner.nats_tx.subscribe()
     }
 }
 
@@ -230,13 +239,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_default_state() {
-        let state = AppState::new();
+        let state = AppState::new().await;
         assert_eq!(state.mode().await, ObservationMode::Passive);
     }
 
     #[tokio::test]
     async fn test_set_mode() {
-        let state = AppState::new();
+        let state = AppState::new().await;
         assert_eq!(state.mode().await, ObservationMode::Passive);
 
         state.set_mode(ObservationMode::Gated).await;
@@ -245,7 +254,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_update_config() {
-        let state = AppState::new();
+        let state = AppState::new().await;
 
         state
             .update_config(|config| {
@@ -257,22 +266,28 @@ mod tests {
         assert_eq!(config.port, 9999);
     }
 
-    #[test]
-    fn test_paths() {
-        let state = AppState::new();
-        assert_eq!(state.events_path(), PathBuf::from("data/events.jsonl"));
+    #[tokio::test]
+    async fn test_paths() {
+        let state = AppState::new().await;
         assert_eq!(state.artifacts_path(), PathBuf::from("data/artifacts"));
     }
 
-    #[test]
-    fn test_custom_data_dir() {
+    #[tokio::test]
+    async fn test_custom_data_dir() {
         let mut config = Config::default();
         config.data_dir = "/tmp/ming-qiao-test".to_string();
 
-        let state = AppState::with_config(config);
+        let state = AppState::with_config(config).await;
         assert_eq!(
-            state.events_path(),
-            PathBuf::from("/tmp/ming-qiao-test/events.jsonl")
+            state.artifacts_path(),
+            PathBuf::from("/tmp/ming-qiao-test/artifacts")
         );
+    }
+
+    #[tokio::test]
+    async fn test_persistence_accessible() {
+        let state = AppState::new().await;
+        // Persistence should be available and working
+        let _persistence = state.persistence();
     }
 }

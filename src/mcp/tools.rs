@@ -7,14 +7,13 @@ use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
-use std::path::PathBuf;
-use std::sync::Arc;
 use uuid::Uuid;
 
 use crate::events::{
-    EventEnvelope, EventPayload, EventReader, EventType, EventWriter, MessageEvent, Priority,
+    EventEnvelope, EventPayload, EventType, MessageEvent, MessageIntent, Priority,
 };
 use crate::mcp::protocol::{CallToolResult, McpError};
+use crate::nats::messages::MessageNotification;
 use crate::state::AppState;
 
 /// Tool definition as exposed to MCP clients
@@ -35,73 +34,31 @@ pub struct ToolDefinition {
 pub struct ToolRegistry {
     /// Tool definitions by name
     definitions: HashMap<String, ToolDefinition>,
-    /// Event writer for persisting events
-    writer: Option<Arc<EventWriter>>,
-    /// Path to event log for reading
-    events_path: PathBuf,
-    /// App state for broadcasting events (optional)
-    app_state: Option<AppState>,
+    /// App state (provides persistence, indexer, broadcasting)
+    state: AppState,
 }
 
 impl ToolRegistry {
-    /// Default event log path
-    const DEFAULT_EVENTS_PATH: &'static str = "data/events.jsonl";
-
-    /// Create a new tool registry with all ming-qiao tools
-    pub fn new() -> Self {
-        Self::with_path(Self::DEFAULT_EVENTS_PATH)
-    }
-
-    /// Create a tool registry with a custom event log path
-    pub fn with_path<P: Into<PathBuf>>(events_path: P) -> Self {
-        let events_path = events_path.into();
-        let mut definitions = HashMap::new();
-
-        // Register all tools
-        for tool in Self::all_tools() {
-            definitions.insert(tool.name.clone(), tool);
-        }
-
-        // Create writer (may fail if directory can't be created, handle gracefully)
-        let writer = EventWriter::new_with_path(&events_path).ok().map(Arc::new);
-
-        Self {
-            definitions,
-            writer,
-            events_path,
-            app_state: None,
-        }
-    }
-
-    /// Create a tool registry with AppState for event broadcasting
+    /// Create a tool registry backed by AppState.
+    ///
+    /// All event writes go through `state.persistence()`, all reads through
+    /// `state.indexer()`. Events are also fed to the Indexer after storing.
     pub fn with_state(state: AppState) -> Self {
-        let events_path = state.events_path();
         let mut definitions = HashMap::new();
-
-        // Register all tools
         for tool in Self::all_tools() {
             definitions.insert(tool.name.clone(), tool);
         }
-
-        // Create writer
-        let writer = EventWriter::new_with_path(&events_path).ok().map(Arc::new);
-
-        Self {
-            definitions,
-            writer,
-            events_path,
-            app_state: Some(state),
-        }
-    }
-
-    /// Check if the registry has an active event writer
-    pub fn has_writer(&self) -> bool {
-        self.writer.is_some()
+        Self { definitions, state }
     }
 
     /// List all available tools
     pub fn list(&self) -> Vec<&ToolDefinition> {
         self.definitions.values().collect()
+    }
+
+    /// Get a reference to the shared application state
+    pub fn state(&self) -> &AppState {
+        &self.state
     }
 
     /// Call a tool by name
@@ -115,7 +72,6 @@ impl ToolRegistry {
             return Err(McpError::NotFound(format!("Tool not found: {}", name)));
         }
 
-        // Dispatch to tool handler
         match name {
             "send_message" => self.tool_send_message(arguments, agent_id).await,
             "check_messages" => self.tool_check_messages(arguments, agent_id).await,
@@ -125,6 +81,10 @@ impl ToolRegistry {
             "get_decision" => self.tool_get_decision(arguments, agent_id).await,
             "list_threads" => self.tool_list_threads(arguments, agent_id).await,
             "record_decision" => self.tool_record_decision(arguments, agent_id).await,
+            "create_thread" => self.tool_create_thread(arguments, agent_id).await,
+            "read_inbox" => self.tool_read_inbox(arguments, agent_id).await,
+            "reply_to_thread" => self.tool_reply_to_thread(arguments, agent_id).await,
+            "read_thread" => self.tool_read_thread(arguments, agent_id).await,
             _ => Err(McpError::NotFound(format!("Tool not found: {}", name))),
         }
     }
@@ -140,6 +100,11 @@ impl ToolRegistry {
             Self::def_get_decision(),
             Self::def_list_threads(),
             Self::def_record_decision(),
+            // Council tools (explicit agent identity)
+            Self::def_create_thread(),
+            Self::def_read_inbox(),
+            Self::def_reply_to_thread(),
+            Self::def_read_thread(),
         ]
     }
 
@@ -175,6 +140,12 @@ impl ToolRegistry {
                         "enum": ["low", "normal", "high", "critical"],
                         "default": "normal",
                         "description": "Message priority"
+                    },
+                    "intent": {
+                        "type": "string",
+                        "enum": ["discuss", "request", "inform"],
+                        "default": "inform",
+                        "description": "Message intent: discuss (respond when ready), request (action needed), inform (FYI)"
                     }
                 },
                 "required": ["to", "subject", "content"]
@@ -313,10 +284,18 @@ impl ToolRegistry {
     fn def_list_threads() -> ToolDefinition {
         ToolDefinition {
             name: "list_threads".to_string(),
-            description: "List active and recent threads".to_string(),
+            description: "List conversation threads, optionally filtered by participant agent.".to_string(),
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": {
+                    "agent": {
+                        "type": "string",
+                        "description": "Filter threads by participant agent (e.g., 'thales', 'aleph')"
+                    },
+                    "participant": {
+                        "type": "string",
+                        "description": "Alias for 'agent' — filter by participant"
+                    },
                     "status": {
                         "type": "string",
                         "enum": ["active", "paused", "blocked", "resolved", "archived", "all"],
@@ -325,10 +304,6 @@ impl ToolRegistry {
                     "limit": {
                         "type": "integer",
                         "default": 10
-                    },
-                    "participant": {
-                        "type": "string",
-                        "description": "Filter by participant agent"
                     }
                 }
             }),
@@ -370,33 +345,167 @@ impl ToolRegistry {
     }
 
     // ========================================================================
+    // Council Tool Definitions (explicit agent identity for multi-agent use)
+    // ========================================================================
+
+    fn def_create_thread() -> ToolDefinition {
+        ToolDefinition {
+            name: "create_thread".to_string(),
+            description: "Create a new conversation thread between agents. Persists to SurrealDB, updates the indexer, and broadcasts to WebSocket listeners.".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "from_agent": {
+                        "type": "string",
+                        "description": "Sending agent identifier (e.g., 'thales', 'aleph', 'luban')"
+                    },
+                    "to_agent": {
+                        "type": "string",
+                        "description": "Receiving agent identifier"
+                    },
+                    "subject": {
+                        "type": "string",
+                        "description": "Thread subject (convention: am.agent.council.*)"
+                    },
+                    "content": {
+                        "type": "string",
+                        "description": "Message body (markdown supported)"
+                    },
+                    "priority": {
+                        "type": "string",
+                        "enum": ["low", "normal", "high", "critical"],
+                        "default": "normal",
+                        "description": "Message priority"
+                    },
+                    "intent": {
+                        "type": "string",
+                        "enum": ["discuss", "request", "inform"],
+                        "default": "inform",
+                        "description": "Message intent: discuss (respond when ready), request (action needed), inform (FYI)"
+                    }
+                },
+                "required": ["from_agent", "to_agent", "subject", "content"]
+            }),
+        }
+    }
+
+    fn def_read_inbox() -> ToolDefinition {
+        ToolDefinition {
+            name: "read_inbox".to_string(),
+            description: "Read pending messages for an agent. Returns all messages addressed to the specified agent.".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "agent": {
+                        "type": "string",
+                        "description": "Agent whose inbox to read (e.g., 'thales', 'aleph', 'luban')"
+                    }
+                },
+                "required": ["agent"]
+            }),
+        }
+    }
+
+    fn def_reply_to_thread() -> ToolDefinition {
+        ToolDefinition {
+            name: "reply_to_thread".to_string(),
+            description: "Reply within an existing thread. The recipient and subject are inferred from the thread's participants.".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "thread_id": {
+                        "type": "string",
+                        "description": "Thread to reply in (UUID)"
+                    },
+                    "from_agent": {
+                        "type": "string",
+                        "description": "Sending agent identifier"
+                    },
+                    "content": {
+                        "type": "string",
+                        "description": "Reply body (markdown supported)"
+                    },
+                    "priority": {
+                        "type": "string",
+                        "enum": ["low", "normal", "high", "critical"],
+                        "default": "normal",
+                        "description": "Message priority"
+                    },
+                    "intent": {
+                        "type": "string",
+                        "enum": ["discuss", "request", "inform"],
+                        "default": "inform",
+                        "description": "Message intent: discuss (respond when ready), request (action needed), inform (FYI)"
+                    }
+                },
+                "required": ["thread_id", "from_agent", "content"]
+            }),
+        }
+    }
+
+    fn def_read_thread() -> ToolDefinition {
+        ToolDefinition {
+            name: "read_thread".to_string(),
+            description: "Read all messages in a specific thread, ordered chronologically.".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "thread_id": {
+                        "type": "string",
+                        "description": "Thread to read (UUID)"
+                    }
+                },
+                "required": ["thread_id"]
+            }),
+        }
+    }
+
+    // ========================================================================
     // Tool Implementations
     // ========================================================================
 
-    /// Helper to write an event to the log and broadcast it
-    fn write_event(&self, event: &EventEnvelope) -> Result<String, McpError> {
-        let writer = self
-            .writer
-            .as_ref()
-            .ok_or_else(|| McpError::Internal("Event writer not available".to_string()))?;
+    /// Write an event: persist to SurrealDB, feed to Indexer, broadcast, notify.
+    async fn write_event(&self, event: &EventEnvelope) -> Result<String, McpError> {
+        // 1. Persist to SurrealDB
+        let event_id = self
+            .state
+            .persistence()
+            .store_event(event)
+            .await
+            .map_err(|e| McpError::Internal(format!("Failed to store event: {}", e)))?;
 
-        let event_id = writer
-            .append(event)
-            .map_err(|e| McpError::Internal(format!("Failed to write event: {}", e)))?;
+        // 2. Feed to Indexer (materialized views)
+        {
+            let mut indexer = self.state.indexer_mut().await;
+            if let Err(e) = indexer.process_event(event) {
+                tracing::warn!("Indexer failed to process event {}: {}", event_id, e);
+            }
+        }
 
-        // Broadcast to WebSocket clients and send Merlin notifications if app_state is available
-        if let Some(ref state) = self.app_state {
-            state.broadcast_event(event.clone());
-            state.merlin_notifier().notify(event.clone(), state);
+        // 3. Broadcast to WebSocket clients + Merlin notifications
+        self.state.broadcast_event(event.clone());
+        self.state.merlin_notifier().notify(event.clone(), &self.state);
+
+        // 4. Publish NATS message notification for MessageSent events
+        if event.event_type == EventType::MessageSent {
+            if let EventPayload::Message(ref msg) = event.payload {
+                let notification = MessageNotification {
+                    event_id: event_id.clone(),
+                    from: msg.from.clone(),
+                    subject: msg.subject.clone(),
+                    intent: msg.intent.clone(),
+                    timestamp: event.timestamp,
+                };
+                let nats_guard = self.state.nats_client_mut().await;
+                if let Some(ref client) = *nats_guard {
+                    if let Err(e) = client.publish_message_notification(&msg.to, &notification).await {
+                        tracing::warn!("NATS message notification failed: {}", e);
+                    }
+                }
+            }
         }
 
         Ok(event_id)
-    }
-
-    /// Helper to get an event reader
-    fn get_reader(&self) -> Result<EventReader, McpError> {
-        EventReader::open(&self.events_path)
-            .map_err(|e| McpError::Internal(format!("Failed to open event log: {}", e)))
     }
 
     /// Helper to parse priority from string
@@ -406,6 +515,15 @@ impl ToolRegistry {
             Some("high") => Priority::High,
             Some("critical") => Priority::Critical,
             _ => Priority::Normal,
+        }
+    }
+
+    /// Helper to parse message intent from string
+    fn parse_intent(s: Option<&str>) -> MessageIntent {
+        match s {
+            Some("discuss") => MessageIntent::Discuss,
+            Some("request") => MessageIntent::Request,
+            _ => MessageIntent::Inform,
         }
     }
 
@@ -434,8 +552,8 @@ impl ToolRegistry {
             .and_then(|v| v.as_str())
             .map(String::from);
         let priority = Self::parse_priority(args.get("priority").and_then(|v| v.as_str()));
+        let intent = Self::parse_intent(args.get("intent").and_then(|v| v.as_str()));
 
-        // Create the event
         let event = EventEnvelope {
             id: Uuid::now_v7(),
             timestamp: Utc::now(),
@@ -448,11 +566,11 @@ impl ToolRegistry {
                 content: content.to_string(),
                 thread_id,
                 priority,
+                intent,
             }),
         };
 
-        // Write to event log
-        let event_id = self.write_event(&event)?;
+        let event_id = self.write_event(&event).await?;
 
         Ok(CallToolResult::text(format!(
             "Message sent successfully.\n\n**Event ID:** {}\n**From:** {}\n**To:** {}\n**Subject:** {}",
@@ -465,79 +583,51 @@ impl ToolRegistry {
         args: Value,
         agent_id: &str,
     ) -> Result<CallToolResult, McpError> {
-        let unread_only = args
+        let _unread_only = args
             .get("unread_only")
             .and_then(|v| v.as_bool())
             .unwrap_or(true);
         let from_agent = args.get("from_agent").and_then(|v| v.as_str());
         let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(10) as usize;
 
-        // Read events from the log
-        let reader = match self.get_reader() {
-            Ok(r) => r,
-            Err(_) => {
-                return Ok(CallToolResult::text(format!(
-                    "## Inbox for {}\n\nNo messages yet.",
-                    agent_id
-                )));
-            }
+        // Use Indexer for O(1) lookups — clone messages to release the lock
+        let mut messages: Vec<_> = {
+            let indexer = self.state.indexer().await;
+            indexer
+                .get_messages_to_agent(agent_id)
+                .into_iter()
+                .filter(|msg| {
+                    if let Some(from) = from_agent {
+                        msg.from == from
+                    } else {
+                        true
+                    }
+                })
+                .take(limit)
+                .cloned()
+                .collect()
         };
 
-        let mut messages = Vec::new();
-        let replay = reader
-            .replay()
-            .map_err(|e| McpError::Internal(format!("Failed to read events: {}", e)))?;
+        // Sort by timestamp (most recent first)
+        messages.sort_by(|a, b| b.created_at.cmp(&a.created_at));
 
-        for event_result in replay {
-            let event = match event_result {
-                Ok(e) => e,
-                Err(_) => continue,
-            };
-
-            // Filter for messages sent to this agent
-            if event.event_type != EventType::MessageSent {
-                continue;
-            }
-
-            if let EventPayload::Message(ref msg) = event.payload {
-                // Check if message is for this agent (or broadcast)
-                if msg.to != agent_id && msg.to != "all" {
-                    continue;
-                }
-
-                // Filter by sender if specified
-                if let Some(from) = from_agent {
-                    if msg.from != from {
-                        continue;
-                    }
-                }
-
-                messages.push((event.id.to_string(), event.timestamp, msg.clone()));
-
-                if messages.len() >= limit {
-                    break;
-                }
-            }
-        }
-
-        // Format output
         if messages.is_empty() {
             return Ok(CallToolResult::text(format!(
-                "## Inbox for {}\n\nNo messages{}.",
-                agent_id,
-                if unread_only { " (unread)" } else { "" }
+                "## Inbox for {}\n\nNo messages.",
+                agent_id
             )));
         }
 
         let mut output = format!("## Inbox for {}\n\n", agent_id);
-        for (id, timestamp, msg) in messages {
+        for msg in messages {
             output.push_str(&format!(
-                "### {} [{}]\n**From:** {} | **Priority:** {:?}\n**ID:** {}\n\n---\n\n",
+                "### {} [{}]\n**From:** {} | **Priority:** {:?} | **Intent:** {:?}\n**ID:** {}\n\n---\n\n",
                 msg.subject,
-                timestamp.format("%Y-%m-%d %H:%M"),
+                msg.created_at.format("%Y-%m-%d %H:%M"),
                 msg.from,
                 msg.priority,
-                id
+                msg.intent,
+                msg.id
             ));
         }
 
@@ -554,37 +644,26 @@ impl ToolRegistry {
             .and_then(|v| v.as_str())
             .ok_or_else(|| McpError::InvalidInput("message_id required".to_string()))?;
 
-        // Read events to find the message
-        let reader = self.get_reader()?;
-        let replay = reader
-            .replay()
-            .map_err(|e| McpError::Internal(format!("Failed to read events: {}", e)))?;
+        // Use Indexer for O(1) lookup
+        let indexer = self.state.indexer().await;
+        let msg = indexer.get_message(message_id);
 
-        for event_result in replay {
-            let event = match event_result {
-                Ok(e) => e,
-                Err(_) => continue,
-            };
-
-            if event.id.to_string() == message_id {
-                if let EventPayload::Message(msg) = event.payload {
-                    return Ok(CallToolResult::text(format!(
-                        "## {}\n\n**From:** {}\n**To:** {}\n**Date:** {}\n**Priority:** {:?}\n\n---\n\n{}",
-                        msg.subject,
-                        msg.from,
-                        msg.to,
-                        event.timestamp.format("%Y-%m-%d %H:%M:%S UTC"),
-                        msg.priority,
-                        msg.content
-                    )));
-                }
-            }
+        match msg {
+            Some(msg) => Ok(CallToolResult::text(format!(
+                "## {}\n\n**From:** {}\n**To:** {}\n**Date:** {}\n**Priority:** {:?}\n**Intent:** {:?}\n\n---\n\n{}",
+                msg.subject,
+                msg.from,
+                msg.to,
+                msg.created_at.format("%Y-%m-%d %H:%M:%S UTC"),
+                msg.priority,
+                msg.intent,
+                msg.content
+            ))),
+            None => Ok(CallToolResult::text(format!(
+                "Message not found: {}",
+                message_id
+            ))),
         }
-
-        Ok(CallToolResult::text(format!(
-            "Message not found: {}",
-            message_id
-        )))
     }
 
     async fn tool_request_review(
@@ -605,7 +684,6 @@ impl ToolRegistry {
         let context = args.get("context").and_then(|v| v.as_str()).unwrap_or("");
         let priority = Self::parse_priority(args.get("priority").and_then(|v| v.as_str()));
 
-        // Create a message event to Thales requesting review
         let content = format!(
             "**Review Request**\n\n**Artifact:** {}\n\n**Question:** {}\n\n**Context:** {}",
             artifact_path, question, context
@@ -623,10 +701,11 @@ impl ToolRegistry {
                 content,
                 thread_id: None,
                 priority,
+                intent: MessageIntent::Request,
             }),
         };
 
-        let event_id = self.write_event(&event)?;
+        let event_id = self.write_event(&event).await?;
 
         Ok(CallToolResult::text(format!(
             "Review requested from Thales.\n\n**Event ID:** {}\n**Artifact:** {}\n**Question:** {}",
@@ -651,7 +730,6 @@ impl ToolRegistry {
             .and_then(|v| v.as_str())
             .unwrap_or("Shared artifact");
 
-        // Simple checksum placeholder (would compute actual SHA-256 in production)
         let checksum = format!("sha256:{}", Uuid::now_v7());
 
         let event = EventEnvelope {
@@ -666,7 +744,7 @@ impl ToolRegistry {
             }),
         };
 
-        let event_id = self.write_event(&event)?;
+        let event_id = self.write_event(&event).await?;
 
         Ok(CallToolResult::text(format!(
             "Artifact shared successfully.\n\n**Event ID:** {}\n**Path:** {}\n**Description:** {}",
@@ -683,45 +761,25 @@ impl ToolRegistry {
         let query = args.get("query").and_then(|v| v.as_str());
         let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(5) as usize;
 
-        let reader = match self.get_reader() {
-            Ok(r) => r,
-            Err(_) => {
-                return Ok(CallToolResult::text(
-                    "No decisions recorded yet.".to_string(),
-                ));
-            }
-        };
+        let indexer = self.state.indexer().await;
 
-        let replay = reader
-            .replay()
-            .map_err(|e| McpError::Internal(format!("Failed to read events: {}", e)))?;
-
-        // Search for specific decision by ID
+        // Search by specific decision ID
         if let Some(id) = decision_id {
-            for event_result in replay {
-                let event = match event_result {
-                    Ok(e) => e,
-                    Err(_) => continue,
-                };
+            if let Some(decision) = indexer.get_decision(id) {
+                let chosen_opt = decision
+                    .options
+                    .get(decision.chosen)
+                    .map(|o| o.description.as_str())
+                    .unwrap_or("(unknown)");
 
-                if event.id.to_string() == id {
-                    if let EventPayload::Decision(decision) = event.payload {
-                        let chosen_opt = decision
-                            .options
-                            .get(decision.chosen)
-                            .map(|o| o.description.as_str())
-                            .unwrap_or("(unknown)");
-
-                        return Ok(CallToolResult::text(format!(
-                            "## Decision: {}\n\n**Date:** {}\n**Context:** {}\n\n**Chosen:** {}\n\n**Rationale:** {}",
-                            decision.title,
-                            event.timestamp.format("%Y-%m-%d %H:%M"),
-                            decision.context,
-                            chosen_opt,
-                            decision.rationale
-                        )));
-                    }
-                }
+                return Ok(CallToolResult::text(format!(
+                    "## Decision: {}\n\n**Date:** {}\n**Context:** {}\n\n**Chosen:** {}\n\n**Rationale:** {}",
+                    decision.title,
+                    decision.created_at.format("%Y-%m-%d %H:%M"),
+                    decision.context,
+                    chosen_opt,
+                    decision.rationale
+                )));
             }
             return Ok(CallToolResult::text(format!("Decision not found: {}", id)));
         }
@@ -729,29 +787,15 @@ impl ToolRegistry {
         // Search by query string
         if let Some(q) = query {
             let q_lower = q.to_lowercase();
-            let mut results = Vec::new();
-
-            for event_result in replay {
-                let event = match event_result {
-                    Ok(e) => e,
-                    Err(_) => continue,
-                };
-
-                if event.event_type != EventType::DecisionRecorded {
-                    continue;
-                }
-
-                if let EventPayload::Decision(ref decision) = event.payload {
-                    if decision.title.to_lowercase().contains(&q_lower)
-                        || decision.context.to_lowercase().contains(&q_lower)
-                    {
-                        results.push((event.id.to_string(), event.timestamp, decision.clone()));
-                        if results.len() >= limit {
-                            break;
-                        }
-                    }
-                }
-            }
+            let results: Vec<_> = indexer
+                .get_decisions()
+                .into_iter()
+                .filter(|d| {
+                    d.title.to_lowercase().contains(&q_lower)
+                        || d.context.to_lowercase().contains(&q_lower)
+                })
+                .take(limit)
+                .collect();
 
             if results.is_empty() {
                 return Ok(CallToolResult::text(format!(
@@ -761,12 +805,12 @@ impl ToolRegistry {
             }
 
             let mut output = format!("## Decisions matching: {}\n\n", q);
-            for (id, timestamp, decision) in results {
+            for decision in results {
                 output.push_str(&format!(
                     "### {}\n**ID:** {} | **Date:** {}\n\n---\n\n",
                     decision.title,
-                    id,
-                    timestamp.format("%Y-%m-%d %H:%M")
+                    decision.id,
+                    decision.created_at.format("%Y-%m-%d %H:%M")
                 ));
             }
 
@@ -784,76 +828,51 @@ impl ToolRegistry {
         _agent_id: &str,
     ) -> Result<CallToolResult, McpError> {
         let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(10) as usize;
-        let participant = args.get("participant").and_then(|v| v.as_str());
+        // Accept both "agent" and "participant" for filtering
+        let participant = args
+            .get("agent")
+            .or_else(|| args.get("participant"))
+            .and_then(|v| v.as_str());
 
-        let reader = match self.get_reader() {
-            Ok(r) => r,
-            Err(_) => {
-                return Ok(CallToolResult::text(
-                    "## Threads\n\nNo threads yet.".to_string(),
-                ));
-            }
-        };
+        let indexer = self.state.indexer().await;
+        let all_threads = indexer.get_all_threads();
 
-        let replay = reader
-            .replay()
-            .map_err(|e| McpError::Internal(format!("Failed to read events: {}", e)))?;
-
-        // Collect unique thread IDs from messages
-        let mut threads: HashMap<String, (String, chrono::DateTime<Utc>, String)> = HashMap::new();
-
-        for event_result in replay {
-            let event = match event_result {
-                Ok(e) => e,
-                Err(_) => continue,
-            };
-
-            if event.event_type != EventType::MessageSent {
-                continue;
-            }
-
-            if let EventPayload::Message(ref msg) = event.payload {
-                // Filter by participant if specified
+        let mut threads: Vec<_> = all_threads
+            .into_iter()
+            .filter(|t| {
                 if let Some(p) = participant {
-                    if msg.from != p && msg.to != p {
-                        continue;
-                    }
+                    t.participants.contains(&p.to_string())
+                } else {
+                    true
                 }
+            })
+            .cloned()
+            .collect();
+        drop(indexer);
 
-                // Use thread_id or message id as thread identifier
-                let thread_key = msg
-                    .thread_id
-                    .clone()
-                    .unwrap_or_else(|| event.id.to_string());
-                threads
-                    .entry(thread_key)
-                    .or_insert_with(|| (msg.subject.clone(), event.timestamp, msg.from.clone()));
-            }
-        }
+        // Sort by updated_at (most recent first)
+        threads.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+        threads.truncate(limit);
 
-        if threads.is_empty() {
-            return Ok(CallToolResult::text(
-                "## Threads\n\nNo threads yet.".to_string(),
-            ));
-        }
+        let json_threads: Vec<_> = threads
+            .iter()
+            .map(|t| {
+                serde_json::json!({
+                    "thread_id": t.id,
+                    "subject": t.subject,
+                    "participants": t.participants,
+                    "message_count": t.message_count,
+                    "last_message_at": t.updated_at.to_rfc3339()
+                })
+            })
+            .collect();
 
-        // Sort by timestamp (most recent first) and limit
-        let mut thread_list: Vec<_> = threads.into_iter().collect();
-        thread_list.sort_by(|a, b| b.1 .1.cmp(&a.1 .1));
-        thread_list.truncate(limit);
-
-        let mut output = "## Threads\n\n".to_string();
-        for (thread_id, (subject, timestamp, from)) in thread_list {
-            output.push_str(&format!(
-                "- **{}** (started by {}, {})\n  ID: `{}`\n\n",
-                subject,
-                from,
-                timestamp.format("%Y-%m-%d %H:%M"),
-                thread_id
-            ));
-        }
-
-        Ok(CallToolResult::text(output))
+        Ok(CallToolResult::text(
+            serde_json::to_string_pretty(&serde_json::json!({
+                "threads": json_threads
+            }))
+            .unwrap(),
+        ))
     }
 
     async fn tool_record_decision(
@@ -883,7 +902,6 @@ impl ToolRegistry {
             .and_then(|v| v.as_str())
             .ok_or_else(|| McpError::InvalidInput("rationale required".to_string()))?;
 
-        // Parse options_considered if provided
         let options: Vec<DecisionOption> = args
             .get("options_considered")
             .and_then(|v| v.as_array())
@@ -914,23 +932,248 @@ impl ToolRegistry {
                 title: question.to_string(),
                 context: format!("Thread: {}", thread_id),
                 options,
-                chosen: 0, // First option is the chosen one
+                chosen: 0,
                 rationale: rationale.to_string(),
             }),
         };
 
-        let event_id = self.write_event(&event)?;
+        let event_id = self.write_event(&event).await?;
 
         Ok(CallToolResult::text(format!(
             "Decision recorded successfully.\n\n**Event ID:** {}\n**Question:** {}\n**Resolution:** {}\n**Rationale:** {}",
             event_id, question, resolution, rationale
         )))
     }
-}
 
-impl Default for ToolRegistry {
-    fn default() -> Self {
-        Self::new()
+    // ========================================================================
+    // Council Tool Implementations
+    // ========================================================================
+
+    async fn tool_create_thread(
+        &self,
+        args: Value,
+        _agent_id: &str,
+    ) -> Result<CallToolResult, McpError> {
+        let from_agent = args
+            .get("from_agent")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| McpError::InvalidInput("'from_agent' is required".to_string()))?;
+        let to_agent = args
+            .get("to_agent")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| McpError::InvalidInput("'to_agent' is required".to_string()))?;
+        let subject = args
+            .get("subject")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| McpError::InvalidInput("'subject' is required".to_string()))?;
+        let content = args
+            .get("content")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| McpError::InvalidInput("'content' is required".to_string()))?;
+
+        let priority = Self::parse_priority(args.get("priority").and_then(|v| v.as_str()));
+        let intent = Self::parse_intent(args.get("intent").and_then(|v| v.as_str()));
+
+        let event_id = Uuid::now_v7();
+        let now = Utc::now();
+
+        let event = EventEnvelope {
+            id: event_id,
+            timestamp: now,
+            event_type: EventType::MessageSent,
+            agent_id: from_agent.to_string(),
+            payload: EventPayload::Message(MessageEvent {
+                from: from_agent.to_string(),
+                to: to_agent.to_string(),
+                subject: subject.to_string(),
+                content: content.to_string(),
+                thread_id: None,
+                priority,
+                intent,
+            }),
+        };
+
+        self.write_event(&event).await?;
+        let thread_id = event_id.to_string();
+
+        Ok(CallToolResult::text(
+            serde_json::to_string_pretty(&serde_json::json!({
+                "thread_id": thread_id,
+                "message_id": thread_id,
+                "created_at": now.to_rfc3339()
+            }))
+            .unwrap(),
+        ))
+    }
+
+    async fn tool_read_inbox(
+        &self,
+        args: Value,
+        _agent_id: &str,
+    ) -> Result<CallToolResult, McpError> {
+        let agent = args
+            .get("agent")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| McpError::InvalidInput("'agent' is required".to_string()))?;
+
+        let messages: Vec<_> = {
+            let indexer = self.state.indexer().await;
+            indexer
+                .get_messages_to_agent(agent)
+                .into_iter()
+                .cloned()
+                .collect()
+        };
+
+        let json_messages: Vec<_> = messages
+            .iter()
+            .map(|msg| {
+                serde_json::json!({
+                    "message_id": msg.id,
+                    "thread_id": msg.thread_id,
+                    "from": msg.from,
+                    "subject": msg.subject,
+                    "content": msg.content,
+                    "intent": msg.intent,
+                    "created_at": msg.created_at.to_rfc3339()
+                })
+            })
+            .collect();
+
+        Ok(CallToolResult::text(
+            serde_json::to_string_pretty(&serde_json::json!({
+                "messages": json_messages
+            }))
+            .unwrap(),
+        ))
+    }
+
+    async fn tool_reply_to_thread(
+        &self,
+        args: Value,
+        _agent_id: &str,
+    ) -> Result<CallToolResult, McpError> {
+        let thread_id = args
+            .get("thread_id")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| McpError::InvalidInput("'thread_id' is required".to_string()))?;
+        let from_agent = args
+            .get("from_agent")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| McpError::InvalidInput("'from_agent' is required".to_string()))?;
+        let content = args
+            .get("content")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| McpError::InvalidInput("'content' is required".to_string()))?;
+
+        let priority = Self::parse_priority(args.get("priority").and_then(|v| v.as_str()));
+        let intent = Self::parse_intent(args.get("intent").and_then(|v| v.as_str()));
+
+        // Look up thread for recipient and subject
+        let (to_agent, subject) = {
+            let indexer = self.state.indexer().await;
+            match indexer.get_thread(thread_id) {
+                Some(thread) => {
+                    let to = if thread.participants.len() > 2 {
+                        "council".to_string()
+                    } else {
+                        thread
+                            .participants
+                            .iter()
+                            .find(|p| p.as_str() != from_agent)
+                            .cloned()
+                            .unwrap_or_else(|| from_agent.to_string())
+                    };
+                    (to, thread.subject.clone())
+                }
+                None => {
+                    return Err(McpError::NotFound(format!(
+                        "Thread not found: {}",
+                        thread_id
+                    )));
+                }
+            }
+        };
+
+        let event_id = Uuid::now_v7();
+        let now = Utc::now();
+
+        let event = EventEnvelope {
+            id: event_id,
+            timestamp: now,
+            event_type: EventType::MessageSent,
+            agent_id: from_agent.to_string(),
+            payload: EventPayload::Message(MessageEvent {
+                from: from_agent.to_string(),
+                to: to_agent,
+                subject,
+                content: content.to_string(),
+                thread_id: Some(thread_id.to_string()),
+                priority,
+                intent,
+            }),
+        };
+
+        self.write_event(&event).await?;
+
+        Ok(CallToolResult::text(
+            serde_json::to_string_pretty(&serde_json::json!({
+                "message_id": event_id.to_string(),
+                "thread_id": thread_id,
+                "created_at": now.to_rfc3339()
+            }))
+            .unwrap(),
+        ))
+    }
+
+    async fn tool_read_thread(
+        &self,
+        args: Value,
+        _agent_id: &str,
+    ) -> Result<CallToolResult, McpError> {
+        let thread_id = args
+            .get("thread_id")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| McpError::InvalidInput("'thread_id' is required".to_string()))?;
+
+        let (subject, json_messages) = {
+            let indexer = self.state.indexer().await;
+
+            let thread = indexer.get_thread(thread_id).ok_or_else(|| {
+                McpError::NotFound(format!("Thread not found: {}", thread_id))
+            })?;
+            let subject = thread.subject.clone();
+
+            let mut msgs: Vec<_> = indexer
+                .get_messages_for_thread(thread_id)
+                .into_iter()
+                .cloned()
+                .collect();
+            msgs.sort_by(|a, b| a.created_at.cmp(&b.created_at));
+
+            let messages: Vec<_> = msgs
+                .iter()
+                .map(|msg| {
+                    serde_json::json!({
+                        "message_id": msg.id,
+                        "from": msg.from,
+                        "content": msg.content,
+                        "created_at": msg.created_at.to_rfc3339()
+                    })
+                })
+                .collect();
+
+            (subject, messages)
+        };
+
+        Ok(CallToolResult::text(
+            serde_json::to_string_pretty(&serde_json::json!({
+                "thread_id": thread_id,
+                "subject": subject,
+                "messages": json_messages
+            }))
+            .unwrap(),
+        ))
     }
 }
 
@@ -938,20 +1181,23 @@ impl Default for ToolRegistry {
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_registry_creation() {
-        let registry = ToolRegistry::new();
+    #[tokio::test]
+    async fn test_registry_creation() {
+        let state = AppState::new().await;
+        let registry = ToolRegistry::with_state(state);
         let tools = registry.list();
 
-        // Should have 8 tools
-        assert_eq!(tools.len(), 8);
+        assert_eq!(tools.len(), 12);
 
-        // Check tool names
         let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
         assert!(names.contains(&"send_message"));
         assert!(names.contains(&"check_messages"));
         assert!(names.contains(&"read_message"));
         assert!(names.contains(&"list_threads"));
+        assert!(names.contains(&"create_thread"));
+        assert!(names.contains(&"read_inbox"));
+        assert!(names.contains(&"reply_to_thread"));
+        assert!(names.contains(&"read_thread"));
     }
 
     #[test]
@@ -959,14 +1205,14 @@ mod tests {
         let tool = ToolRegistry::def_send_message();
         let json = serde_json::to_string(&tool).unwrap();
 
-        // Should use camelCase
         assert!(json.contains("inputSchema"));
         assert!(json.contains("\"name\":\"send_message\""));
     }
 
     #[tokio::test]
     async fn test_call_unknown_tool() {
-        let registry = ToolRegistry::new();
+        let state = AppState::new().await;
+        let registry = ToolRegistry::with_state(state);
         let result = registry
             .call("unknown_tool", serde_json::json!({}), "test")
             .await;
@@ -979,8 +1225,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_call_send_message_stub() {
-        let registry = ToolRegistry::new();
+    async fn test_call_send_message() {
+        let state = AppState::new().await;
+        let registry = ToolRegistry::with_state(state);
         let result = registry
             .call(
                 "send_message",
@@ -994,7 +1241,6 @@ mod tests {
             .await
             .unwrap();
 
-        // Should return stub response
         if let Some(content) = result.content.first() {
             match content {
                 crate::mcp::protocol::ToolContent::Text { text } => {
@@ -1005,5 +1251,311 @@ mod tests {
                 _ => panic!("Expected text content"),
             }
         }
+    }
+
+    // ====================================================================
+    // Council tool tests
+    // ====================================================================
+
+    fn extract_text(result: &CallToolResult) -> &str {
+        match result.content.first().unwrap() {
+            crate::mcp::protocol::ToolContent::Text { text } => text,
+            _ => panic!("Expected text content"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_create_thread() {
+        let state = AppState::new().await;
+        let registry = ToolRegistry::with_state(state);
+        let result = registry
+            .call(
+                "create_thread",
+                serde_json::json!({
+                    "from_agent": "thales",
+                    "to_agent": "aleph",
+                    "subject": "am.agent.council.test",
+                    "content": "Test message from Thales"
+                }),
+                "thales",
+            )
+            .await
+            .unwrap();
+
+        let text = extract_text(&result);
+        let json: Value = serde_json::from_str(text).unwrap();
+        assert!(json.get("thread_id").is_some());
+        assert!(json.get("message_id").is_some());
+        assert!(json.get("created_at").is_some());
+    }
+
+    #[tokio::test]
+    async fn test_create_thread_missing_params() {
+        let state = AppState::new().await;
+        let registry = ToolRegistry::with_state(state);
+        let result = registry
+            .call(
+                "create_thread",
+                serde_json::json!({"from_agent": "thales"}),
+                "thales",
+            )
+            .await;
+
+        assert!(result.is_err());
+        match result {
+            Err(McpError::InvalidInput(msg)) => assert!(msg.contains("to_agent")),
+            _ => panic!("Expected InvalidInput error"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_read_inbox_empty() {
+        let state = AppState::new().await;
+        let registry = ToolRegistry::with_state(state);
+        let result = registry
+            .call(
+                "read_inbox",
+                serde_json::json!({"agent": "thales"}),
+                "thales",
+            )
+            .await
+            .unwrap();
+
+        let text = extract_text(&result);
+        let json: Value = serde_json::from_str(text).unwrap();
+        let messages = json.get("messages").unwrap().as_array().unwrap();
+        assert!(messages.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_create_then_read_inbox() {
+        let state = AppState::new().await;
+        let registry = ToolRegistry::with_state(state);
+
+        // Create a thread from thales to aleph
+        registry
+            .call(
+                "create_thread",
+                serde_json::json!({
+                    "from_agent": "thales",
+                    "to_agent": "aleph",
+                    "subject": "am.agent.council.test",
+                    "content": "Hello Aleph"
+                }),
+                "thales",
+            )
+            .await
+            .unwrap();
+
+        // Read aleph's inbox
+        let result = registry
+            .call(
+                "read_inbox",
+                serde_json::json!({"agent": "aleph"}),
+                "aleph",
+            )
+            .await
+            .unwrap();
+
+        let text = extract_text(&result);
+        let json: Value = serde_json::from_str(text).unwrap();
+        let messages = json.get("messages").unwrap().as_array().unwrap();
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0]["from"], "thales");
+        assert_eq!(messages[0]["content"], "Hello Aleph");
+    }
+
+    #[tokio::test]
+    async fn test_reply_to_thread() {
+        let state = AppState::new().await;
+        let registry = ToolRegistry::with_state(state);
+
+        // Create a thread
+        let create_result = registry
+            .call(
+                "create_thread",
+                serde_json::json!({
+                    "from_agent": "luban",
+                    "to_agent": "aleph",
+                    "subject": "am.agent.council.golden-thread",
+                    "content": "明桥通了吗？"
+                }),
+                "luban",
+            )
+            .await
+            .unwrap();
+
+        let create_json: Value =
+            serde_json::from_str(extract_text(&create_result)).unwrap();
+        let thread_id = create_json["thread_id"].as_str().unwrap();
+
+        // Reply in the thread
+        let reply_result = registry
+            .call(
+                "reply_to_thread",
+                serde_json::json!({
+                    "thread_id": thread_id,
+                    "from_agent": "aleph",
+                    "content": "桥已通。"
+                }),
+                "aleph",
+            )
+            .await
+            .unwrap();
+
+        let reply_json: Value =
+            serde_json::from_str(extract_text(&reply_result)).unwrap();
+        assert_eq!(reply_json["thread_id"], thread_id);
+        assert!(reply_json.get("message_id").is_some());
+    }
+
+    #[tokio::test]
+    async fn test_reply_to_nonexistent_thread() {
+        let state = AppState::new().await;
+        let registry = ToolRegistry::with_state(state);
+        let result = registry
+            .call(
+                "reply_to_thread",
+                serde_json::json!({
+                    "thread_id": "nonexistent-id",
+                    "from_agent": "aleph",
+                    "content": "Hello?"
+                }),
+                "aleph",
+            )
+            .await;
+
+        assert!(result.is_err());
+        match result {
+            Err(McpError::NotFound(msg)) => assert!(msg.contains("nonexistent-id")),
+            _ => panic!("Expected NotFound error"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_read_thread() {
+        let state = AppState::new().await;
+        let registry = ToolRegistry::with_state(state);
+
+        // Create a thread and reply
+        let create_result = registry
+            .call(
+                "create_thread",
+                serde_json::json!({
+                    "from_agent": "thales",
+                    "to_agent": "aleph",
+                    "subject": "am.agent.council.design",
+                    "content": "First message"
+                }),
+                "thales",
+            )
+            .await
+            .unwrap();
+
+        let create_json: Value =
+            serde_json::from_str(extract_text(&create_result)).unwrap();
+        let thread_id = create_json["thread_id"].as_str().unwrap();
+
+        registry
+            .call(
+                "reply_to_thread",
+                serde_json::json!({
+                    "thread_id": thread_id,
+                    "from_agent": "aleph",
+                    "content": "Second message"
+                }),
+                "aleph",
+            )
+            .await
+            .unwrap();
+
+        // Read the full thread
+        let result = registry
+            .call(
+                "read_thread",
+                serde_json::json!({"thread_id": thread_id}),
+                "thales",
+            )
+            .await
+            .unwrap();
+
+        let text = extract_text(&result);
+        let json: Value = serde_json::from_str(text).unwrap();
+        assert_eq!(json["thread_id"], thread_id);
+        assert_eq!(json["subject"], "am.agent.council.design");
+        let messages = json["messages"].as_array().unwrap();
+        assert_eq!(messages.len(), 2);
+        assert_eq!(messages[0]["from"], "thales");
+        assert_eq!(messages[1]["from"], "aleph");
+    }
+
+    #[tokio::test]
+    async fn test_read_thread_not_found() {
+        let state = AppState::new().await;
+        let registry = ToolRegistry::with_state(state);
+        let result = registry
+            .call(
+                "read_thread",
+                serde_json::json!({"thread_id": "no-such-thread"}),
+                "thales",
+            )
+            .await;
+
+        assert!(result.is_err());
+        match result {
+            Err(McpError::NotFound(msg)) => assert!(msg.contains("no-such-thread")),
+            _ => panic!("Expected NotFound error"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_list_threads_with_agent_filter() {
+        let state = AppState::new().await;
+        let registry = ToolRegistry::with_state(state);
+
+        // Create threads involving different agents
+        registry
+            .call(
+                "create_thread",
+                serde_json::json!({
+                    "from_agent": "thales",
+                    "to_agent": "aleph",
+                    "subject": "am.agent.council.thales-aleph",
+                    "content": "For Aleph"
+                }),
+                "thales",
+            )
+            .await
+            .unwrap();
+
+        registry
+            .call(
+                "create_thread",
+                serde_json::json!({
+                    "from_agent": "thales",
+                    "to_agent": "luban",
+                    "subject": "am.agent.council.thales-luban",
+                    "content": "For Luban"
+                }),
+                "thales",
+            )
+            .await
+            .unwrap();
+
+        // List threads for aleph only
+        let result = registry
+            .call(
+                "list_threads",
+                serde_json::json!({"agent": "aleph"}),
+                "thales",
+            )
+            .await
+            .unwrap();
+
+        let text = extract_text(&result);
+        let json: Value = serde_json::from_str(text).unwrap();
+        let threads = json["threads"].as_array().unwrap();
+        assert_eq!(threads.len(), 1);
+        assert_eq!(threads[0]["subject"], "am.agent.council.thales-aleph");
     }
 }

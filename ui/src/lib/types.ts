@@ -15,6 +15,8 @@ export type DecisionStatus = 'pending' | 'approved' | 'rejected' | 'superseded';
 
 export type AgentStatus = 'available' | 'working' | 'blocked' | 'offline';
 
+export type MessageIntent = 'discuss' | 'request' | 'inform';
+
 export type ObservationMode = 'passive' | 'advisory' | 'gated';
 
 export type InjectAction = 'comment' | 'pause' | 'redirect' | 'approve' | 'reject';
@@ -33,6 +35,7 @@ export interface Message {
   subject?: string;
   content: string;
   priority: Priority;
+  intent?: MessageIntent;
   sent_at: string;
   read_at?: string;
   artifact_refs?: ArtifactRef[];

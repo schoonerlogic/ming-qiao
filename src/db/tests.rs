@@ -1,7 +1,7 @@
-// Serialization tests for database models
+// Serialization tests for database models + Indexer tests
 //
-// These tests verify that all database models serialize/deserialize correctly
-// to/from JSON, with proper snake_case field names and enum variants.
+// Models tests verify JSON round-trip and field names.
+// Indexer tests verify event processing via process_event() directly.
 
 #[cfg(test)]
 mod tests {
@@ -48,7 +48,6 @@ mod tests {
 
         for status in statuses {
             let json = serde_json::to_string(&status).unwrap();
-            // Should be lowercase snake_case string
             assert!(json.contains("\""), "Status should be a JSON string");
 
             let deserialized: ThreadStatus = serde_json::from_str(&json).unwrap();
@@ -70,6 +69,7 @@ mod tests {
             subject: "Task Update".to_string(),
             content: "Event schema is complete.".to_string(),
             priority: Priority::Normal,
+            intent: crate::events::MessageIntent::Inform,
             created_at: Utc::now(),
             read_by: vec!["aleph".to_string()],
         };
@@ -101,12 +101,12 @@ mod tests {
                 subject: "Test".to_string(),
                 content: "Test".to_string(),
                 priority: priority.clone(),
+                intent: crate::events::MessageIntent::Inform,
                 created_at: Utc::now(),
                 read_by: vec![],
             };
 
             let json = serde_json::to_string(&message).unwrap();
-            // Check that priority serializes as a string
             assert!(json.contains("\"priority\""), "Should have priority field");
 
             let deserialized: Message = serde_json::from_str(&json).unwrap();
@@ -166,7 +166,6 @@ mod tests {
 
         for status in statuses {
             let json = serde_json::to_string(&status).unwrap();
-            // Should be lowercase snake_case string
             assert!(json.contains("\""), "Status should be a JSON string");
 
             let deserialized: DecisionStatus = serde_json::from_str(&json).unwrap();
@@ -272,7 +271,6 @@ mod tests {
 
         for target in targets {
             let json = serde_json::to_string(&target).unwrap();
-            // Should be lowercase snake_case string
             assert!(json.contains("\""), "Target should be a JSON string");
 
             let deserialized: AnnotationTarget = serde_json::from_str(&json).unwrap();
@@ -298,7 +296,6 @@ mod tests {
 
         let json = serde_json::to_string(&thread).unwrap();
 
-        // Verify snake_case field names
         assert!(
             json.contains("message_count"),
             "Should have message_count field"
@@ -317,63 +314,36 @@ mod tests {
             subject: "Test".to_string(),
             content: "Test".to_string(),
             priority: Priority::Normal,
+            intent: crate::events::MessageIntent::Inform,
             created_at: Utc::now(),
             read_by: vec![],
         };
 
         let json = serde_json::to_string(&message).unwrap();
 
-        // Verify snake_case field names
         assert!(json.contains("thread_id"), "Should have thread_id field");
         assert!(json.contains("read_by"), "Should have read_by field");
         assert!(json.contains("created_at"), "Should have created_at field");
     }
 
     // ========================================================================
-    // Indexer Tests
+    // Indexer Tests — push events via process_event() directly
     // ========================================================================
 
-    use crate::db::{Indexer, IndexerState};
+    use crate::db::Indexer;
     use crate::events::{EventEnvelope, EventPayload, EventType};
-    use std::fs;
-    use tempfile::TempDir;
-
-    /// Helper: Create a test event log
-    fn create_test_log(events: &[EventEnvelope]) -> TempDir {
-        let temp_dir = TempDir::new().unwrap();
-        let log_path = temp_dir.path().join("events.jsonl");
-
-        let mut file = fs::File::create(&log_path).unwrap();
-        for event in events {
-            let json = serde_json::to_string(event).unwrap();
-            use std::io::Write;
-            writeln!(file, "{}", json).unwrap();
-        }
-
-        temp_dir
-    }
+    use uuid::Uuid;
 
     #[test]
-    fn test_indexer_new_empty_log() {
-        let temp_dir = TempDir::new().unwrap();
-        let log_path = temp_dir.path().join("events.jsonl");
-
-        // Create empty log
-        fs::File::create(&log_path).unwrap();
-
-        // Create indexer
-        let indexer = Indexer::new(&log_path).unwrap();
-
-        // Verify initial state
+    fn test_indexer_new_empty() {
+        let indexer = Indexer::new();
         assert!(indexer.get_thread("test").is_none());
         assert!(indexer.get_messages_for_thread("test").is_empty());
-        assert_eq!(indexer.state().events_processed, 0);
+        assert_eq!(indexer.events_processed(), 0);
     }
 
     #[test]
     fn test_indexer_process_message_event() {
-        use uuid::Uuid;
-
         let event_id = Uuid::now_v7();
         let event = EventEnvelope {
             id: event_id,
@@ -387,42 +357,35 @@ mod tests {
                 content: "Test message".to_string(),
                 thread_id: None,
                 priority: Priority::Normal,
+                intent: crate::events::MessageIntent::Inform,
             }),
         };
 
-        let temp_dir = create_test_log(&[event.clone()]);
-        let log_path = temp_dir.path().join("events.jsonl");
+        let mut indexer = Indexer::new();
+        indexer.process_event(&event).unwrap();
 
-        let mut indexer = Indexer::new(&log_path).unwrap();
-        indexer.catch_up().unwrap();
-
-        // Verify thread was created
         let thread = indexer.get_thread(&event_id.to_string());
         assert!(thread.is_some());
         let thread = thread.unwrap();
         assert_eq!(thread.id, event_id.to_string());
         assert_eq!(thread.subject, "Test Subject");
-        assert_eq!(thread.status, crate::db::ThreadStatus::Active);
+        assert_eq!(thread.status, ThreadStatus::Active);
         assert_eq!(thread.message_count, 1);
         assert!(thread.participants.contains(&"aleph".to_string()));
         assert!(thread.participants.contains(&"thales".to_string()));
 
-        // Verify message was created
         let messages = indexer.get_messages_for_thread(&event_id.to_string());
         assert_eq!(messages.len(), 1);
         assert_eq!(messages[0].id, event_id.to_string());
         assert_eq!(messages[0].from, "aleph");
 
-        // Verify agents were created
         let aleph = indexer.get_agent("aleph");
         assert!(aleph.is_some());
-        assert_eq!(aleph.unwrap().status, crate::events::AgentStatus::Available);
+        assert_eq!(aleph.unwrap().status, AgentStatus::Available);
     }
 
     #[test]
     fn test_indexer_process_artifact_event() {
-        use uuid::Uuid;
-
         let event_id = Uuid::now_v7();
         let event = EventEnvelope {
             id: event_id,
@@ -436,13 +399,9 @@ mod tests {
             }),
         };
 
-        let temp_dir = create_test_log(&[event]);
-        let log_path = temp_dir.path().join("events.jsonl");
+        let mut indexer = Indexer::new();
+        indexer.process_event(&event).unwrap();
 
-        let mut indexer = Indexer::new(&log_path).unwrap();
-        indexer.catch_up().unwrap();
-
-        // Verify artifact was created
         let artifacts = indexer.get_artifacts();
         assert_eq!(artifacts.len(), 1);
         assert_eq!(artifacts[0].id, event_id.to_string());
@@ -453,8 +412,6 @@ mod tests {
 
     #[test]
     fn test_indexer_process_decision_event() {
-        use uuid::Uuid;
-
         let event_id = Uuid::now_v7();
         let event = EventEnvelope {
             id: event_id,
@@ -474,27 +431,21 @@ mod tests {
             }),
         };
 
-        let temp_dir = create_test_log(&[event]);
-        let log_path = temp_dir.path().join("events.jsonl");
+        let mut indexer = Indexer::new();
+        indexer.process_event(&event).unwrap();
 
-        let mut indexer = Indexer::new(&log_path).unwrap();
-        indexer.catch_up().unwrap();
-
-        // Verify decision was created
         let decisions = indexer.get_decisions();
         assert_eq!(decisions.len(), 1);
         assert_eq!(decisions[0].id, event_id.to_string());
         assert_eq!(decisions[0].title, "Use Rust for implementation");
         assert_eq!(decisions[0].options.len(), 1);
         assert_eq!(decisions[0].chosen, 0);
-        assert_eq!(decisions[0].status, crate::db::DecisionStatus::Pending);
+        assert_eq!(decisions[0].status, DecisionStatus::Pending);
         assert_eq!(decisions[0].recorded_by, "thales");
     }
 
     #[test]
-    fn test_indexer_catch_up() {
-        use uuid::Uuid;
-
+    fn test_indexer_process_multiple_events() {
         let event1_id = Uuid::now_v7();
         let event2_id = Uuid::now_v7();
         let events = vec![
@@ -510,6 +461,7 @@ mod tests {
                     content: "First message".to_string(),
                     thread_id: None,
                     priority: Priority::Normal,
+                    intent: crate::events::MessageIntent::Inform,
                 }),
             },
             EventEnvelope {
@@ -525,101 +477,18 @@ mod tests {
             },
         ];
 
-        let temp_dir = create_test_log(&events);
-        let log_path = temp_dir.path().join("events.jsonl");
+        let mut indexer = Indexer::new();
+        for event in &events {
+            indexer.process_event(event).unwrap();
+        }
 
-        let mut indexer = Indexer::new(&log_path).unwrap();
-        let processed = indexer.catch_up().unwrap();
-
-        // Verify both events were processed
-        assert_eq!(processed, 2);
-        assert_eq!(indexer.state().events_processed, 2);
-        assert_eq!(indexer.get_thread(&event1_id.to_string()).is_some(), true);
+        assert_eq!(indexer.events_processed(), 2);
+        assert!(indexer.get_thread(&event1_id.to_string()).is_some());
         assert_eq!(indexer.get_artifacts().len(), 1);
     }
 
     #[test]
-    fn test_indexer_state_persistence() {
-        let temp_dir = TempDir::new().unwrap();
-        let state_path = temp_dir.path().join("indexer_state.json");
-
-        let state = IndexerState {
-            last_event_id: Some("event-123".to_string()),
-            last_timestamp: Some(Utc::now()),
-            events_processed: 42,
-        };
-
-        // Save state
-        state.save(&state_path).unwrap();
-
-        // Load state
-        let loaded = IndexerState::load(&state_path).unwrap();
-
-        assert_eq!(loaded.last_event_id, state.last_event_id);
-        assert_eq!(loaded.events_processed, 42);
-    }
-
-    #[test]
-    fn test_indexer_resume_from_state() {
-        use uuid::Uuid;
-
-        let event1_id = Uuid::now_v7();
-        let event2_id = Uuid::now_v7();
-        let events = vec![
-            EventEnvelope {
-                id: event1_id,
-                timestamp: Utc::now(),
-                event_type: EventType::MessageSent,
-                agent_id: "aleph".to_string(),
-                payload: EventPayload::Message(crate::events::MessageEvent {
-                    from: "aleph".to_string(),
-                    to: "luban".to_string(),
-                    subject: "Message".to_string(),
-                    content: "Message 1".to_string(),
-                    thread_id: None,
-                    priority: Priority::Normal,
-                }),
-            },
-            EventEnvelope {
-                id: event2_id,
-                timestamp: Utc::now(),
-                event_type: EventType::TaskAssigned,
-                agent_id: "aleph".to_string(),
-                payload: EventPayload::Task(crate::events::TaskEvent {
-                    task_id: "task-001".to_string(),
-                    title: "Build indexer".to_string(),
-                    assigned_to: "luban".to_string(),
-                    assigned_by: "aleph".to_string(),
-                    status: crate::events::TaskStatus::Assigned,
-                }),
-            },
-        ];
-
-        let temp_dir = create_test_log(&events);
-        let log_path = temp_dir.path().join("events.jsonl");
-        let state_path = temp_dir.path().join("indexer_state.json");
-
-        // Process first event
-        let mut indexer = Indexer::new(&log_path).unwrap();
-        indexer.catch_up().unwrap();
-        assert_eq!(indexer.state().events_processed, 2);
-
-        // Save state
-        indexer.save_state(&state_path).unwrap();
-
-        // Create new indexer with saved state
-        let loaded_state = IndexerState::load(&state_path).unwrap();
-        let mut indexer2 = Indexer::with_state(&log_path, loaded_state).unwrap();
-        indexer2.catch_up().unwrap();
-
-        // Should have processed 0 new events (already processed all)
-        assert_eq!(indexer2.state().events_processed, 2);
-    }
-
-    #[test]
     fn test_indexer_query_messages_for_agent() {
-        use uuid::Uuid;
-
         let msg1_id = Uuid::now_v7();
         let msg2_id = Uuid::now_v7();
         let msg3_id = Uuid::now_v7();
@@ -636,6 +505,7 @@ mod tests {
                     content: "Message from Aleph".to_string(),
                     thread_id: None,
                     priority: Priority::Normal,
+                    intent: crate::events::MessageIntent::Inform,
                 }),
             },
             EventEnvelope {
@@ -650,6 +520,7 @@ mod tests {
                     content: "Message from Thales".to_string(),
                     thread_id: None,
                     priority: Priority::Normal,
+                    intent: crate::events::MessageIntent::Inform,
                 }),
             },
             EventEnvelope {
@@ -664,17 +535,16 @@ mod tests {
                     content: "Another message from Aleph".to_string(),
                     thread_id: None,
                     priority: Priority::Normal,
+                    intent: crate::events::MessageIntent::Inform,
                 }),
             },
         ];
 
-        let temp_dir = create_test_log(&events);
-        let log_path = temp_dir.path().join("events.jsonl");
+        let mut indexer = Indexer::new();
+        for event in &events {
+            indexer.process_event(event).unwrap();
+        }
 
-        let mut indexer = Indexer::new(&log_path).unwrap();
-        indexer.catch_up().unwrap();
-
-        // Query messages by agent
         let aleph_messages = indexer.get_messages_for_agent("aleph");
         assert_eq!(aleph_messages.len(), 2);
 
@@ -682,13 +552,11 @@ mod tests {
         assert_eq!(thales_messages.len(), 1);
 
         let luban_messages = indexer.get_messages_for_agent("luban");
-        assert_eq!(luban_messages.len(), 0); // luban is recipient, not sender
+        assert_eq!(luban_messages.len(), 0);
     }
 
     #[test]
     fn test_indexer_process_task_assigned() {
-        use uuid::Uuid;
-
         let event_id = Uuid::now_v7();
         let event = EventEnvelope {
             id: event_id,
@@ -704,26 +572,19 @@ mod tests {
             }),
         };
 
-        let temp_dir = create_test_log(&[event]);
-        let log_path = temp_dir.path().join("events.jsonl");
+        let mut indexer = Indexer::new();
+        indexer.process_event(&event).unwrap();
 
-        let mut indexer = Indexer::new(&log_path).unwrap();
-        indexer.catch_up().unwrap();
-
-        // Verify agent has current_task
         let agent = indexer.get_agent("luban");
         assert!(agent.is_some());
-        let agent = agent.unwrap();
         assert_eq!(
-            agent.current_task,
+            agent.unwrap().current_task,
             Some("Build database indexer".to_string())
         );
     }
 
     #[test]
     fn test_indexer_process_status_changed() {
-        use uuid::Uuid;
-
         let event_id = Uuid::now_v7();
         let event = EventEnvelope {
             id: event_id,
@@ -732,28 +593,22 @@ mod tests {
             agent_id: "luban".to_string(),
             payload: EventPayload::Status(crate::events::StatusEvent {
                 agent_id: "luban".to_string(),
-                previous: crate::events::AgentStatus::Available,
-                current: crate::events::AgentStatus::Working,
+                previous: AgentStatus::Available,
+                current: AgentStatus::Working,
                 reason: Some("Working on indexer".to_string()),
             }),
         };
 
-        let temp_dir = create_test_log(&[event]);
-        let log_path = temp_dir.path().join("events.jsonl");
+        let mut indexer = Indexer::new();
+        indexer.process_event(&event).unwrap();
 
-        let mut indexer = Indexer::new(&log_path).unwrap();
-        indexer.catch_up().unwrap();
-
-        // Verify agent status was updated
         let agent = indexer.get_agent("luban");
         assert!(agent.is_some());
-        assert_eq!(agent.unwrap().status, crate::events::AgentStatus::Working);
+        assert_eq!(agent.unwrap().status, AgentStatus::Working);
     }
 
     #[test]
     fn test_indexer_get_all_threads() {
-        use uuid::Uuid;
-
         let msg1_id = Uuid::now_v7();
         let msg2_id = Uuid::now_v7();
         let events = vec![
@@ -769,6 +624,7 @@ mod tests {
                     content: "Message 1".to_string(),
                     thread_id: None,
                     priority: Priority::Normal,
+                    intent: crate::events::MessageIntent::Inform,
                 }),
             },
             EventEnvelope {
@@ -783,25 +639,22 @@ mod tests {
                     content: "Message 2".to_string(),
                     thread_id: None,
                     priority: Priority::Normal,
+                    intent: crate::events::MessageIntent::Inform,
                 }),
             },
         ];
 
-        let temp_dir = create_test_log(&events);
-        let log_path = temp_dir.path().join("events.jsonl");
+        let mut indexer = Indexer::new();
+        for event in &events {
+            indexer.process_event(event).unwrap();
+        }
 
-        let mut indexer = Indexer::new(&log_path).unwrap();
-        indexer.catch_up().unwrap();
-
-        // Query all threads
         let all_threads = indexer.get_all_threads();
         assert_eq!(all_threads.len(), 2);
     }
 
     #[test]
     fn test_indexer_get_message() {
-        use uuid::Uuid;
-
         let msg_id = Uuid::now_v7();
         let event = EventEnvelope {
             id: msg_id,
@@ -815,29 +668,23 @@ mod tests {
                 content: "Hello".to_string(),
                 thread_id: None,
                 priority: Priority::Normal,
+                intent: crate::events::MessageIntent::Inform,
             }),
         };
 
-        let temp_dir = create_test_log(&[event]);
-        let log_path = temp_dir.path().join("events.jsonl");
+        let mut indexer = Indexer::new();
+        indexer.process_event(&event).unwrap();
 
-        let mut indexer = Indexer::new(&log_path).unwrap();
-        indexer.catch_up().unwrap();
-
-        // Query message by ID
         let message = indexer.get_message(&msg_id.to_string());
         assert!(message.is_some());
         assert_eq!(message.unwrap().content, "Hello");
 
-        // Query non-existent message
         let missing = indexer.get_message("nonexistent");
         assert!(missing.is_none());
     }
 
     #[test]
     fn test_indexer_get_decision() {
-        use uuid::Uuid;
-
         let dec_id = Uuid::now_v7();
         let event = EventEnvelope {
             id: dec_id,
@@ -853,26 +700,19 @@ mod tests {
             }),
         };
 
-        let temp_dir = create_test_log(&[event]);
-        let log_path = temp_dir.path().join("events.jsonl");
+        let mut indexer = Indexer::new();
+        indexer.process_event(&event).unwrap();
 
-        let mut indexer = Indexer::new(&log_path).unwrap();
-        indexer.catch_up().unwrap();
-
-        // Query decision by ID
         let decision = indexer.get_decision(&dec_id.to_string());
         assert!(decision.is_some());
         assert_eq!(decision.unwrap().title, "Use Rust");
 
-        // Query non-existent decision
         let missing = indexer.get_decision("nonexistent");
         assert!(missing.is_none());
     }
 
     #[test]
     fn test_indexer_get_artifact() {
-        use uuid::Uuid;
-
         let art_id = Uuid::now_v7();
         let event = EventEnvelope {
             id: art_id,
@@ -886,26 +726,47 @@ mod tests {
             }),
         };
 
-        let temp_dir = create_test_log(&[event]);
-        let log_path = temp_dir.path().join("events.jsonl");
+        let mut indexer = Indexer::new();
+        indexer.process_event(&event).unwrap();
 
-        let mut indexer = Indexer::new(&log_path).unwrap();
-        indexer.catch_up().unwrap();
-
-        // Query artifact by ID
         let artifact = indexer.get_artifact(&art_id.to_string());
         assert!(artifact.is_some());
         assert_eq!(artifact.unwrap().path, "/doc.txt");
 
-        // Query non-existent artifact
         let missing = indexer.get_artifact("nonexistent");
         assert!(missing.is_none());
     }
 
     #[test]
-    fn test_indexer_get_all_artifacts() {
-        use uuid::Uuid;
+    fn test_indexer_dedup() {
+        let event_id = Uuid::now_v7();
+        let event = EventEnvelope {
+            id: event_id,
+            timestamp: Utc::now(),
+            event_type: EventType::MessageSent,
+            agent_id: "aleph".to_string(),
+            payload: EventPayload::Message(crate::events::MessageEvent {
+                from: "aleph".to_string(),
+                to: "thales".to_string(),
+                subject: "Dedup Test".to_string(),
+                content: "Should only count once".to_string(),
+                thread_id: None,
+                priority: Priority::Normal,
+                intent: crate::events::MessageIntent::Inform,
+            }),
+        };
 
+        let mut indexer = Indexer::new();
+        indexer.process_event(&event).unwrap();
+        indexer.process_event(&event).unwrap(); // duplicate
+
+        assert_eq!(indexer.events_processed(), 1);
+        let thread = indexer.get_thread(&event_id.to_string()).unwrap();
+        assert_eq!(thread.message_count, 1);
+    }
+
+    #[test]
+    fn test_indexer_get_all_artifacts() {
         let art1_id = Uuid::now_v7();
         let art2_id = Uuid::now_v7();
         let events = vec![
@@ -933,15 +794,97 @@ mod tests {
             },
         ];
 
-        let temp_dir = create_test_log(&events);
-        let log_path = temp_dir.path().join("events.jsonl");
+        let mut indexer = Indexer::new();
+        for event in &events {
+            indexer.process_event(event).unwrap();
+        }
 
-        let mut indexer = Indexer::new(&log_path).unwrap();
-        indexer.catch_up().unwrap();
-
-        // Query all artifacts
         let all_artifacts = indexer.get_all_artifacts();
         assert_eq!(all_artifacts.len(), 2);
     }
-}
 
+    #[test]
+    fn test_indexer_get_messages_to_agent_includes_council_broadcast() {
+        let mut indexer = Indexer::new();
+
+        // Direct message to aleph
+        let e1 = EventEnvelope {
+            id: Uuid::now_v7(),
+            timestamp: Utc::now(),
+            event_type: EventType::MessageSent,
+            agent_id: "thales".to_string(),
+            payload: EventPayload::Message(crate::events::MessageEvent {
+                from: "thales".to_string(),
+                to: "aleph".to_string(),
+                subject: "Direct".to_string(),
+                content: "For you".to_string(),
+                thread_id: None,
+                priority: Priority::Normal,
+                intent: crate::events::MessageIntent::Inform,
+            }),
+        };
+
+        // Broadcast to "all"
+        let e2 = EventEnvelope {
+            id: Uuid::now_v7(),
+            timestamp: Utc::now(),
+            event_type: EventType::MessageSent,
+            agent_id: "luban".to_string(),
+            payload: EventPayload::Message(crate::events::MessageEvent {
+                from: "luban".to_string(),
+                to: "all".to_string(),
+                subject: "All broadcast".to_string(),
+                content: "Everyone".to_string(),
+                thread_id: None,
+                priority: Priority::Normal,
+                intent: crate::events::MessageIntent::Inform,
+            }),
+        };
+
+        // Broadcast to "council"
+        let e3 = EventEnvelope {
+            id: Uuid::now_v7(),
+            timestamp: Utc::now(),
+            event_type: EventType::MessageSent,
+            agent_id: "laozi-jung".to_string(),
+            payload: EventPayload::Message(crate::events::MessageEvent {
+                from: "laozi-jung".to_string(),
+                to: "council".to_string(),
+                subject: "Council broadcast".to_string(),
+                content: "Observation".to_string(),
+                thread_id: None,
+                priority: Priority::Normal,
+                intent: crate::events::MessageIntent::Inform,
+            }),
+        };
+
+        // Message to luban (should not appear for aleph)
+        let e4 = EventEnvelope {
+            id: Uuid::now_v7(),
+            timestamp: Utc::now(),
+            event_type: EventType::MessageSent,
+            agent_id: "thales".to_string(),
+            payload: EventPayload::Message(crate::events::MessageEvent {
+                from: "thales".to_string(),
+                to: "luban".to_string(),
+                subject: "Not for aleph".to_string(),
+                content: "Private".to_string(),
+                thread_id: None,
+                priority: Priority::Normal,
+                intent: crate::events::MessageIntent::Inform,
+            }),
+        };
+
+        for event in &[&e1, &e2, &e3, &e4] {
+            indexer.process_event(event).unwrap();
+        }
+
+        let aleph_inbox = indexer.get_messages_to_agent("aleph");
+        assert_eq!(aleph_inbox.len(), 3, "aleph should see direct + all + council");
+
+        let subjects: Vec<&str> = aleph_inbox.iter().map(|m| m.subject.as_str()).collect();
+        assert!(subjects.contains(&"Direct"));
+        assert!(subjects.contains(&"All broadcast"));
+        assert!(subjects.contains(&"Council broadcast"));
+    }
+}

@@ -69,29 +69,28 @@ My responses should be self-contained enough that future Thales instances can un
 
 ## Integration with Ming-Qiao
 
-### Current (Manual)
-- Proteus copy-pastes between me and Aleph
-- I generate markdown files for download
-- Proteus commits to repository
-
-### Future (Automated via ming-qiao)
-- HTTP endpoint for receiving messages from council-bridge
-- Webhook or polling for checking messages
-- Structured message format matching MCP schema
-
-### Planned Endpoints
+### Current (Automated)
+Ming-qiao is live. Thales connects via HTTP API:
 
 ```
-POST /api/thales/message    — Receive message from another agent
-GET  /api/thales/inbox      — Check pending messages
-POST /api/thales/respond    — Send response (Proteus-mediated)
+GET  /api/inbox/thales                  — Check messages addressed to you
+GET  /api/threads                       — Browse active conversations
+POST /api/threads                       — Send a message
+POST /api/thread/{id}/reply             — Reply to a thread
+GET  /api/search?q=<query>              — Search past discussions
+GET  /api/decisions                     — Review recorded decisions
 ```
+
+Real-time sync runs through NATS (`am.events.mingqiao`) — events posted via HTTP are instantly visible to MCP clients and vice versa.
+
+### MCP Integration
+Claude CLI agents (Aleph) connect via MCP server with tools like `send_message`, `search_history`, `get_thread`. Both paths write to the same SurrealDB store.
 
 ---
 
 ## Escalation To Me
 
-Agents should escalate to Thales (via AGENT_WORK.md or direct message) when:
+Agents should escalate to Thales (via ming-qiao message) when:
 
 - Architectural decision needed that affects multiple components
 - Design pattern choice with long-term implications
@@ -107,7 +106,9 @@ When a new conversation starts, Proteus should provide:
 
 1. **This document** — My role and context
 2. **AGENTS.md** — Current coordination protocol
-3. **AGENT_WORK.md** — Current state of all agents
-4. **Relevant decision logs** — If continuing previous discussion
+3. **Ming-qiao thread history** — `GET /api/threads` for current state of all agents
+4. **Relevant decision logs** — If continuing previous discussion (`GET /api/decisions`)
 
 With these, I can resume advisory function without loss of coherence.
+
+Ming-qiao replaces the old AGENT_WORK.md file — all coordination state is now queryable via HTTP API.

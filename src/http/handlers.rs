@@ -9,8 +9,13 @@ use axum::{
     response::IntoResponse,
     Json,
 };
+use chrono::Utc;
 use serde::{Deserialize, Serialize};
+use tracing::warn;
+use uuid::Uuid;
 
+use crate::events::{EventEnvelope, EventPayload, EventType, MessageEvent, MessageIntent, Priority};
+use crate::nats::messages::MessageNotification;
 use crate::state::AppState;
 
 // ============================================================================
@@ -72,11 +77,13 @@ impl ApiError {
 // ============================================================================
 
 /// Health check endpoint
-pub async fn health_check() -> impl IntoResponse {
+pub async fn health_check(State(state): State<AppState>) -> impl IntoResponse {
+    let nats_connected = state.nats_connected().await;
     Json(serde_json::json!({
         "status": "healthy",
         "service": "ming-qiao",
-        "version": env!("CARGO_PKG_VERSION")
+        "version": env!("CARGO_PKG_VERSION"),
+        "nats_connected": nats_connected
     }))
 }
 
@@ -132,7 +139,10 @@ pub async fn get_inbox(
                 "id": msg.id,
                 "thread_id": msg.thread_id,
                 "from": msg.from,
+                "subject": msg.subject,
                 "content": msg.content,
+                "intent": msg.intent,
+                "priority": msg.priority,
                 "timestamp": msg.created_at
             })
         })
@@ -259,7 +269,10 @@ pub async fn get_thread(
                 "id": msg.id,
                 "from": msg.from,
                 "to": msg.to,
+                "subject": msg.subject,
                 "content": msg.content,
+                "intent": msg.intent,
+                "priority": msg.priority,
                 "created_at": msg.created_at.to_rfc3339()
             })
         }).collect::<Vec<_>>(),
@@ -269,32 +282,124 @@ pub async fn get_thread(
 #[derive(Debug, Deserialize)]
 pub struct CreateThreadRequest {
     pub subject: String,
+    #[serde(alias = "from")]
     pub from_agent: String,
+    #[serde(alias = "to")]
     pub to_agent: String,
     pub content: String,
     #[serde(default = "default_normal")]
     pub priority: String,
+    #[serde(default = "default_inform")]
+    pub intent: String,
+    /// Optional thread ID to append to an existing thread instead of creating a new one.
+    pub thread_id: Option<String>,
 }
 
 fn default_normal() -> String {
     "normal".to_string()
 }
 
+fn parse_priority(s: &str) -> Priority {
+    match s {
+        "low" => Priority::Low,
+        "high" => Priority::High,
+        "critical" => Priority::Critical,
+        _ => Priority::Normal,
+    }
+}
+
+fn parse_intent(s: &str) -> MessageIntent {
+    match s {
+        "discuss" => MessageIntent::Discuss,
+        "request" => MessageIntent::Request,
+        _ => MessageIntent::Inform,
+    }
+}
+
+fn default_inform() -> String {
+    "inform".to_string()
+}
+
 /// Create a new thread
-pub async fn create_thread(Json(req): Json<CreateThreadRequest>) -> impl IntoResponse {
-    // TODO: Create thread in event log
+pub async fn create_thread(
+    State(state): State<AppState>,
+    Json(req): Json<CreateThreadRequest>,
+) -> impl IntoResponse {
+    let event_id = Uuid::now_v7();
+    let now = Utc::now();
+
+    let priority = parse_priority(&req.priority);
+    let intent = parse_intent(&req.intent);
+
+    let event = EventEnvelope {
+        id: event_id,
+        timestamp: now,
+        event_type: EventType::MessageSent,
+        agent_id: req.from_agent.clone(),
+        payload: EventPayload::Message(MessageEvent {
+            from: req.from_agent,
+            to: req.to_agent,
+            subject: req.subject,
+            content: req.content,
+            thread_id: req.thread_id.clone(),
+            priority,
+            intent,
+        }),
+    };
+
+    // Persist to SurrealDB
+    if let Err(e) = state.persistence().store_event(&event).await {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({
+                "error": { "code": "STORE_FAILED", "message": format!("Failed to persist event: {}", e) }
+            })),
+        );
+    }
+
+    // Update in-memory indexer
+    {
+        let mut indexer = state.indexer_mut().await;
+        if let Err(e) = indexer.process_event(&event) {
+            warn!("Indexer failed to process event: {}", e);
+        }
+    }
+
+    // Extract message fields for NATS notification before broadcast consumes event
+    let (msg_to, msg_from, msg_subject, msg_intent) = match &event.payload {
+        EventPayload::Message(m) => (m.to.clone(), m.from.clone(), m.subject.clone(), m.intent.clone()),
+        _ => unreachable!(),
+    };
+
+    // Broadcast to WebSocket listeners
+    state.broadcast_event(event);
+
+    // Publish NATS message notification
+    {
+        let nats_guard = state.nats_client_mut().await;
+        if let Some(ref client) = *nats_guard {
+            let notification = MessageNotification {
+                event_id: event_id.to_string(),
+                from: msg_from,
+                subject: msg_subject,
+                intent: msg_intent,
+                timestamp: now,
+            };
+            if let Err(e) = client.publish_message_notification(&msg_to, &notification).await {
+                warn!("NATS message notification failed: {}", e);
+            }
+        }
+    }
+
+    // Thread ID = provided thread_id or event ID (indexer convention when thread_id is None)
+    let thread_id = req.thread_id.unwrap_or_else(|| event_id.to_string());
+
     (
         StatusCode::CREATED,
         Json(serde_json::json!({
-            "thread_id": "thread-stub-123",
-            "message_id": "msg-stub-123",
-            "created_at": chrono::Utc::now(),
-            "_stub": true,
-            "_request": {
-                "subject": req.subject,
-                "from": req.from_agent,
-                "to": req.to_agent
-            }
+            "thread_id": thread_id,
+            "message_id": event_id.to_string(),
+            "created_at": now
         })),
     )
 }
@@ -321,31 +426,123 @@ pub async fn update_thread(
 
 #[derive(Debug, Deserialize)]
 pub struct ReplyRequest {
+    #[serde(alias = "from")]
     pub from_agent: String,
     pub content: String,
     #[serde(default = "default_normal")]
     pub priority: String,
+    #[serde(default = "default_inform")]
+    pub intent: String,
     #[serde(default)]
     pub artifact_refs: Vec<String>,
 }
 
 /// Reply to a thread
 pub async fn reply_to_thread(
-    Path(id): Path<String>,
+    State(state): State<AppState>,
+    Path(thread_id): Path<String>,
     Json(req): Json<ReplyRequest>,
 ) -> impl IntoResponse {
-    // TODO: Add message to thread in event log
+    let event_id = Uuid::now_v7();
+    let now = Utc::now();
+
+    // Look up thread to find the recipient and subject
+    let (to_agent, subject) = {
+        let indexer = state.indexer().await;
+        match indexer.get_thread(&thread_id) {
+            Some(thread) => {
+                let to = if thread.participants.len() > 2 {
+                    "council".to_string()
+                } else {
+                    thread
+                        .participants
+                        .iter()
+                        .find(|p| *p != &req.from_agent)
+                        .cloned()
+                        .unwrap_or_else(|| req.from_agent.clone())
+                };
+                (to, thread.subject.clone())
+            }
+            None => {
+                return (
+                    StatusCode::NOT_FOUND,
+                    Json(serde_json::json!({
+                        "error": { "code": "NOT_FOUND", "message": format!("Thread not found: {}", thread_id) }
+                    })),
+                );
+            }
+        }
+    };
+
+    let priority = parse_priority(&req.priority);
+    let intent = parse_intent(&req.intent);
+
+    let event = EventEnvelope {
+        id: event_id,
+        timestamp: now,
+        event_type: EventType::MessageSent,
+        agent_id: req.from_agent.clone(),
+        payload: EventPayload::Message(MessageEvent {
+            from: req.from_agent,
+            to: to_agent,
+            subject,
+            content: req.content,
+            thread_id: Some(thread_id.clone()),
+            priority,
+            intent,
+        }),
+    };
+
+    // Persist to SurrealDB
+    if let Err(e) = state.persistence().store_event(&event).await {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({
+                "error": { "code": "STORE_FAILED", "message": format!("Failed to persist event: {}", e) }
+            })),
+        );
+    }
+
+    // Update in-memory indexer
+    {
+        let mut indexer = state.indexer_mut().await;
+        if let Err(e) = indexer.process_event(&event) {
+            warn!("Indexer failed to process event: {}", e);
+        }
+    }
+
+    // Extract message fields for NATS notification before broadcast consumes event
+    let (reply_to, reply_from, reply_subject, reply_intent) = match &event.payload {
+        EventPayload::Message(m) => (m.to.clone(), m.from.clone(), m.subject.clone(), m.intent.clone()),
+        _ => unreachable!(),
+    };
+
+    // Broadcast to WebSocket listeners
+    state.broadcast_event(event);
+
+    // Publish NATS message notification
+    {
+        let nats_guard = state.nats_client_mut().await;
+        if let Some(ref client) = *nats_guard {
+            let notification = MessageNotification {
+                event_id: event_id.to_string(),
+                from: reply_from,
+                subject: reply_subject,
+                intent: reply_intent,
+                timestamp: now,
+            };
+            if let Err(e) = client.publish_message_notification(&reply_to, &notification).await {
+                warn!("NATS message notification failed: {}", e);
+            }
+        }
+    }
+
     (
         StatusCode::CREATED,
         Json(serde_json::json!({
-            "message_id": "msg-stub-456",
-            "thread_id": id,
-            "sent_at": chrono::Utc::now(),
-            "_stub": true,
-            "_request": {
-                "from": req.from_agent,
-                "priority": req.priority
-            }
+            "message_id": event_id.to_string(),
+            "thread_id": thread_id,
+            "created_at": now
         })),
     )
 }
@@ -381,6 +578,7 @@ pub async fn get_message(
         "to_agent": message_clone.to,
         "content": message_clone.content,
         "priority": message_clone.priority,
+        "intent": message_clone.intent,
         "created_at": message_clone.created_at.to_rfc3339(),
         "read_at": null
     }))
@@ -714,6 +912,143 @@ pub async fn update_config(
 }
 
 // ============================================================================
+// Observation Handler (Laozi-Jung return path)
+// ============================================================================
+
+/// Observation types that Laozi-Jung can publish.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ObservationType {
+    /// Scan results for a project
+    Scan,
+    /// Pattern observations / insights
+    Insight,
+    /// Direction drift detected
+    Drift,
+    /// Onboarding brief generated
+    Onboard,
+}
+
+impl std::fmt::Display for ObservationType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Scan => write!(f, "scan"),
+            Self::Insight => write!(f, "insight"),
+            Self::Drift => write!(f, "drift"),
+            Self::Onboard => write!(f, "onboard"),
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ObserveRequest {
+    /// Type of observation
+    #[serde(rename = "type")]
+    pub observation_type: ObservationType,
+    /// Target project or agent name
+    pub target: String,
+    /// Short observation title
+    pub title: String,
+    /// Full observation content (markdown)
+    pub content: String,
+    /// Priority (defaults to normal)
+    #[serde(default = "default_normal")]
+    pub priority: String,
+}
+
+/// Submit an observation from a watcher agent.
+///
+/// Creates a message event and publishes to NATS `am.observe.{type}.{target}`.
+/// This is the return path for observer agents like Laozi-Jung.
+pub async fn submit_observation(
+    State(state): State<AppState>,
+    Json(req): Json<ObserveRequest>,
+) -> impl IntoResponse {
+    let event_id = Uuid::now_v7();
+    let now = Utc::now();
+    let obs_type = req.observation_type.to_string();
+    let nats_subject = format!("am.observe.{}.{}", obs_type, req.target);
+
+    let priority = parse_priority(&req.priority);
+
+    let event = EventEnvelope {
+        id: event_id,
+        timestamp: now,
+        event_type: EventType::MessageSent,
+        agent_id: "laozi-jung".to_string(),
+        payload: EventPayload::Message(MessageEvent {
+            from: "laozi-jung".to_string(),
+            to: "council".to_string(),
+            subject: format!("[observe:{}] {}", obs_type, req.title),
+            content: req.content,
+            thread_id: None,
+            priority,
+            intent: MessageIntent::Inform,
+        }),
+    };
+
+    // Persist to SurrealDB
+    if let Err(e) = state.persistence().store_event(&event).await {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({
+                "error": { "code": "STORE_FAILED", "message": format!("Failed to persist: {}", e) }
+            })),
+        );
+    }
+
+    // Update in-memory indexer
+    {
+        let mut indexer = state.indexer_mut().await;
+        if let Err(e) = indexer.process_event(&event) {
+            warn!("Indexer failed to process observation: {}", e);
+        }
+    }
+
+    // Broadcast to watchers, WebSocket, etc.
+    state.broadcast_event(event);
+
+    // Publish to JetStream AGENT_OBSERVATIONS stream (durable, 30-day retention)
+    {
+        let nats_guard = state.nats_client_mut().await;
+        if let Some(ref client) = *nats_guard {
+            let payload = serde_json::json!({
+                "event_id": event_id.to_string(),
+                "observation_type": obs_type,
+                "target": req.target,
+                "title": req.title,
+                "timestamp": now,
+            });
+            if let Ok(bytes) = serde_json::to_vec(&payload) {
+                match client
+                    .jetstream()
+                    .publish(nats_subject.clone(), bytes.into())
+                    .await
+                {
+                    Ok(ack_future) => {
+                        if let Err(e) = ack_future.await {
+                            warn!("NATS observe JetStream ack failed: {}", e);
+                        }
+                    }
+                    Err(e) => {
+                        warn!("NATS observe JetStream publish failed: {}", e);
+                    }
+                }
+            }
+        }
+    }
+
+    (
+        StatusCode::CREATED,
+        Json(serde_json::json!({
+            "event_id": event_id.to_string(),
+            "nats_subject": nats_subject,
+            "created_at": now
+        })),
+    )
+}
+
+// ============================================================================
 // Search Handler
 // ============================================================================
 
@@ -747,7 +1082,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_health_check() {
-        let response = health_check().await;
+        let state = AppState::new().await;
+        let response = health_check(State(state)).await;
         let json = response.into_response();
         assert_eq!(json.status(), StatusCode::OK);
     }

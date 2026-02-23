@@ -29,6 +29,7 @@ mod tests {
                 content: "Event schema foundation is complete.".to_string(),
                 thread_id: None,
                 priority: Priority::Normal,
+                intent: MessageIntent::default(),
             }),
         };
 
@@ -80,6 +81,7 @@ mod tests {
             content: "Please review the MCP protocol design.".to_string(),
             thread_id: Some(Uuid::now_v7().to_string()),
             priority: Priority::High,
+            intent: MessageIntent::Request,
         };
 
         // Act
@@ -312,6 +314,47 @@ mod tests {
     }
 
     #[test]
+    fn test_message_intent_enum_serialization() {
+        let cases = vec![
+            (MessageIntent::Discuss, "discuss"),
+            (MessageIntent::Request, "request"),
+            (MessageIntent::Inform, "inform"),
+        ];
+
+        for (intent, expected_string) in cases {
+            let json = serde_json::to_string(&intent).expect("Failed to serialize");
+            let deserialized: MessageIntent = serde_json::from_str(&json)
+                .expect("Failed to deserialize");
+
+            assert_eq!(intent, deserialized);
+            assert_eq!(json, format!("\"{}\"", expected_string));
+        }
+    }
+
+    #[test]
+    fn test_default_message_intent() {
+        let intent = MessageIntent::default();
+        assert_eq!(intent, MessageIntent::Inform);
+    }
+
+    #[test]
+    fn test_message_intent_missing_field_defaults_to_inform() {
+        // Simulate a legacy event without the intent field
+        let json = r#"{
+            "from": "aleph",
+            "to": "luban",
+            "subject": "Test",
+            "content": "Content",
+            "thread_id": null,
+            "priority": "normal"
+        }"#;
+
+        let msg: MessageEvent = serde_json::from_str(json)
+            .expect("Failed to deserialize MessageEvent without intent");
+        assert_eq!(msg.intent, MessageIntent::Inform);
+    }
+
+    #[test]
     fn test_event_payload_message_variant() {
         // Test EventPayload::Message round-trip
         let payload = EventPayload::Message(MessageEvent {
@@ -321,6 +364,7 @@ mod tests {
             content: "Content".to_string(),
             thread_id: None,
             priority: Priority::Normal,
+            intent: MessageIntent::default(),
         });
 
         let json = serde_json::to_string(&payload).expect("Failed to serialize");
