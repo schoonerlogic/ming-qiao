@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "ming-qiao": {
+      "command": "/Users/proteus/astralmaris/ming-qiao/aleph/target/debug/ming-qiao",
+      "args": ["mcp-serve"],
+      "env": {
+        "MING_QIAO_AGENT_ID": "luban",
+        "MING_QIAO_CONFIG": "/Users/proteus/astralmaris/ming-qiao/luban/ming-qiao.toml"
+      }
+    }
+  }
+}

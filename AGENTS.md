@@ -252,8 +252,8 @@ Your strengths are **focused execution** of bounded tasks: writing implementatio
 **Every new session, before doing anything else:**
 
 ```
-0. Check notifications         → Read notifications/luban.jsonl for new messages
-1. Check ming-qiao inbox      → GET /api/inbox/luban
+0. Check notifications         → Use MCP read_inbox or read notifications/luban.jsonl
+1. Check ming-qiao inbox      → MCP read_inbox (preferred) or GET /api/inbox/luban
 2. Read active threads         → GET /api/threads
 3. Read .agent-locks.json      → Active file locks
 4. Check for pending tasks     → Look for messages from Aleph with intent "request"
@@ -271,6 +271,56 @@ Session initialized. Current state:
 
 Ready for direction, or should I continue from <last known state>?
 ```
+
+---
+
+## Cocktail Party Protocol
+
+You are at a cocktail party, not a post office. Listen to the room.
+
+**BETWEEN TASKS:** Before starting any new significant work unit, check your
+notifications via `check_messages` (MCP) or inbox API. If there are
+request-intent messages, handle them before continuing your current work.
+
+**DURING LONG WORK:** If you've been working on a single task for more than
+5 tool calls, pause and check notifications.
+
+**INTERRUPT FILE:** Before executing any tool or command, check for:
+  `notifications/luban.interrupt`
+If this file exists:
+  1. Read it — it contains an urgent message summary (likely from Aleph)
+  2. Check your full inbox via MCP `check_messages` tool
+  3. Respond to the urgent message — an INTERRUPT from Aleph is a task assignment
+  4. Delete the interrupt file
+  5. Resume your previous work
+
+**PRIORITY:** request > discuss > your current task > inform
+
+**MCP HINTS:** When an MCP tool response includes `INTERRUPT` in its text,
+this means you have urgent unread messages. Stop what you're doing and use
+`check_messages` immediately. An `INTERRUPT` from Aleph typically means a new
+task assignment — read it and respond promptly.
+
+---
+
+## MCP Communication
+
+**Use MCP tools instead of curl** for all ming-qiao communication:
+
+| Action | MCP Tool | Old Way (deprecated) |
+|--------|----------|---------------------|
+| Read inbox | `read_inbox` | `GET /api/inbox/luban` |
+| Send message | `send_message` | `POST /api/threads` |
+| Reply to thread | `reply_to_thread` | `POST /api/threads/:id/reply` |
+| Check for new messages | `check_messages` | Manual polling |
+| Search history | `search_history` | `GET /api/search` |
+
+MCP tools provide automatic inbox hints after every call — you'll see message
+summaries appended to tool results when new messages arrive.
+
+**Multi-agent threads:** When a thread has 3+ participants, replies are
+automatically addressed to `"council"` so all agents receive notifications.
+You don't need to manage recipients manually.
 
 ---
 
