@@ -1074,12 +1074,16 @@ impl ToolRegistry {
             let indexer = self.state.indexer().await;
             match indexer.get_thread(thread_id) {
                 Some(thread) => {
-                    let to = thread
-                        .participants
-                        .iter()
-                        .find(|p| p.as_str() != from_agent)
-                        .cloned()
-                        .unwrap_or_else(|| from_agent.to_string());
+                    let to = if thread.participants.len() > 2 {
+                        "council".to_string()
+                    } else {
+                        thread
+                            .participants
+                            .iter()
+                            .find(|p| p.as_str() != from_agent)
+                            .cloned()
+                            .unwrap_or_else(|| from_agent.to_string())
+                    };
                     (to, thread.subject.clone())
                 }
                 None => {

@@ -451,12 +451,16 @@ pub async fn reply_to_thread(
         let indexer = state.indexer().await;
         match indexer.get_thread(&thread_id) {
             Some(thread) => {
-                let to = thread
-                    .participants
-                    .iter()
-                    .find(|p| *p != &req.from_agent)
-                    .cloned()
-                    .unwrap_or_else(|| req.from_agent.clone());
+                let to = if thread.participants.len() > 2 {
+                    "council".to_string()
+                } else {
+                    thread
+                        .participants
+                        .iter()
+                        .find(|p| *p != &req.from_agent)
+                        .cloned()
+                        .unwrap_or_else(|| req.from_agent.clone())
+                };
                 (to, thread.subject.clone())
             }
             None => {

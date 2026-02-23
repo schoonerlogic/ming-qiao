@@ -399,8 +399,9 @@ impl McpServer {
 
         if !requests.is_empty() {
             hint.push_str(&format!(
-                "\nACTION NEEDED ({}):\n{}",
+                "\n\u{26a0}\u{fe0f} INTERRUPT — {} request-intent message{} waiting:\n{}\nAction: Use check_messages to read and respond BEFORE continuing.",
                 requests.len(),
+                if requests.len() == 1 { "" } else { "s" },
                 requests.join("\n")
             ));
         }
@@ -703,15 +704,17 @@ mod tests {
 
         // Verify structure
         assert!(hint.contains("[Inbox: 5 new messages]"), "hint: {}", hint);
-        assert!(hint.contains("ACTION NEEDED (2):"), "hint: {}", hint);
+        assert!(hint.contains("INTERRUPT"), "hint: {}", hint);
+        assert!(hint.contains("2 request-intent messages waiting"), "hint: {}", hint);
+        assert!(hint.contains("Use check_messages to read and respond BEFORE continuing"), "hint: {}", hint);
         assert!(hint.contains("Discussion (1):"), "hint: {}", hint);
         assert!(hint.contains("FYI (2):"), "hint: {}", hint);
 
-        // Verify ACTION NEEDED appears before Discussion, which appears before FYI
-        let action_pos = hint.find("ACTION NEEDED").unwrap();
+        // Verify INTERRUPT appears before Discussion, which appears before FYI
+        let interrupt_pos = hint.find("INTERRUPT").unwrap();
         let discuss_pos = hint.find("Discussion").unwrap();
         let fyi_pos = hint.find("FYI").unwrap();
-        assert!(action_pos < discuss_pos, "ACTION NEEDED should come before Discussion");
+        assert!(interrupt_pos < discuss_pos, "INTERRUPT should come before Discussion");
         assert!(discuss_pos < fyi_pos, "Discussion should come before FYI");
     }
 }
