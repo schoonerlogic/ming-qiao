@@ -11,7 +11,7 @@
 | Agent | Model | Role | Runtime | Reports To |
 |-------|-------|------|---------|------------|
 | **Aleph** | Claude CLI | Master builder, orchestrator | Zed | Proteus |
-| **Luban** | GLM-4.7 | Builder assistant | Goose ACP | Aleph |
+| **Luban** | Claude Code | Builder assistant | Claude CLI in Zed | Aleph |
 | **Thales** | Claude Chat | Architect, advisor | Browser | Proteus |
 | **[Future]** | ≤7B local | Monitor, cleanup | Ollama | Aleph |
 
@@ -33,6 +33,7 @@
 Every agent MUST:
 
 ```
+0. Check notifications     — Read notifications/{your-agent-id}.jsonl for new messages
 1. Check ming-qiao inbox  — GET /api/inbox/{your-agent-id}
 2. Read active threads     — GET /api/threads
 3. Read .agent-locks.json  — Check for file locks
@@ -113,6 +114,44 @@ Agents communicate state through ming-qiao messages and NATS events:
 | Escalation | Message with target agent/Proteus via ming-qiao | Target responds |
 
 NATS task lifecycle events (`am.agent.{agent}.task.{project}.*`) provide real-time status updates automatically.
+
+---
+
+## Notification Protocol
+
+Ming-qiao delivers messages autonomously to each agent via notification files. **No human relay needed.**
+
+Your notification file:
+
+```
+/Users/proteus/astralmaris/ming-qiao/notifications/{your-agent-id}.jsonl
+```
+
+Each line is a compact JSONL notification:
+```json
+{"timestamp":"...","from":"thales","to":"aleph","subject":"Review needed","intent":"request","content_preview":"Please review...","event_id":"...","thread_id":"..."}
+```
+
+**Message intents** determine priority:
+
+| Intent | Meaning | Response |
+|--------|---------|----------|
+| `request` | Action needed | Respond promptly |
+| `discuss` | Open discussion | Respond when ready |
+| `inform` | FYI / status update | No response needed |
+
+**Session start:** Check your notification file for new lines since last session. Process `request` messages first, then `discuss`, then `inform`.
+
+**During session:** If you have file watching capability, monitor the notification file for new lines — they arrive within seconds of any message sent to you.
+
+**Broadcasts:** Messages addressed to `"council"` or `"all"` reach every agent's notification file.
+
+**Sending with intent:** Include `intent` when sending messages:
+```bash
+curl -X POST http://localhost:7777/api/threads \
+  -H "Content-Type: application/json" \
+  -d '{"from": "your-id", "to": "aleph", "subject": "Review needed", "content": "...", "intent": "request"}'
+```
 
 ---
 
