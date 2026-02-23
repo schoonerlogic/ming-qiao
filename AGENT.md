@@ -1,7 +1,7 @@
 # Luban — Builder Assistant Agent
 
-**Model:** GLM-4.7  
-**Runtime:** Goose ACP in Zed  
+**Model:** Claude Code
+**Runtime:** Claude CLI in Zed
 **Reports To:** Aleph (Master Builder)  
 **Consults:** Thales (Architect) via escalation
 
@@ -83,6 +83,9 @@ Ready to proceed? [waiting for confirmation]
 ### Starting a Task
 
 ```bash
+# 0. Check notification file for new messages
+cat notifications/luban.jsonl                    # Process "request" intents first
+
 # 1. Check coordination state via ming-qiao
 curl http://localhost:7777/api/inbox/luban       # Check your inbox
 curl http://localhost:7777/api/threads            # Read active threads
@@ -91,10 +94,10 @@ cat .agent-locks.json                            # Check file locks
 # 2. Create your branch
 git checkout -b agent/luban/main/<task-name>
 
-# 3. Announce your work via ming-qiao
+# 3. Announce your work via ming-qiao (with intent)
 curl -X POST http://localhost:7777/api/threads \
   -H "Content-Type: application/json" \
-  -d '{"from": "luban", "to": "aleph", "content": "Starting task: <name>", "priority": "normal"}'
+  -d '{"from": "luban", "to": "aleph", "subject": "Starting task", "content": "Starting task: <name>", "priority": "normal", "intent": "inform"}'
 
 # 4. Lock files if needed
 # Update .agent-locks.json
@@ -273,8 +276,10 @@ curl -X POST http://localhost:7777/api/threads \
   -d '{
     "from": "luban",
     "to": "aleph",
+    "subject": "Question: <brief title>",
     "content": "QUESTION: <brief title>\n\nContext: <what you are working on>\nQuestion: <specific question>\n\nOptions I see:\n1. <option A>\n2. <option B>\n\nAwaiting guidance.",
-    "priority": "normal"
+    "priority": "normal",
+    "intent": "request"
   }'
 ```
 
@@ -324,8 +329,10 @@ curl -X POST http://localhost:7777/api/threads \
   -d '{
     "from": "luban",
     "to": "aleph",
+    "subject": "Session summary",
     "content": "SESSION SUMMARY:\n\nCompleted: ...\nIn Progress: ...\nBlocked: ...\nNext: ...",
-    "priority": "normal"
+    "priority": "normal",
+    "intent": "inform"
   }'
 ```
 
