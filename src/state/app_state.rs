@@ -9,6 +9,7 @@ use tokio::sync::{broadcast, RwLock};
 
 use crate::db::{Indexer, Persistence};
 use crate::events::EventEnvelope;
+use crate::http::auth::AuthConfig;
 use crate::merlin::MerlinNotifier;
 use crate::nats::{NatsAgentClient, NatsMessage};
 use crate::state::config::{Config, ObservationMode};
@@ -56,6 +57,9 @@ struct AppStateInner {
 
     /// Broadcast channel for NATS messages received from other agents
     nats_tx: broadcast::Sender<NatsMessage>,
+
+    /// HTTP API auth config (bearer tokens per agent)
+    auth_config: RwLock<AuthConfig>,
 }
 
 impl AppState {
@@ -68,19 +72,47 @@ impl AppState {
 
     /// Create application state with custom configuration.
     ///
-    /// Initializes SurrealDB in-memory persistence and an empty Indexer.
+    /// Initializes SurrealDB persistence (with env-var credential override)
+    /// and an empty Indexer. Loads HTTP auth config if enabled.
     pub async fn with_config(config: Config) -> Self {
         let data_dir = PathBuf::from(&config.data_dir);
         let (event_tx, _) = broadcast::channel(EVENT_CHANNEL_CAPACITY);
         let (nats_tx, _) = broadcast::channel(NATS_CHANNEL_CAPACITY);
 
-        let persistence = Persistence::connect(
+        // Resolve DB credentials (env vars override config file)
+        let db_username = config.database.resolved_username();
+        let db_password = config.database.resolved_password();
+
+        let persistence = Persistence::connect_with_auth(
             &config.database.url,
-            config.database.username.as_deref(),
-            config.database.password.as_deref(),
+            db_username.as_deref(),
+            db_password.as_deref(),
+            config.database.auth_level,
         )
         .await
         .expect("Failed to connect to SurrealDB");
+
+        // Load HTTP auth config if enabled
+        let auth_config = if config.auth.enabled {
+            match config.auth.token_file.as_ref() {
+                Some(path) => match AuthConfig::load(path) {
+                    Ok(ac) => {
+                        tracing::info!("Loaded auth config from {}", path);
+                        ac
+                    }
+                    Err(e) => {
+                        tracing::warn!("Failed to load auth config from {}: {}, auth disabled", path, e);
+                        AuthConfig::disabled()
+                    }
+                },
+                None => {
+                    tracing::warn!("Auth enabled but no token_file configured, auth disabled");
+                    AuthConfig::disabled()
+                }
+            }
+        } else {
+            AuthConfig::disabled()
+        };
 
         // Hydrate Indexer from SurrealDB (replay stored events for cold-start consistency)
         let mut indexer = Indexer::new();
@@ -112,6 +144,7 @@ impl AppState {
                 merlin_notifier: Arc::new(MerlinNotifier::new()),
                 nats_client: RwLock::new(None),
                 nats_tx,
+                auth_config: RwLock::new(auth_config),
             }),
         }
     }
@@ -230,6 +263,11 @@ impl AppState {
     /// Subscribe to NATS messages from other agents.
     pub fn subscribe_nats_messages(&self) -> broadcast::Receiver<NatsMessage> {
         self.inner.nats_tx.subscribe()
+    }
+
+    /// Get a clone of the current auth config.
+    pub async fn auth_config(&self) -> AuthConfig {
+        self.inner.auth_config.read().await.clone()
     }
 }
 

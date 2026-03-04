@@ -8,11 +8,29 @@ port = 7777
 [nats]
 enabled = true
 url = "nats://localhost:4222"
+# Security P0 (RA-003): NKey auth active
+auth_mode = "nkey"
+nkey_seed_file = "config/nkeys/aleph.nk"
 
 [database]
 url = "ws://localhost:8000"
-username = "root"
-password = "root"
+# Security P0: credentials now loaded from env vars (MINGQIAO_DB_USERNAME, MINGQIAO_DB_PASSWORD)
+# Run scripts/security/setup-surreal-creds.sh to create database-scoped credentials
+# Then: source config/surreal-creds.env
+# Auth level: "root" (legacy), "namespace", or "database" (recommended)
+auth_level = "database"
+
+# ============================================================================
+# Security P0 — API Authentication (disabled until setup scripts are run)
+# ============================================================================
+# To enable:
+#   1. Run scripts/security/generate-agent-keys.sh
+#   2. Set enabled = true below
+#   3. Restart ming-qiao
+[auth]
+enabled = true
+token_file = "config/agent-tokens.json"
+keyring_file = "config/council-keyring.json"
 
 # ============================================================================
 # Watchers — real-time event dispatch
@@ -87,6 +105,49 @@ recipients = ["laozi-jung", "council", "all"]
 [watchers.action]
 type = "file_append"
 path = "/Users/proteus/astralmaris/ming-qiao/notifications/laozi-jung.jsonl"
+
+# Mataya notification
+[[watchers]]
+agent = "mataya-notify"
+role = "observer"
+subjects = ["am.events.mingqiao"]
+
+[watchers.filter]
+event_types = ["message_sent"]
+recipients = ["mataya", "council", "all"]
+
+[watchers.action]
+type = "file_append"
+path = "/Users/proteus/astralmaris/ming-qiao/notifications/mataya.jsonl"
+
+# Ogma notification
+[[watchers]]
+agent = "ogma-notify"
+role = "observer"
+subjects = ["am.events.mingqiao"]
+
+[watchers.filter]
+event_types = ["message_sent"]
+recipients = ["ogma", "council", "all"]
+
+[watchers.action]
+type = "file_append"
+path = "/Users/proteus/astralmaris/ming-qiao/notifications/ogma.jsonl"
+
+# Council Chamber — passive identity for colloquia
+# Receives all council broadcasts + direct council-chamber messages
+[[watchers]]
+agent = "council-chamber-notify"
+role = "observer"
+subjects = ["am.events.mingqiao"]
+
+[watchers.filter]
+event_types = ["message_sent"]
+recipients = ["council-chamber", "council", "all"]
+
+[watchers.action]
+type = "file_append"
+path = "/Users/proteus/astralmaris/ming-qiao/notifications/council-chamber.jsonl"
 
 # ============================================================================
 # Merlin (human) — macOS desktop notification for all council messages

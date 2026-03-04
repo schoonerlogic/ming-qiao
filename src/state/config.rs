@@ -59,6 +59,15 @@ pub struct NatsConfig {
     /// NATS server URL
     #[serde(default = "default_nats_url")]
     pub url: String,
+
+    /// Authentication mode: none (default) or nkey
+    #[serde(default)]
+    pub auth_mode: NatsAuthMode,
+
+    /// Path to NKey seed file for this agent.
+    /// Override with env var `MINGQIAO_NATS_NKEY_SEED`.
+    #[serde(default)]
+    pub nkey_seed_file: Option<String>,
 }
 
 fn default_nats_url() -> String {
@@ -70,8 +79,38 @@ impl Default for NatsConfig {
         Self {
             enabled: false,
             url: default_nats_url(),
+            auth_mode: NatsAuthMode::None,
+            nkey_seed_file: None,
         }
     }
+}
+
+impl NatsConfig {
+    /// Resolve NKey seed, preferring environment variable over config file path.
+    pub fn resolved_nkey_seed(&self) -> Option<String> {
+        // First check env var for the seed value directly
+        if let Ok(seed) = std::env::var("MINGQIAO_NATS_NKEY_SEED") {
+            return Some(seed);
+        }
+        // Fall back to reading from seed file
+        self.nkey_seed_file
+            .as_ref()
+            .and_then(|path| std::fs::read_to_string(path).ok())
+            .map(|s| s.trim().to_string())
+    }
+}
+
+/// Database authentication level
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum DatabaseAuthLevel {
+    /// Root-level auth (superuser — AVOID in production)
+    #[default]
+    Root,
+    /// Namespace-scoped auth (least privilege within namespace)
+    Namespace,
+    /// Database-scoped auth (most restrictive, recommended)
+    Database,
 }
 
 /// Database connection configuration
@@ -82,13 +121,20 @@ pub struct DatabaseConfig {
     #[serde(default = "default_database_url")]
     pub url: String,
 
-    /// Optional username for authentication (required for `ws://` connections)
+    /// Optional username for authentication (required for `ws://` connections).
+    /// Override with env var `MINGQIAO_DB_USERNAME`.
     #[serde(default)]
     pub username: Option<String>,
 
-    /// Optional password for authentication (required for `ws://` connections)
+    /// Optional password for authentication (required for `ws://` connections).
+    /// Override with env var `MINGQIAO_DB_PASSWORD`.
     #[serde(default)]
     pub password: Option<String>,
+
+    /// Authentication level: root, namespace, or database (default: root for backward compat).
+    /// Use "database" for least-privilege production deployments.
+    #[serde(default)]
+    pub auth_level: DatabaseAuthLevel,
 }
 
 fn default_database_url() -> String {
@@ -101,6 +147,60 @@ impl Default for DatabaseConfig {
             url: default_database_url(),
             username: None,
             password: None,
+            auth_level: DatabaseAuthLevel::Root,
+        }
+    }
+}
+
+impl DatabaseConfig {
+    /// Resolve credentials, preferring environment variables over config file.
+    pub fn resolved_username(&self) -> Option<String> {
+        std::env::var("MINGQIAO_DB_USERNAME")
+            .ok()
+            .or_else(|| self.username.clone())
+    }
+
+    /// Resolve password, preferring environment variables over config file.
+    pub fn resolved_password(&self) -> Option<String> {
+        std::env::var("MINGQIAO_DB_PASSWORD")
+            .ok()
+            .or_else(|| self.password.clone())
+    }
+}
+
+/// NATS authentication mode
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum NatsAuthMode {
+    /// No authentication (backward compatible default)
+    #[default]
+    None,
+    /// NKey-based authentication (per Thales P0 spec)
+    Nkey,
+}
+
+/// HTTP API authentication configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AuthConfig {
+    /// Whether API auth is enabled (default: false for backward compat)
+    #[serde(default)]
+    pub enabled: bool,
+
+    /// Path to agent bearer token file (JSON)
+    #[serde(default)]
+    pub token_file: Option<String>,
+
+    /// Path to Ed25519 council keyring file (JSON)
+    #[serde(default)]
+    pub keyring_file: Option<String>,
+}
+
+impl Default for AuthConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            token_file: None,
+            keyring_file: None,
         }
     }
 }
@@ -148,6 +248,10 @@ pub struct Config {
     /// Watcher configurations for real-time event observers
     #[serde(default)]
     pub watchers: Vec<crate::watcher::WatcherConfig>,
+
+    /// HTTP API authentication configuration
+    #[serde(default)]
+    pub auth: AuthConfig,
 }
 
 fn default_project() -> String {
@@ -184,6 +288,7 @@ impl Default for Config {
             nats: NatsConfig::default(),
             database: DatabaseConfig::default(),
             watchers: Vec::new(),
+            auth: AuthConfig::default(),
         }
     }
 }

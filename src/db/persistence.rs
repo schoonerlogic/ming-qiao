@@ -3,12 +3,13 @@
 
 use serde_json::Value;
 use surrealdb::engine::any::Any;
-use surrealdb::opt::auth::Root;
+use surrealdb::opt::auth::{Database, Namespace, Root};
 use surrealdb::Surreal;
 
 use crate::db::error::PersistenceError;
 use crate::events::EventEnvelope;
 use crate::nats::messages::{Presence, SessionNote, TaskAssignment, TaskStatusUpdate};
+use crate::state::DatabaseAuthLevel;
 
 /// SurrealQL schema — run once on init.
 ///
@@ -70,6 +71,11 @@ impl Persistence {
     /// - `mem://` — in-memory engine (no auth needed)
     /// - `ws://host:port` — shared server (provide username/password)
     ///
+    /// Supports three auth levels per Security P0:
+    /// - `Root` — superuser access (legacy, avoid in production)
+    /// - `Namespace` — scoped to astralmaris namespace
+    /// - `Database` — scoped to astralmaris/mingqiao (recommended)
+    ///
     /// Runs the schema with `IF NOT EXISTS` so multiple processes can connect
     /// to the same server without conflicting.
     pub async fn connect(
@@ -77,16 +83,49 @@ impl Persistence {
         username: Option<&str>,
         password: Option<&str>,
     ) -> Result<Self, PersistenceError> {
+        Self::connect_with_auth(url, username, password, DatabaseAuthLevel::Root).await
+    }
+
+    /// Connect with explicit auth level selection.
+    pub async fn connect_with_auth(
+        url: &str,
+        username: Option<&str>,
+        password: Option<&str>,
+        auth_level: DatabaseAuthLevel,
+    ) -> Result<Self, PersistenceError> {
         let db = surrealdb::engine::any::connect(url).await.map_err(db_err)?;
 
         // Authenticate if credentials provided (required for ws:// connections)
         if let (Some(user), Some(pass)) = (username, password) {
-            db.signin(Root {
-                username: user.to_string(),
-                password: pass.to_string(),
-            })
-            .await
-            .map_err(db_err)?;
+            match auth_level {
+                DatabaseAuthLevel::Root => {
+                    db.signin(Root {
+                        username: user.to_string(),
+                        password: pass.to_string(),
+                    })
+                    .await
+                    .map_err(db_err)?;
+                }
+                DatabaseAuthLevel::Namespace => {
+                    db.signin(Namespace {
+                        namespace: "astralmaris".to_string(),
+                        username: user.to_string(),
+                        password: pass.to_string(),
+                    })
+                    .await
+                    .map_err(db_err)?;
+                }
+                DatabaseAuthLevel::Database => {
+                    db.signin(Database {
+                        namespace: "astralmaris".to_string(),
+                        database: "mingqiao".to_string(),
+                        username: user.to_string(),
+                        password: pass.to_string(),
+                    })
+                    .await
+                    .map_err(db_err)?;
+                }
+            }
         }
 
         db.use_ns("astralmaris")
@@ -265,6 +304,27 @@ impl Persistence {
         rows.into_iter().map(row_to_envelope).collect()
     }
 
+    /// Get events belonging to a thread, ordered by timestamp ascending.
+    ///
+    /// Queries the nested `payload.data.thread_id` field in SurrealDB.
+    /// Used as a fallback when the Indexer hasn't synced cross-instance events yet.
+    pub async fn get_events_by_thread_id(
+        &self,
+        thread_id: &str,
+    ) -> Result<Vec<EventEnvelope>, PersistenceError> {
+        let mut result = self.db
+            .query(
+                "SELECT * OMIT id FROM event \
+                 WHERE payload.data.thread_id = $tid \
+                 ORDER BY timestamp ASC",
+            )
+            .bind(("tid", thread_id.to_string()))
+            .await
+            .map_err(db_err)?;
+        let rows: Vec<Value> = result.take(0).map_err(db_err)?;
+        rows.into_iter().map(row_to_envelope).collect()
+    }
+
     // =====================================================================
     // Query helpers for NATS data
     // =====================================================================
@@ -410,7 +470,7 @@ mod tests {
     use chrono::Utc;
     use uuid::Uuid;
 
-    use crate::events::{EventPayload, EventType, MessageEvent, MessageIntent, Priority};
+    use crate::events::{EventPayload, EventType, ExpectedResponse, MessageEvent, MessageIntent, Priority};
 
     fn make_test_event(agent: &str, subject: &str) -> EventEnvelope {
         EventEnvelope {
@@ -426,6 +486,8 @@ mod tests {
                 thread_id: None,
                 priority: Priority::Normal,
                 intent: MessageIntent::Inform,
+                expected_response: ExpectedResponse::None,
+                require_ack: false,
             }),
         }
     }

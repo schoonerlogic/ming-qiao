@@ -264,8 +264,11 @@ async fn run_http_server() -> Result<(), Box<dyn std::error::Error>> {
         if let Err(e) = client.subscribe_notes(nats_tx.clone()).await {
             error!("Failed to subscribe to notes: {}", e);
         }
-        if let Err(e) = client.subscribe_presence(nats_tx).await {
+        if let Err(e) = client.subscribe_presence(nats_tx.clone()).await {
             error!("Failed to subscribe to presence: {}", e);
+        }
+        if let Err(e) = client.subscribe_own_messages(nats_tx).await {
+            error!("Failed to subscribe to own messages: {}", e);
         }
 
         client.start_presence_heartbeat(
@@ -305,7 +308,21 @@ async fn run_mcp_server() -> Result<(), Box<dyn std::error::Error>> {
         "unknown".to_string()
     });
 
-    let config_path = env::var("MING_QIAO_CONFIG").unwrap_or_else(|_| "ming-qiao.toml".to_string());
+    let config_env_set = env::var("MING_QIAO_CONFIG").ok();
+    let config_path = config_env_set
+        .clone()
+        .unwrap_or_else(|| "ming-qiao.toml".to_string());
+
+    // Warn loudly if the config file doesn't exist — silent fallback to in-memory
+    // DB is the #1 cause of "check_messages returns empty"
+    if !std::path::Path::new(&config_path).exists() {
+        let cwd = env::current_dir()
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|_| "unknown".to_string());
+        eprintln!("[ming-qiao] WARNING: Config '{}' not found (CWD: {})", config_path, cwd);
+        eprintln!("[ming-qiao] Using in-memory database — inbox reads will be empty");
+        eprintln!("[ming-qiao] Set MING_QIAO_CONFIG=/path/to/ming-qiao.toml to fix");
+    }
 
     let state = match AppState::load(&config_path).await {
         Ok(s) => {
@@ -341,8 +358,11 @@ async fn run_mcp_server() -> Result<(), Box<dyn std::error::Error>> {
         if let Err(e) = client.subscribe_notes(nats_tx.clone()).await {
             eprintln!("[ming-qiao] NATS subscribe notes failed: {}", e);
         }
-        if let Err(e) = client.subscribe_presence(nats_tx).await {
+        if let Err(e) = client.subscribe_presence(nats_tx.clone()).await {
             eprintln!("[ming-qiao] NATS subscribe presence failed: {}", e);
+        }
+        if let Err(e) = client.subscribe_own_messages(nats_tx).await {
+            eprintln!("[ming-qiao] NATS subscribe own messages failed: {}", e);
         }
 
         let branch = std::process::Command::new("git")

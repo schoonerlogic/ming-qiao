@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use tracing::warn;
 use uuid::Uuid;
 
-use crate::events::{EventEnvelope, EventPayload, EventType, MessageEvent, MessageIntent, Priority};
+use crate::events::{EventEnvelope, EventPayload, EventType, ExpectedResponse, MessageEvent, MessageIntent, Priority};
 use crate::nats::messages::MessageNotification;
 use crate::state::AppState;
 
@@ -293,6 +293,10 @@ pub struct CreateThreadRequest {
     pub intent: String,
     /// Optional thread ID to append to an existing thread instead of creating a new one.
     pub thread_id: Option<String>,
+    #[serde(default = "default_none_response")]
+    pub expected_response: String,
+    #[serde(default)]
+    pub require_ack: bool,
 }
 
 fn default_normal() -> String {
@@ -320,6 +324,20 @@ fn default_inform() -> String {
     "inform".to_string()
 }
 
+fn default_none_response() -> String {
+    "none".to_string()
+}
+
+fn parse_expected_response(s: &str) -> ExpectedResponse {
+    match s {
+        "reply" => ExpectedResponse::Reply,
+        "ack" => ExpectedResponse::Ack,
+        "comply" => ExpectedResponse::Comply,
+        "standby" => ExpectedResponse::Standby,
+        _ => ExpectedResponse::None,
+    }
+}
+
 /// Create a new thread
 pub async fn create_thread(
     State(state): State<AppState>,
@@ -344,6 +362,8 @@ pub async fn create_thread(
             thread_id: req.thread_id.clone(),
             priority,
             intent,
+            expected_response: parse_expected_response(&req.expected_response),
+            require_ack: req.require_ack,
         }),
     };
 
@@ -435,6 +455,10 @@ pub struct ReplyRequest {
     pub intent: String,
     #[serde(default)]
     pub artifact_refs: Vec<String>,
+    #[serde(default = "default_none_response")]
+    pub expected_response: String,
+    #[serde(default)]
+    pub require_ack: bool,
 }
 
 /// Reply to a thread
@@ -490,6 +514,8 @@ pub async fn reply_to_thread(
             thread_id: Some(thread_id.clone()),
             priority,
             intent,
+            expected_response: parse_expected_response(&req.expected_response),
+            require_ack: req.require_ack,
         }),
     };
 
@@ -579,6 +605,8 @@ pub async fn get_message(
         "content": message_clone.content,
         "priority": message_clone.priority,
         "intent": message_clone.intent,
+        "expected_response": message_clone.expected_response,
+        "require_ack": message_clone.require_ack,
         "created_at": message_clone.created_at.to_rfc3339(),
         "read_at": null
     }))
@@ -984,6 +1012,8 @@ pub async fn submit_observation(
             thread_id: None,
             priority,
             intent: MessageIntent::Inform,
+            expected_response: ExpectedResponse::None,
+            require_ack: false,
         }),
     };
 

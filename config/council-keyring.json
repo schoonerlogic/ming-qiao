@@ -1,0 +1,9 @@
+{"agents":{
+"aleph":{"public_key":"148decdf63cd4599732e84d8e13b03d6ea8a7e5d17c6f04f1c368d5ca34cdf84"},
+"luban":{"public_key":"d9a3344e9a5f957210ce55ff17146c8323de5c250a68e5fb1aafe7db9231db68"},
+"thales":{"public_key":"f60082987f9a9e61bc3a05ab51febec08cb040b597d19f52a67db3e95542ee77"},
+"merlin":{"public_key":"327d3e4b9380c904561f233c29d34e69d86d8312b251ac4bf11fe15cd85fd418"},
+"ogma":{"public_key":"4f7f7af85c2d44a186041d8496aa038c4c2f2056277d4d1e6a2c80b4856dd787"},
+"laozi-jung":{"public_key":"43a223e52c61432bf2eb1747fff9ab32482228872a93ffd770f5d41555fed133"},
+"mataya":{"public_key":"3d06f3ffe116a8f747f04b3511fd2cd8f1b73eb6a9a776c0f99b245010d6a263"},
+"council-chamber":{"public_key":"d83a24ea6a0c0a96f367849399ae184a8eb13a234552cff61bb1efe77ecc5ec5"}}}

@@ -17,6 +17,8 @@ if [[ -z "$AGENT" ]]; then
         AGENT="aleph"
     elif [[ "$CWD" == *"/luban"* ]]; then
         AGENT="luban"
+    elif [[ "$CWD" == *"/merlin"* ]]; then
+        AGENT="merlin"
     fi
 fi
 if [[ -z "$AGENT" ]]; then

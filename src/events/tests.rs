@@ -30,6 +30,8 @@ mod tests {
                 thread_id: None,
                 priority: Priority::Normal,
                 intent: MessageIntent::default(),
+                expected_response: ExpectedResponse::default(),
+                require_ack: false,
             }),
         };
 
@@ -82,6 +84,8 @@ mod tests {
             thread_id: Some(Uuid::now_v7().to_string()),
             priority: Priority::High,
             intent: MessageIntent::Request,
+            expected_response: ExpectedResponse::default(),
+            require_ack: false,
         };
 
         // Act
@@ -365,6 +369,8 @@ mod tests {
             thread_id: None,
             priority: Priority::Normal,
             intent: MessageIntent::default(),
+            expected_response: ExpectedResponse::default(),
+            require_ack: false,
         });
 
         let json = serde_json::to_string(&payload).expect("Failed to serialize");

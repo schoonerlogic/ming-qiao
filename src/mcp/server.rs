@@ -505,6 +505,8 @@ mod tests {
                 thread_id: None,
                 priority,
                 intent,
+                expected_response: crate::events::ExpectedResponse::None,
+                require_ack: false,
             }),
         }
     }
@@ -694,6 +696,8 @@ mod tests {
                     thread_id: None,
                     priority: crate::events::Priority::Normal,
                     intent,
+                    expected_response: crate::events::ExpectedResponse::None,
+                    require_ack: false,
                 }),
             };
             let mut indexer = tools.state().indexer_mut().await;

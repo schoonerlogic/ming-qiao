@@ -126,6 +126,8 @@ impl Indexer {
             content: msg.content.clone(),
             priority: msg.priority.clone(),
             intent: msg.intent.clone(),
+            expected_response: msg.expected_response.clone(),
+            require_ack: msg.require_ack,
             created_at: event.timestamp,
             read_by: vec![],
         };
