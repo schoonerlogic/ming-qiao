@@ -7,7 +7,7 @@ use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
     response::IntoResponse,
-    Json,
+    Extension, Json,
 };
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
@@ -15,6 +15,7 @@ use tracing::warn;
 use uuid::Uuid;
 
 use crate::events::{EventEnvelope, EventPayload, EventType, ExpectedResponse, MessageEvent, MessageIntent, Priority};
+use crate::http::auth::AuthenticatedAgent;
 use crate::nats::messages::MessageNotification;
 use crate::state::AppState;
 
@@ -341,8 +342,25 @@ fn parse_expected_response(s: &str) -> ExpectedResponse {
 /// Create a new thread
 pub async fn create_thread(
     State(state): State<AppState>,
+    Extension(caller): Extension<AuthenticatedAgent>,
     Json(req): Json<CreateThreadRequest>,
 ) -> impl IntoResponse {
+    // RA-008: Enforce identity binding — from_agent must match authenticated token
+    if !caller.is_privileged && caller.agent_id != "anonymous" && caller.agent_id != req.from_agent {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({
+                "error": {
+                    "code": "IDENTITY_MISMATCH",
+                    "message": format!(
+                        "Authenticated as '{}' but from_agent claims '{}'. Use your own identity or a privileged token.",
+                        caller.agent_id, req.from_agent
+                    )
+                }
+            })),
+        );
+    }
+
     let event_id = Uuid::now_v7();
     let now = Utc::now();
 
@@ -465,8 +483,25 @@ pub struct ReplyRequest {
 pub async fn reply_to_thread(
     State(state): State<AppState>,
     Path(thread_id): Path<String>,
+    Extension(caller): Extension<AuthenticatedAgent>,
     Json(req): Json<ReplyRequest>,
 ) -> impl IntoResponse {
+    // RA-008: Enforce identity binding — from_agent must match authenticated token
+    if !caller.is_privileged && caller.agent_id != "anonymous" && caller.agent_id != req.from_agent {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({
+                "error": {
+                    "code": "IDENTITY_MISMATCH",
+                    "message": format!(
+                        "Authenticated as '{}' but from_agent claims '{}'. Use your own identity or a privileged token.",
+                        caller.agent_id, req.from_agent
+                    )
+                }
+            })),
+        );
+    }
+
     let event_id = Uuid::now_v7();
     let now = Utc::now();
 
@@ -1104,6 +1139,84 @@ pub async fn search(Query(query): Query<SearchQuery>) -> impl IntoResponse {
             "limit": query.limit
         }
     }))
+}
+
+// ============================================================================
+// Signed Event Handler (RA-004)
+// ============================================================================
+
+/// Accept and verify a signed event envelope.
+///
+/// Verifies Ed25519 signature, timestamp freshness (60s), and nonce uniqueness (120s TTL).
+/// On success, the inner payload is processed as a standard event.
+/// On failure, returns 401/403 with specific error code.
+pub async fn submit_signed_event(
+    State(state): State<AppState>,
+    Json(envelope): Json<crate::crypto::envelope::SignedEnvelope>,
+) -> impl IntoResponse {
+    let keyring = state.keyring();
+    let nonce_registry = state.nonce_registry();
+
+    match envelope.verify(keyring, nonce_registry) {
+        Ok(verified_agent) => {
+            tracing::info!(
+                "Signed event {} from '{}' verified successfully",
+                envelope.event_id,
+                verified_agent
+            );
+            (
+                StatusCode::OK,
+                Json(serde_json::json!({
+                    "status": "verified",
+                    "event_id": envelope.event_id,
+                    "verified_agent": verified_agent,
+                    "payload": envelope.payload
+                })),
+            )
+        }
+        Err(e) => {
+            tracing::warn!(
+                "Signed event {} rejected: {}",
+                envelope.event_id,
+                e
+            );
+            let (status, code) = match &e {
+                crate::crypto::envelope::EnvelopeError::Expired { .. } => {
+                    (StatusCode::UNAUTHORIZED, "ENVELOPE_EXPIRED")
+                }
+                crate::crypto::envelope::EnvelopeError::FutureTimestamp => {
+                    (StatusCode::UNAUTHORIZED, "ENVELOPE_FUTURE")
+                }
+                crate::crypto::envelope::EnvelopeError::ReplayedNonce => {
+                    (StatusCode::FORBIDDEN, "NONCE_REPLAYED")
+                }
+                crate::crypto::envelope::EnvelopeError::PayloadHashMismatch => {
+                    (StatusCode::FORBIDDEN, "PAYLOAD_TAMPERED")
+                }
+                crate::crypto::envelope::EnvelopeError::UnknownAgent(_) => {
+                    (StatusCode::UNAUTHORIZED, "UNKNOWN_AGENT")
+                }
+                crate::crypto::envelope::EnvelopeError::InvalidSignature => {
+                    (StatusCode::FORBIDDEN, "INVALID_SIGNATURE")
+                }
+                crate::crypto::envelope::EnvelopeError::InvalidSignatureFormat => {
+                    (StatusCode::BAD_REQUEST, "INVALID_SIGNATURE_FORMAT")
+                }
+                crate::crypto::envelope::EnvelopeError::InvalidTimestamp => {
+                    (StatusCode::BAD_REQUEST, "INVALID_TIMESTAMP")
+                }
+            };
+            (
+                status,
+                Json(serde_json::json!({
+                    "error": {
+                        "code": code,
+                        "message": e.to_string()
+                    }
+                })),
+            )
+        }
+    }
 }
 
 #[cfg(test)]

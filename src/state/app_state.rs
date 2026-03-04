@@ -7,6 +7,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::{broadcast, RwLock};
 
+use crate::crypto::keyring::Keyring;
+use crate::crypto::nonce::NonceRegistry;
 use crate::db::{Indexer, Persistence};
 use crate::events::EventEnvelope;
 use crate::http::auth::AuthConfig;
@@ -60,6 +62,12 @@ struct AppStateInner {
 
     /// HTTP API auth config (bearer tokens per agent)
     auth_config: RwLock<AuthConfig>,
+
+    /// Ed25519 council keyring for signed-envelope verification (RA-004)
+    keyring: Keyring,
+
+    /// Nonce registry for replay defense (120s TTL per Thales spec)
+    nonce_registry: NonceRegistry,
 }
 
 impl AppState {
@@ -133,6 +141,26 @@ impl AppState {
             }
         }
 
+        // Load Ed25519 council keyring for signed-envelope verification (RA-004)
+        let keyring = if let Some(ref keyring_path) = config.auth.keyring_file {
+            match Keyring::load(keyring_path) {
+                Ok(kr) => {
+                    tracing::info!("Loaded council keyring from {} ({} agents)", keyring_path, kr.agent_ids().len());
+                    kr
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to load keyring from {}: {}, signed-envelope verification unavailable", keyring_path, e);
+                    Keyring::empty()
+                }
+            }
+        } else {
+            tracing::info!("No keyring_file configured, signed-envelope verification unavailable");
+            Keyring::empty()
+        };
+
+        // Nonce registry with 120s TTL per Thales spec
+        let nonce_registry = NonceRegistry::new(120);
+
         Self {
             inner: Arc::new(AppStateInner {
                 config: RwLock::new(config),
@@ -145,6 +173,8 @@ impl AppState {
                 nats_client: RwLock::new(None),
                 nats_tx,
                 auth_config: RwLock::new(auth_config),
+                keyring,
+                nonce_registry,
             }),
         }
     }
@@ -268,6 +298,16 @@ impl AppState {
     /// Get a clone of the current auth config.
     pub async fn auth_config(&self) -> AuthConfig {
         self.inner.auth_config.read().await.clone()
+    }
+
+    /// Get a reference to the council keyring (RA-004).
+    pub fn keyring(&self) -> &Keyring {
+        &self.inner.keyring
+    }
+
+    /// Get a reference to the nonce registry (RA-004).
+    pub fn nonce_registry(&self) -> &NonceRegistry {
+        &self.inner.nonce_registry
     }
 }
 
