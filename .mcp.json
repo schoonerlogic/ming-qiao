@@ -1,16 +1,20 @@
 {
-  "mcpServers": {
-    "ming-qiao": {
-      "command": "/Users/proteus/astralmaris/ming-qiao/main/target/release/ming-qiao",
-      "args": ["mcp-serve"],
-      "env": {
-        "MING_QIAO_AGENT_ID": "aleph",
-        "MING_QIAO_CONFIG": "/Users/proteus/astralmaris/ming-qiao/aleph/ming-qiao.toml"
-      }
-    },
-    "oracle": {
-      "type": "http",
-      "url": "http://localhost:8001/mcp"
+    "mcpServers": {
+        "ming-qiao": {
+            "command": "/Users/proteus/astralmaris/ming-qiao/main/target/release/ming-qiao",
+            "args": [
+                "mcp-serve"
+            ],
+            "env": {
+                "MING_QIAO_AGENT_ID": "aleph",
+                "MING_QIAO_CONFIG": "/Users/proteus/astralmaris/ming-qiao/aleph/ming-qiao.toml",
+                "MINGQIAO_DB_USERNAME": "mingqiao_service",
+                "MINGQIAO_DB_PASSWORD": "rKokq6Y1kNmbrJuLhbklO23ig5xiVEmD"
+            }
+        },
+        "oracle": {
+            "type": "http",
+            "url": "http://localhost:8001/mcp"
+        }
     }
-  }
 }
