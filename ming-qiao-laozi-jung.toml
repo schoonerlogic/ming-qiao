@@ -1,0 +1,13 @@
+# Laozi-Jung — ming-qiao MCP config
+project = "mingqiao"
+mode = "passive"
+data_dir = "data"
+port = 7777
+
+[nats]
+enabled = false
+
+[database]
+url = "ws://localhost:8000"
+# Security P0: credentials from env vars (MINGQIAO_DB_USERNAME, MINGQIAO_DB_PASSWORD)
+auth_level = "database"
