@@ -9,7 +9,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 // Re-use types from events (re-exported from schema)
-use crate::events::{AgentStatus, DecisionOption, MessageIntent, Priority};
+use crate::events::{AgentStatus, DecisionOption, ExpectedResponse, MessageIntent, Priority};
 
 // ============================================================================
 // NEW ENUMS
@@ -116,6 +116,12 @@ pub struct Message {
 
     /// Message intent (discuss, request, inform)
     pub intent: MessageIntent,
+
+    /// What the sender expects the receiver to do next
+    pub expected_response: ExpectedResponse,
+
+    /// Whether the system should track receipt acknowledgment
+    pub require_ack: bool,
 
     /// When this message was sent
     pub created_at: DateTime<Utc>,

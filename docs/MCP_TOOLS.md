@@ -250,7 +250,7 @@ Ask Thales to review an artifact (convenience wrapper around send_message).
 {
   "name": "request_review",
   "arguments": {
-    "artifact_path": "/Users/protozoan/extraction-team/docs/S3_STRATEGY.md",
+    "artifact_path": "/Users/proteus/astralmaris/extraction-team/docs/S3_STRATEGY.md",
     "question": "Is the artifact versioning approach compatible with our event schema?",
     "priority": "high"
   }
@@ -301,7 +301,7 @@ Share a file for other agents to access.
 {
   "name": "share_artifact",
   "arguments": {
-    "source_path": "/Users/protozoan/extraction-team/docs/EVENTS.md",
+    "source_path": "/Users/proteus/astralmaris/extraction-team/docs/EVENTS.md",
     "description": "Extraction team event log schema"
   }
 }

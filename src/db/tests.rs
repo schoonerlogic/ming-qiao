@@ -70,6 +70,8 @@ mod tests {
             content: "Event schema is complete.".to_string(),
             priority: Priority::Normal,
             intent: crate::events::MessageIntent::Inform,
+            expected_response: crate::events::ExpectedResponse::None,
+            require_ack: false,
             created_at: Utc::now(),
             read_by: vec!["aleph".to_string()],
         };
@@ -102,6 +104,8 @@ mod tests {
                 content: "Test".to_string(),
                 priority: priority.clone(),
                 intent: crate::events::MessageIntent::Inform,
+                expected_response: crate::events::ExpectedResponse::None,
+                require_ack: false,
                 created_at: Utc::now(),
                 read_by: vec![],
             };
@@ -315,6 +319,8 @@ mod tests {
             content: "Test".to_string(),
             priority: Priority::Normal,
             intent: crate::events::MessageIntent::Inform,
+            expected_response: crate::events::ExpectedResponse::None,
+            require_ack: false,
             created_at: Utc::now(),
             read_by: vec![],
         };
@@ -358,6 +364,8 @@ mod tests {
                 thread_id: None,
                 priority: Priority::Normal,
                 intent: crate::events::MessageIntent::Inform,
+                expected_response: crate::events::ExpectedResponse::None,
+                require_ack: false,
             }),
         };
 
@@ -462,6 +470,8 @@ mod tests {
                     thread_id: None,
                     priority: Priority::Normal,
                     intent: crate::events::MessageIntent::Inform,
+                    expected_response: crate::events::ExpectedResponse::None,
+                    require_ack: false,
                 }),
             },
             EventEnvelope {
@@ -506,6 +516,8 @@ mod tests {
                     thread_id: None,
                     priority: Priority::Normal,
                     intent: crate::events::MessageIntent::Inform,
+                    expected_response: crate::events::ExpectedResponse::None,
+                    require_ack: false,
                 }),
             },
             EventEnvelope {
@@ -521,6 +533,8 @@ mod tests {
                     thread_id: None,
                     priority: Priority::Normal,
                     intent: crate::events::MessageIntent::Inform,
+                    expected_response: crate::events::ExpectedResponse::None,
+                    require_ack: false,
                 }),
             },
             EventEnvelope {
@@ -536,6 +550,8 @@ mod tests {
                     thread_id: None,
                     priority: Priority::Normal,
                     intent: crate::events::MessageIntent::Inform,
+                    expected_response: crate::events::ExpectedResponse::None,
+                    require_ack: false,
                 }),
             },
         ];
@@ -625,6 +641,8 @@ mod tests {
                     thread_id: None,
                     priority: Priority::Normal,
                     intent: crate::events::MessageIntent::Inform,
+                    expected_response: crate::events::ExpectedResponse::None,
+                    require_ack: false,
                 }),
             },
             EventEnvelope {
@@ -640,6 +658,8 @@ mod tests {
                     thread_id: None,
                     priority: Priority::Normal,
                     intent: crate::events::MessageIntent::Inform,
+                    expected_response: crate::events::ExpectedResponse::None,
+                    require_ack: false,
                 }),
             },
         ];
@@ -669,6 +689,8 @@ mod tests {
                 thread_id: None,
                 priority: Priority::Normal,
                 intent: crate::events::MessageIntent::Inform,
+                expected_response: crate::events::ExpectedResponse::None,
+                require_ack: false,
             }),
         };
 
@@ -753,6 +775,8 @@ mod tests {
                 thread_id: None,
                 priority: Priority::Normal,
                 intent: crate::events::MessageIntent::Inform,
+                expected_response: crate::events::ExpectedResponse::None,
+                require_ack: false,
             }),
         };
 
@@ -821,6 +845,8 @@ mod tests {
                 thread_id: None,
                 priority: Priority::Normal,
                 intent: crate::events::MessageIntent::Inform,
+                expected_response: crate::events::ExpectedResponse::None,
+                require_ack: false,
             }),
         };
 
@@ -838,6 +864,8 @@ mod tests {
                 thread_id: None,
                 priority: Priority::Normal,
                 intent: crate::events::MessageIntent::Inform,
+                expected_response: crate::events::ExpectedResponse::None,
+                require_ack: false,
             }),
         };
 
@@ -855,6 +883,8 @@ mod tests {
                 thread_id: None,
                 priority: Priority::Normal,
                 intent: crate::events::MessageIntent::Inform,
+                expected_response: crate::events::ExpectedResponse::None,
+                require_ack: false,
             }),
         };
 
@@ -872,6 +902,8 @@ mod tests {
                 thread_id: None,
                 priority: Priority::Normal,
                 intent: crate::events::MessageIntent::Inform,
+                expected_response: crate::events::ExpectedResponse::None,
+                require_ack: false,
             }),
         };
 

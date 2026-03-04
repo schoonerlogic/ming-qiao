@@ -43,7 +43,11 @@ impl NatsAgentClient {
     /// Returns `None` if NATS is disabled in config or the server is unreachable.
     /// This makes NATS integration fully optional — callers get `None` and
     /// continue without it.
+    ///
+    /// Supports NKey authentication when configured (Security P0).
     pub async fn connect(config: &NatsConfig, agent_id: &str, project: &str) -> Option<Self> {
+        use crate::state::NatsAuthMode;
+
         if !config.enabled {
             info!("NATS integration disabled");
             return None;
@@ -51,14 +55,41 @@ impl NatsAgentClient {
 
         info!("Connecting to NATS at {}", config.url);
 
-        let client = match async_nats::connect(&config.url).await {
-            Ok(c) => c,
-            Err(e) => {
-                warn!(
-                    "Failed to connect to NATS at {}: {}. Running local-only.",
-                    config.url, e
-                );
-                return None;
+        let client = match config.auth_mode {
+            NatsAuthMode::Nkey => {
+                let seed = match config.resolved_nkey_seed() {
+                    Some(s) => s,
+                    None => {
+                        warn!("NATS NKey auth configured but no seed available. Set MINGQIAO_NATS_NKEY_SEED env var or nkey_seed_file in config.");
+                        return None;
+                    }
+                };
+                match async_nats::ConnectOptions::with_nkey(seed)
+                    .name(format!("mingqiao-{}", agent_id))
+                    .connect(&config.url)
+                    .await
+                {
+                    Ok(c) => c,
+                    Err(e) => {
+                        warn!(
+                            "Failed to connect to NATS with NKey at {}: {}. Running local-only.",
+                            config.url, e
+                        );
+                        return None;
+                    }
+                }
+            }
+            NatsAuthMode::None => {
+                match async_nats::connect(&config.url).await {
+                    Ok(c) => c,
+                    Err(e) => {
+                        warn!(
+                            "Failed to connect to NATS at {}: {}. Running local-only.",
+                            config.url, e
+                        );
+                        return None;
+                    }
+                }
             }
         };
 
@@ -381,6 +412,60 @@ impl NatsAgentClient {
                 }
             }
             info!("Presence subscription ended");
+        });
+
+        self.handles.push(handle);
+        Ok(())
+    }
+
+    /// Start a subscription for message notifications addressed to this agent.
+    ///
+    /// Uses core NATS (not JetStream) since notifications are ephemeral hints.
+    /// No echo suppression — we only subscribe to our own message subject,
+    /// and only other agents publish to it.
+    ///
+    /// Subject: `am.agent.{self}.message.{project}`
+    pub async fn subscribe_own_messages(
+        &mut self,
+        tx: broadcast::Sender<NatsMessage>,
+    ) -> Result<(), ClientError> {
+        let subject = self.subjects.message();
+
+        let subscription = self
+            .client
+            .subscribe(subject.clone())
+            .await
+            .map_err(|e| ClientError::Subscribe(e.to_string()))?;
+
+        info!("Subscribed to message notifications (subject: {})", subject);
+        eprintln!("[ming-qiao] Subscribed to message notifications (subject: {})", subject);
+
+        let handle = tokio::spawn(async move {
+            use futures_util::StreamExt;
+            let mut subscription = subscription;
+            while let Some(msg) = subscription.next().await {
+                match serde_json::from_slice::<NatsMessage>(&msg.payload) {
+                    Ok(nats_msg) => {
+                        if let NatsMessage::MessageNotification(ref notif) = nats_msg {
+                            // Use eprintln for MCP visibility (tracing not init'd in mcp-serve)
+                            eprintln!(
+                                "[ming-qiao] NEW MESSAGE from '{}': {}",
+                                notif.from, notif.subject
+                            );
+                            info!(
+                                "New message from '{}': {}",
+                                notif.from, notif.subject
+                            );
+                        }
+                        let _ = tx.send(nats_msg);
+                    }
+                    Err(e) => {
+                        eprintln!("[ming-qiao] Failed to deserialize message notification: {}", e);
+                        warn!("Failed to deserialize message notification: {}", e);
+                    }
+                }
+            }
+            info!("Message notification subscription ended");
         });
 
         self.handles.push(handle);

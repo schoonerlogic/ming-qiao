@@ -16,6 +16,8 @@ if [[ "$CWD" == *"/aleph"* ]]; then
     AGENT="aleph"
 elif [[ "$CWD" == *"/luban"* ]]; then
     AGENT="luban"
+elif [[ "$CWD" == *"/merlin"* ]]; then
+    AGENT="merlin"
 else
     AGENT="${MING_QIAO_AGENT_ID:-}"
 fi

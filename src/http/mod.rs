@@ -9,6 +9,7 @@
 //! WebSocket: ws://localhost:7777/ws
 //! Merlin notifications: ws://localhost:7777/merlin/notifications
 
+pub mod auth;
 pub mod handlers;
 pub mod merlin;
 pub mod routes;

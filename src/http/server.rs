@@ -61,7 +61,7 @@ impl HttpServer {
     /// Build the router with all routes and shared state
     pub fn router(&self) -> Router {
         let mut app = Router::new()
-            .merge(routes::api_routes())
+            .merge(routes::api_routes(self.state.clone()))
             .with_state(self.state.clone())
             .layer(TraceLayer::new_for_http());
 

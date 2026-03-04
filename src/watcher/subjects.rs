@@ -60,7 +60,7 @@ pub fn matches_subject(subject: &str, pattern: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::events::{EventEnvelope, EventPayload, EventType, MessageEvent, MessageIntent, Priority};
+    use crate::events::{EventEnvelope, EventPayload, EventType, ExpectedResponse, MessageEvent, MessageIntent, Priority};
     use chrono::Utc;
     use uuid::Uuid;
 
@@ -135,6 +135,8 @@ mod tests {
                 thread_id: None,
                 priority: Priority::Normal,
                 intent: MessageIntent::Inform,
+                expected_response: ExpectedResponse::None,
+                require_ack: false,
             }),
         };
 

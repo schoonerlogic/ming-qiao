@@ -1,2 +1,9 @@
 /target
 /data
+
+# Security P0 — secret files (never commit)
+config/agent-tokens.json
+config/surreal-creds.env
+config/surreal-root.env
+config/keys/*.seed
+config/nkeys/*.nk

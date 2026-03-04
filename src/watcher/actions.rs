@@ -34,6 +34,15 @@ pub struct EventLine {
     pub intent: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub content_preview: Option<String>,
+    /// Full message content (only present for Message events).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub content: Option<String>,
+    /// What the sender expects the receiver to do next (only for Message events).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub expected_response: Option<String>,
+    /// Whether the sender requires receipt acknowledgment (only for Message events).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub require_ack: Option<bool>,
     pub event_id: String,
 }
 
@@ -57,19 +66,28 @@ impl EventLine {
         let event_id = event.id.to_string();
 
         match &event.payload {
-            EventPayload::Message(m) => EventLine {
-                timestamp: event.timestamp,
-                event_type,
-                thread_id: m.thread_id.clone(),
-                from: Some(m.from.clone()),
-                to: Some(m.to.clone()),
-                subject: Some(m.subject.clone()),
-                intent: Some(serde_json::to_value(&m.intent)
+            EventPayload::Message(m) => {
+                let er_str = serde_json::to_value(&m.expected_response)
                     .ok()
                     .and_then(|v| v.as_str().map(String::from))
-                    .unwrap_or_else(|| "inform".to_string())),
-                content_preview: Some(truncate_utf8(&m.content, 200)),
-                event_id,
+                    .unwrap_or_else(|| "none".to_string());
+                EventLine {
+                    timestamp: event.timestamp,
+                    event_type,
+                    thread_id: m.thread_id.clone(),
+                    from: Some(m.from.clone()),
+                    to: Some(m.to.clone()),
+                    subject: Some(m.subject.clone()),
+                    intent: Some(serde_json::to_value(&m.intent)
+                        .ok()
+                        .and_then(|v| v.as_str().map(String::from))
+                        .unwrap_or_else(|| "inform".to_string())),
+                    content_preview: Some(truncate_utf8(&m.content, 200)),
+                    content: Some(m.content.clone()),
+                    expected_response: Some(er_str),
+                    require_ack: if m.require_ack { Some(true) } else { None },
+                    event_id,
+                }
             },
             EventPayload::Decision(d) => EventLine {
                 timestamp: event.timestamp,
@@ -80,6 +98,9 @@ impl EventLine {
                 subject: Some(d.title.clone()),
                 intent: None,
                 content_preview: Some(truncate_utf8(&d.rationale, 200)),
+                content: None,
+                expected_response: None,
+                require_ack: None,
                 event_id,
             },
             EventPayload::Artifact(a) => EventLine {
@@ -91,6 +112,9 @@ impl EventLine {
                 subject: Some(a.path.clone()),
                 intent: None,
                 content_preview: Some(truncate_utf8(&a.description, 200)),
+                content: None,
+                expected_response: None,
+                require_ack: None,
                 event_id,
             },
             EventPayload::Task(t) => EventLine {
@@ -102,6 +126,9 @@ impl EventLine {
                 subject: Some(t.title.clone()),
                 intent: None,
                 content_preview: None,
+                content: None,
+                expected_response: None,
+                require_ack: None,
                 event_id,
             },
             EventPayload::Status(s) => EventLine {
@@ -113,6 +140,9 @@ impl EventLine {
                 subject: None,
                 intent: None,
                 content_preview: s.reason.as_ref().map(|r| truncate_utf8(r, 200)),
+                content: None,
+                expected_response: None,
+                require_ack: None,
                 event_id,
             },
         }
@@ -303,6 +333,8 @@ mod tests {
                 thread_id: Some("thread-001".to_string()),
                 priority: Priority::Normal,
                 intent: MessageIntent::Inform,
+                expected_response: ExpectedResponse::None,
+                require_ack: false,
             }),
         }
     }
@@ -338,7 +370,41 @@ mod tests {
             .as_ref()
             .unwrap()
             .contains("MCP server"));
+        // Full content is present for message events
+        assert_eq!(
+            line.content.as_deref(),
+            Some("The MCP server is ready for review.")
+        );
         assert!(!line.event_id.is_empty());
+    }
+
+    #[test]
+    fn test_event_line_message_long_content_has_truncated_preview_and_full_content() {
+        let long_content = "x".repeat(500);
+        let event = EventEnvelope {
+            id: Uuid::now_v7(),
+            timestamp: Utc::now(),
+            event_type: EventType::MessageSent,
+            agent_id: "aleph".to_string(),
+            payload: EventPayload::Message(MessageEvent {
+                from: "aleph".to_string(),
+                to: "luban".to_string(),
+                subject: "Long message".to_string(),
+                content: long_content.clone(),
+                thread_id: None,
+                priority: Priority::Normal,
+                intent: MessageIntent::Inform,
+                expected_response: ExpectedResponse::None,
+                require_ack: false,
+            }),
+        };
+        let line = EventLine::from_envelope(&event);
+
+        // content_preview is truncated
+        assert!(line.content_preview.as_ref().unwrap().len() < 500);
+        assert!(line.content_preview.as_ref().unwrap().ends_with("..."));
+        // content is the full 500-char string
+        assert_eq!(line.content.as_deref(), Some(long_content.as_str()));
     }
 
     #[test]
@@ -355,6 +421,8 @@ mod tests {
             .contains("In-memory"));
         assert!(line.from.is_none());
         assert!(line.to.is_none());
+        // Non-message events have no content
+        assert!(line.content.is_none());
     }
 
     #[test]

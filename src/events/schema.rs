@@ -79,6 +79,44 @@ impl Default for MessageIntent {
     }
 }
 
+/// What the sender expects the receiver to do next.
+///
+/// Maps to military radio prowords: reply=OVER, ack=ROGER, comply=WILCO,
+/// none=OUT, standby=STANDBY. Carried as structured metadata so the system
+/// can prioritize notifications and detect stalled conversations.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExpectedResponse {
+    /// I need your input — send a response (OVER)
+    Reply,
+
+    /// Confirm you received this — no action needed (ROGER)
+    Ack,
+
+    /// Do what this says — confirm when done (WILCO)
+    Comply,
+
+    /// FYI only — no response expected (OUT)
+    None,
+
+    /// I'm working on it — hold for my follow-up (STANDBY)
+    Standby,
+}
+
+impl Default for ExpectedResponse {
+    fn default() -> Self {
+        ExpectedResponse::None
+    }
+}
+
+fn is_default_expected_response(er: &ExpectedResponse) -> bool {
+    *er == ExpectedResponse::None
+}
+
+fn is_false(b: &bool) -> bool {
+    !b
+}
+
 /// Availability and working state of an agent
 ///
 /// Indicates whether an agent can accept new tasks.
@@ -225,6 +263,14 @@ pub struct MessageEvent {
     /// Message intent — signals how the recipient should treat this message
     #[serde(default)]
     pub intent: MessageIntent,
+
+    /// What the sender expects the receiver to do next
+    #[serde(default, skip_serializing_if = "is_default_expected_response")]
+    pub expected_response: ExpectedResponse,
+
+    /// Whether the system should track receipt acknowledgment
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub require_ack: bool,
 }
 
 /// Data for artifact sharing events

@@ -12,6 +12,7 @@
 //! - `state` - Shared application state and configuration
 //! - `merlin` - Merlin (human operator) notification system
 
+pub mod crypto;
 pub mod db;
 pub mod events;
 pub mod http;

@@ -43,6 +43,12 @@ surrealdb = { version = "3", default-features = false, features = ["kv-mem", "pr
 # HTTP client (watcher webhooks)
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 
+# Cryptographic signing — Security P0 (Ed25519 signed-event envelopes)
+ed25519-dalek = { version = "2", features = ["rand_core"] }
+sha2 = "0.10"
+rand = "0.8"
+hex = "0.4"
+
 [dev-dependencies]
 tokio-test = "0.4"
 tempfile = "3"

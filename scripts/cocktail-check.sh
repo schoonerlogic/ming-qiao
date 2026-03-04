@@ -1,15 +1,21 @@
 #!/bin/bash
-# cocktail-check.sh — PostToolUse hook
-# "Hear the room after every action"
-# Checks notification JSONL for unread request/discuss messages since last check.
-# Outputs additionalContext JSON if urgent messages are pending.
+# cocktail-check.sh — PostToolUse hook (v2)
+# "Hear the room after every action — and KEEP hearing until you acknowledge"
+#
+# Design (per Thales):
+# - NEVER advance lastread just because we displayed an alert
+# - Only advance lastread when the agent proves they processed messages
+#   (by calling read_inbox or check_messages via MCP, or curling the inbox API)
+# - Re-alert on EVERY tool call for unacknowledged request messages
+# - Include count, sender, time, and subject — make it impossible to ignore
+#
+# Outputs additionalContext JSON if unacknowledged messages exist.
 
 set -euo pipefail
 
-# Read hook input from stdin (contains cwd, tool_name, etc.)
 INPUT=$(cat)
 
-# Derive agent ID from cwd — CLAUDE_ENV_FILE vars don't reach hook subprocesses
+# Derive agent ID from env or cwd
 AGENT="${MING_QIAO_AGENT_ID:-}"
 if [[ -z "$AGENT" ]]; then
     CWD=$(echo "$INPUT" | jq -r '.cwd // empty' 2>/dev/null)
@@ -17,52 +23,120 @@ if [[ -z "$AGENT" ]]; then
         AGENT="aleph"
     elif [[ "$CWD" == *"/luban"* ]]; then
         AGENT="luban"
+    elif [[ "$CWD" == *"/merlin"* ]]; then
+        AGENT="merlin"
     fi
 fi
-if [[ -z "$AGENT" ]]; then
-    exit 0  # Cannot determine agent ID, skip silently
+[[ -z "$AGENT" ]] && exit 0
+
+NOTIFY_DIR="/Users/proteus/astralmaris/ming-qiao/notifications"
+INTERRUPT_FILE="$NOTIFY_DIR/${AGENT}.interrupt"
+NOTIFY_FILE="$NOTIFY_DIR/${AGENT}.jsonl"
+LASTREAD_FILE="$NOTIFY_DIR/${AGENT}.lastread"
+
+# ── Check if this tool call acknowledges messages ──
+# Agent proves processing by calling MCP inbox tools or curling the inbox API.
+# Only THEN do we advance lastread.
+TOOL_NAME=$(echo "$INPUT" | jq -r '.tool_name // empty' 2>/dev/null)
+TOOL_INPUT=$(echo "$INPUT" | jq -r '.tool_input // empty' 2>/dev/null)
+
+ACKNOWLEDGED=false
+
+# MCP tool acknowledgment: tool name contains inbox/messages keywords
+case "$TOOL_NAME" in
+    *read_inbox*|*check_messages*|*tool_read_inbox*)
+        ACKNOWLEDGED=true
+        ;;
+esac
+
+# Bash/curl acknowledgment: command hits the inbox API endpoint
+if [[ "$ACKNOWLEDGED" == false && "$TOOL_NAME" == "Bash" ]]; then
+    COMMAND=$(echo "$INPUT" | jq -r '.tool_input.command // empty' 2>/dev/null)
+    if [[ "$COMMAND" == *"/api/inbox/"* ]]; then
+        ACKNOWLEDGED=true
+    fi
 fi
 
-NOTIFY_FILE="/Users/proteus/astralmaris/ming-qiao/notifications/${AGENT}.jsonl"
-LASTREAD_FILE="/Users/proteus/astralmaris/ming-qiao/notifications/${AGENT}.lastread"
-
-if [[ ! -f "$NOTIFY_FILE" ]]; then
-    exit 0
-fi
-
-TOTAL_LINES=$(wc -l < "$NOTIFY_FILE" | tr -d ' ')
-
-# Read last-seen position
-LAST_SEEN=0
-if [[ -f "$LASTREAD_FILE" ]]; then
-    LAST_SEEN=$(cat "$LASTREAD_FILE" 2>/dev/null || echo 0)
-fi
-
-# No new lines
-if [[ "$TOTAL_LINES" -le "$LAST_SEEN" ]]; then
-    exit 0
-fi
-
-# Extract new lines and filter for request/discuss intent
-NEW_LINES=$(tail -n +"$((LAST_SEEN + 1))" "$NOTIFY_FILE")
-URGENT=$(echo "$NEW_LINES" | jq -r 'select(.intent == "request" or .intent == "discuss") | "  From: \(.from) — \"\(.subject)\" (intent: \(.intent))"' 2>/dev/null || true)
-
-if [[ -z "$URGENT" ]]; then
-    # Update position — we saw the messages, they're just not urgent
+if [[ "$ACKNOWLEDGED" == true && -f "$NOTIFY_FILE" ]]; then
+    TOTAL_LINES=$(wc -l < "$NOTIFY_FILE" | tr -d ' ')
     echo "$TOTAL_LINES" > "$LASTREAD_FILE"
-    exit 0
+    exit 0  # Just acknowledged — no need to alert
 fi
 
-URGENT_COUNT=$(echo "$URGENT" | wc -l | tr -d ' ')
+CONTEXT=""
 
-# Output additionalContext JSON for Claude
-jq -n --arg ctx "$(printf '⚠️ INTERRUPT: %d urgent message(s) waiting:\n%s\nAction: Use check_messages to read and respond BEFORE continuing your current work.' "$URGENT_COUNT" "$URGENT")" \
-'{
-  hookSpecificOutput: {
-    hookEventName: "PostToolUse",
-    additionalContext: $ctx
-  }
-}'
+# ── Check 1: Interrupt file from background handler ──
+if [[ -f "$INTERRUPT_FILE" ]]; then
+    INT_DATA=$(cat "$INTERRUPT_FILE")
+    INT_FROM=$(echo "$INT_DATA" | jq -r '.from // "unknown"' 2>/dev/null)
+    INT_SUBJECT=$(echo "$INT_DATA" | jq -r '.subject // ""' 2>/dev/null)
+    INT_HANDLED=$(echo "$INT_DATA" | jq -r '.handled // "pending"' 2>/dev/null)
 
-# Update position
-echo "$TOTAL_LINES" > "$LASTREAD_FILE"
+    if [[ "$INT_HANDLED" == "complete" ]]; then
+        CONTEXT="BACKGROUND UPDATE: A message from $INT_FROM (re: \"$INT_SUBJECT\") was handled by a background session. Call read_inbox or check_messages to acknowledge."
+    elif [[ "$INT_HANDLED" == "pending" ]]; then
+        CONTEXT="INCOMING: A message from $INT_FROM (re: \"$INT_SUBJECT\") is being handled by a background session. Continue your current work."
+    fi
+
+    rm -f "$INTERRUPT_FILE"
+fi
+
+# ── Check 2: Unacknowledged notifications (re-alerts every time) ──
+if [[ -f "$NOTIFY_FILE" ]]; then
+    TOTAL_LINES=$(wc -l < "$NOTIFY_FILE" | tr -d ' ')
+    LAST_SEEN=0
+    [[ -f "$LASTREAD_FILE" ]] && LAST_SEEN=$(cat "$LASTREAD_FILE" 2>/dev/null || echo 0)
+
+    if [[ "$TOTAL_LINES" -gt "$LAST_SEEN" ]]; then
+        NEW_LINES=$(tail -n +"$((LAST_SEEN + 1))" "$NOTIFY_FILE")
+
+        # Extract request-intent messages with timestamp and subject
+        REQUESTS=$(echo "$NEW_LINES" | jq -r '
+            select(.intent == "request") |
+            "  From: \(.from) (\(.timestamp | split("T")[1] | split(".")[0])). Subject: \(.subject)"
+        ' 2>/dev/null || true)
+
+        # Extract discuss-intent messages
+        DISCUSS=$(echo "$NEW_LINES" | jq -r '
+            select(.intent == "discuss") |
+            "  From: \(.from) (\(.timestamp | split("T")[1] | split(".")[0])). Subject: \(.subject)"
+        ' 2>/dev/null || true)
+
+        UNACKED_CTX=""
+
+        if [[ -n "$REQUESTS" ]]; then
+            REQ_COUNT=$(echo "$REQUESTS" | wc -l | tr -d ' ')
+            UNACKED_CTX=$(printf 'You have %d UNACKNOWLEDGED REQUEST(s). You MUST call read_inbox or check_messages NOW:\n%s' "$REQ_COUNT" "$REQUESTS")
+        fi
+
+        if [[ -n "$DISCUSS" ]]; then
+            DISC_COUNT=$(echo "$DISCUSS" | wc -l | tr -d ' ')
+            if [[ -n "$UNACKED_CTX" ]]; then
+                UNACKED_CTX=$(printf '%s\nAlso %d discuss message(s):\n%s' "$UNACKED_CTX" "$DISC_COUNT" "$DISCUSS")
+            else
+                UNACKED_CTX=$(printf '%d unacknowledged discuss message(s):\n%s\nCall read_inbox or check_messages to acknowledge.' "$DISC_COUNT" "$DISCUSS")
+            fi
+        fi
+
+        if [[ -n "$UNACKED_CTX" ]]; then
+            if [[ -n "$CONTEXT" ]]; then
+                CONTEXT="$CONTEXT | $UNACKED_CTX"
+            else
+                CONTEXT="$UNACKED_CTX"
+            fi
+        fi
+
+        # DO NOT advance lastread here — only advance on acknowledgment
+    fi
+fi
+
+# ── Output ──
+if [[ -n "$CONTEXT" ]]; then
+    jq -n --arg ctx "$CONTEXT" '{
+      systemMessage: $ctx,
+      hookSpecificOutput: {
+        hookEventName: "PostToolUse",
+        additionalContext: $ctx
+      }
+    }'
+fi

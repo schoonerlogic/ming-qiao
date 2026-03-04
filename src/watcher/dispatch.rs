@@ -221,6 +221,8 @@ mod tests {
                 thread_id: None,
                 priority: Priority::Normal,
                 intent: MessageIntent::Inform,
+                expected_response: ExpectedResponse::None,
+                require_ack: false,
             }),
         }
     }
@@ -358,6 +360,8 @@ mod tests {
                 thread_id: None,
                 priority: Priority::Normal,
                 intent: MessageIntent::Request,
+                expected_response: ExpectedResponse::Reply,
+                require_ack: false,
             }),
         }
     }

@@ -10,7 +10,8 @@ use std::collections::HashMap;
 use uuid::Uuid;
 
 use crate::events::{
-    EventEnvelope, EventPayload, EventType, MessageEvent, MessageIntent, Priority,
+    EventEnvelope, EventPayload, EventType, ExpectedResponse, MessageEvent, MessageIntent,
+    Priority,
 };
 use crate::mcp::protocol::{CallToolResult, McpError};
 use crate::nats::messages::MessageNotification;
@@ -146,6 +147,17 @@ impl ToolRegistry {
                         "enum": ["discuss", "request", "inform"],
                         "default": "inform",
                         "description": "Message intent: discuss (respond when ready), request (action needed), inform (FYI)"
+                    },
+                    "expected_response": {
+                        "type": "string",
+                        "enum": ["reply", "ack", "comply", "none", "standby"],
+                        "default": "none",
+                        "description": "What you expect the receiver to do: reply (OVER — send a response), ack (ROGER — confirm receipt), comply (WILCO — do this and confirm), none (OUT — FYI only), standby (STANDBY — hold for my follow-up)"
+                    },
+                    "require_ack": {
+                        "type": "boolean",
+                        "default": false,
+                        "description": "Whether to track receipt acknowledgment for this message"
                     }
                 },
                 "required": ["to", "subject", "content"]
@@ -499,8 +511,13 @@ impl ToolRegistry {
                 let nats_guard = self.state.nats_client_mut().await;
                 if let Some(ref client) = *nats_guard {
                     if let Err(e) = client.publish_message_notification(&msg.to, &notification).await {
+                        eprintln!("[ming-qiao] NATS message notification to '{}' failed: {}", msg.to, e);
                         tracing::warn!("NATS message notification failed: {}", e);
+                    } else {
+                        eprintln!("[ming-qiao] NATS notification sent to '{}': {}", msg.to, msg.subject);
                     }
+                } else {
+                    eprintln!("[ming-qiao] No NATS client — notification to '{}' skipped", msg.to);
                 }
             }
         }
@@ -524,6 +541,17 @@ impl ToolRegistry {
             Some("discuss") => MessageIntent::Discuss,
             Some("request") => MessageIntent::Request,
             _ => MessageIntent::Inform,
+        }
+    }
+
+    /// Helper to parse expected response from string
+    fn parse_expected_response(s: Option<&str>) -> ExpectedResponse {
+        match s {
+            Some("reply") => ExpectedResponse::Reply,
+            Some("ack") => ExpectedResponse::Ack,
+            Some("comply") => ExpectedResponse::Comply,
+            Some("standby") => ExpectedResponse::Standby,
+            _ => ExpectedResponse::None,
         }
     }
 
@@ -553,6 +581,8 @@ impl ToolRegistry {
             .map(String::from);
         let priority = Self::parse_priority(args.get("priority").and_then(|v| v.as_str()));
         let intent = Self::parse_intent(args.get("intent").and_then(|v| v.as_str()));
+        let expected_response = Self::parse_expected_response(args.get("expected_response").and_then(|v| v.as_str()));
+        let require_ack = args.get("require_ack").and_then(|v| v.as_bool()).unwrap_or(false);
 
         let event = EventEnvelope {
             id: Uuid::now_v7(),
@@ -567,6 +597,8 @@ impl ToolRegistry {
                 thread_id,
                 priority,
                 intent,
+                expected_response,
+                require_ack,
             }),
         };
 
@@ -621,12 +653,13 @@ impl ToolRegistry {
         let mut output = format!("## Inbox for {}\n\n", agent_id);
         for msg in messages {
             output.push_str(&format!(
-                "### {} [{}]\n**From:** {} | **Priority:** {:?} | **Intent:** {:?}\n**ID:** {}\n\n---\n\n",
+                "### {} [{}]\n**From:** {} | **Priority:** {:?} | **Intent:** {:?} | **Expected:** {:?}\n**ID:** {}\n\n---\n\n",
                 msg.subject,
                 msg.created_at.format("%Y-%m-%d %H:%M"),
                 msg.from,
                 msg.priority,
                 msg.intent,
+                msg.expected_response,
                 msg.id
             ));
         }
@@ -644,21 +677,53 @@ impl ToolRegistry {
             .and_then(|v| v.as_str())
             .ok_or_else(|| McpError::InvalidInput("message_id required".to_string()))?;
 
-        // Use Indexer for O(1) lookup
-        let indexer = self.state.indexer().await;
-        let msg = indexer.get_message(message_id);
+        // Try Indexer first (O(1) in-memory lookup)
+        {
+            let indexer = self.state.indexer().await;
+            if let Some(msg) = indexer.get_message(message_id) {
+                return Ok(CallToolResult::text(format!(
+                    "## {}\n\n**From:** {}\n**To:** {}\n**Date:** {}\n**Priority:** {:?}\n**Intent:** {:?}\n**Expected Response:** {:?}\n**Require ACK:** {}\n\n---\n\n{}",
+                    msg.subject, msg.from, msg.to,
+                    msg.created_at.format("%Y-%m-%d %H:%M:%S UTC"),
+                    msg.priority, msg.intent, msg.expected_response,
+                    msg.require_ack, msg.content
+                )));
+            }
+        }
 
-        match msg {
-            Some(msg) => Ok(CallToolResult::text(format!(
-                "## {}\n\n**From:** {}\n**To:** {}\n**Date:** {}\n**Priority:** {:?}\n**Intent:** {:?}\n\n---\n\n{}",
-                msg.subject,
-                msg.from,
-                msg.to,
-                msg.created_at.format("%Y-%m-%d %H:%M:%S UTC"),
-                msg.priority,
-                msg.intent,
-                msg.content
-            ))),
+        // Fallback: query SurrealDB directly (handles cross-instance race)
+        let envelope = self
+            .state
+            .persistence()
+            .get_event(message_id)
+            .await
+            .map_err(|e| McpError::Internal(format!("DB lookup failed: {}", e)))?;
+
+        match envelope {
+            Some(ref env) => {
+                // Self-heal: feed into Indexer so subsequent reads are O(1)
+                {
+                    let mut indexer = self.state.indexer_mut().await;
+                    if let Err(e) = indexer.process_event(env) {
+                        tracing::warn!("Indexer failed to process event {}: {}", message_id, e);
+                    }
+                }
+
+                if let EventPayload::Message(ref m) = env.payload {
+                    Ok(CallToolResult::text(format!(
+                        "## {}\n\n**From:** {}\n**To:** {}\n**Date:** {}\n**Priority:** {:?}\n**Intent:** {:?}\n**Expected Response:** {:?}\n**Require ACK:** {}\n\n---\n\n{}",
+                        m.subject, m.from, m.to,
+                        env.timestamp.format("%Y-%m-%d %H:%M:%S UTC"),
+                        m.priority, m.intent, m.expected_response,
+                        m.require_ack, m.content
+                    )))
+                } else {
+                    Ok(CallToolResult::text(format!(
+                        "Event {} exists but is not a message (type: {})",
+                        message_id, env.event_type
+                    )))
+                }
+            }
             None => Ok(CallToolResult::text(format!(
                 "Message not found: {}",
                 message_id
@@ -702,6 +767,8 @@ impl ToolRegistry {
                 thread_id: None,
                 priority,
                 intent: MessageIntent::Request,
+                expected_response: ExpectedResponse::Reply,
+                require_ack: false,
             }),
         };
 
@@ -990,6 +1057,8 @@ impl ToolRegistry {
                 thread_id: None,
                 priority,
                 intent,
+                expected_response: Self::parse_expected_response(args.get("expected_response").and_then(|v| v.as_str())),
+                require_ack: args.get("require_ack").and_then(|v| v.as_bool()).unwrap_or(false),
             }),
         };
 
@@ -1111,6 +1180,8 @@ impl ToolRegistry {
                 thread_id: Some(thread_id.to_string()),
                 priority,
                 intent,
+                expected_response: Self::parse_expected_response(args.get("expected_response").and_then(|v| v.as_str())),
+                require_ack: args.get("require_ack").and_then(|v| v.as_bool()).unwrap_or(false),
             }),
         };
 
@@ -1136,6 +1207,43 @@ impl ToolRegistry {
             .and_then(|v| v.as_str())
             .ok_or_else(|| McpError::InvalidInput("'thread_id' is required".to_string()))?;
 
+        // Try Indexer first
+        let found_in_indexer = {
+            let indexer = self.state.indexer().await;
+            indexer.get_thread(thread_id).is_some()
+        };
+
+        if !found_in_indexer {
+            // Fallback: query SurrealDB for thread events and feed into Indexer
+            let events = self
+                .state
+                .persistence()
+                .get_events_by_thread_id(thread_id)
+                .await
+                .map_err(|e| McpError::Internal(format!("DB thread lookup failed: {}", e)))?;
+
+            if events.is_empty() {
+                return Err(McpError::NotFound(format!(
+                    "Thread not found: {}",
+                    thread_id
+                )));
+            }
+
+            // Self-heal: feed all thread events into Indexer
+            {
+                let mut indexer = self.state.indexer_mut().await;
+                for event in &events {
+                    if let Err(e) = indexer.process_event(event) {
+                        tracing::warn!(
+                            "Indexer failed to process event {}: {}",
+                            event.id, e
+                        );
+                    }
+                }
+            }
+        }
+
+        // Read from Indexer (now populated either way)
         let (subject, json_messages) = {
             let indexer = self.state.indexer().await;
 
