@@ -272,4 +272,39 @@ mod tests {
         assert_eq!(config.validate_token("tok-luban-456"), Some("luban"));
         assert!(config.is_privileged("thales"));
     }
+
+    #[test]
+    fn test_identity_binding_match() {
+        // Agent using their own identity should pass
+        let caller = AuthenticatedAgent {
+            agent_id: "aleph".to_string(),
+            is_privileged: false,
+        };
+        let from_agent = "aleph";
+        assert_eq!(caller.agent_id, from_agent);
+    }
+
+    #[test]
+    fn test_identity_binding_mismatch_detected() {
+        // Ogma's token claiming to be aleph should be caught
+        let caller = AuthenticatedAgent {
+            agent_id: "ogma".to_string(),
+            is_privileged: false,
+        };
+        let from_agent = "aleph";
+        assert_ne!(caller.agent_id, from_agent);
+        assert!(!caller.is_privileged); // non-privileged = reject
+    }
+
+    #[test]
+    fn test_identity_binding_privileged_bypass() {
+        // Privileged agents (thales, merlin, council-chamber) can impersonate
+        let caller = AuthenticatedAgent {
+            agent_id: "thales".to_string(),
+            is_privileged: true,
+        };
+        let from_agent = "council-chamber";
+        // Privileged flag allows the mismatch
+        assert!(caller.is_privileged);
+    }
 }

@@ -41,6 +41,10 @@ pub fn api_routes(state: AppState) -> Router<AppState> {
         // Apply write auth middleware to all routes in this group
         .route_layer(middleware::from_fn_with_state(state, auth::require_write_auth));
 
+    // Signed event route — uses Ed25519 envelope verification (RA-004), not bearer tokens
+    let signed_routes = Router::new()
+        .route("/api/signed-event", post(handlers::submit_signed_event));
+
     // Read routes — no auth required during transition (P1 will add inbox auth)
     let read_routes = Router::new()
         // Health check
@@ -70,7 +74,7 @@ pub fn api_routes(state: AppState) -> Router<AppState> {
         // Search
         .route("/api/search", get(handlers::search));
 
-    read_routes.merge(write_routes)
+    read_routes.merge(write_routes).merge(signed_routes)
 }
 
 #[cfg(test)]
