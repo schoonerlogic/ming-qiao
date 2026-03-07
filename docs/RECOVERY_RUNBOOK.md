@@ -56,15 +56,19 @@ cd /Users/proteus/astralmaris/oracle/graphiti/mcp_server/docker
 docker compose -f docker-compose-oracle.yml up -d
 ```
 
-### 1.4 FalkorDB timeout (must reapply after every container restart)
+### 1.4 FalkorDB timeout (verify after container restart)
 
-The 30s query timeout is NOT persisted across FalkorDB restarts. Reapply:
+The 30s query timeout is now set via `REDIS_ARGS` in docker-compose-oracle.yml and persists across restarts. Verify after any FalkorDB restart:
 
 ```bash
-redis-cli -p 6379 CONFIG SET TIMEOUT 30
+docker exec docker-falkordb-1 redis-cli -p 6379 CONFIG GET timeout
+# Expected: timeout 30
 ```
 
-**TODO:** Add this to FalkorDB init path so it survives restarts automatically.
+If it shows `0`, the compose file may have been overwritten. Manual fix:
+```bash
+docker exec docker-falkordb-1 redis-cli -p 6379 CONFIG SET TIMEOUT 30
+```
 
 ---
 
@@ -268,6 +272,10 @@ If missing, create before starting the agent — not after. See `Agent MCP Confi
 **Cause:** Agents whose worktree directory is named `main` (e.g., Laozi-Jung at `echoessence/main`) auto-detect as agent ID `main` in legacy mq-send.sh/mq-inbox.sh scripts
 **Fix:** Hardcode agent ID in scripts — do not rely on directory name detection
 **Impact:** Messages delivered but unattributable — breaks inbox filtering by sender
+
+### FalkorDB timeout persistence — RESOLVED
+**Was:** 30s timeout reset to 0 on every container restart
+**Fix:** Added `--timeout 30` to `REDIS_ARGS` in docker-compose-oracle.yml (2026-03-07)
 
 ### Message delivery during outage
 **Symptom:** Messages land in notification files but not SurrealDB
