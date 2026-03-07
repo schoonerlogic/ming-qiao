@@ -124,7 +124,7 @@ pub async fn get_inbox(
         .collect();
     drop(indexer);
 
-    let messages: Vec<_> = messages_clone
+    let mut filtered: Vec<_> = messages_clone
         .into_iter()
         .filter(|msg| {
             // Filter by sender if specified
@@ -134,7 +134,15 @@ pub async fn get_inbox(
                 true
             }
         })
-        .take(query.limit as usize)
+        .collect();
+
+    // Sort by timestamp (most recent first), then apply limit
+    filtered.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+    let total_count = filtered.len();
+    filtered.truncate(query.limit as usize);
+
+    let messages: Vec<_> = filtered
+        .into_iter()
         .map(|msg| {
             serde_json::json!({
                 "id": msg.id,
@@ -153,7 +161,7 @@ pub async fn get_inbox(
         "agent": agent,
         "messages": messages,
         "unread_count": messages.len(),
-        "total_count": messages.len()
+        "total_count": total_count
     }))
 }
 

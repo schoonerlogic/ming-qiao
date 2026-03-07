@@ -12,6 +12,31 @@ use tracing::info;
 use crate::http::routes;
 use crate::state::AppState;
 
+/// Wait for SIGINT (ctrl-c) or SIGTERM for graceful shutdown.
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        tokio::signal::ctrl_c()
+            .await
+            .expect("failed to install Ctrl+C handler");
+    };
+
+    #[cfg(unix)]
+    let terminate = async {
+        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+            .expect("failed to install SIGTERM handler")
+            .recv()
+            .await;
+    };
+
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    tokio::select! {
+        _ = ctrl_c => info!("Received SIGINT, shutting down..."),
+        _ = terminate => info!("Received SIGTERM, shutting down..."),
+    }
+}
+
 /// Default server port
 pub const DEFAULT_PORT: u16 = 7777;
 
@@ -86,8 +111,11 @@ impl HttpServer {
         info!("HTTP server starting on http://{}", addr);
 
         let listener = tokio::net::TcpListener::bind(addr).await?;
-        axum::serve(listener, self.router()).await?;
+        axum::serve(listener, self.router())
+            .with_graceful_shutdown(shutdown_signal())
+            .await?;
 
+        info!("HTTP server shut down gracefully");
         Ok(())
     }
 

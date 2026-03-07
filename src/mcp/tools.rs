@@ -635,13 +635,13 @@ impl ToolRegistry {
                         true
                     }
                 })
-                .take(limit)
                 .cloned()
                 .collect()
         };
 
-        // Sort by timestamp (most recent first)
+        // Sort by timestamp (most recent first), then apply limit
         messages.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+        messages.truncate(limit);
 
         if messages.is_empty() {
             return Ok(CallToolResult::text(format!(
