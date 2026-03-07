@@ -498,18 +498,25 @@ impl ToolRegistry {
         self.state.broadcast_event(event.clone());
         self.state.merlin_notifier().notify(event.clone(), &self.state);
 
-        // 4. Publish NATS message notification for MessageSent events
+        // 4. Publish to JetStream + NATS notification for MessageSent events
         if event.event_type == EventType::MessageSent {
             if let EventPayload::Message(ref msg) = event.payload {
-                let notification = MessageNotification {
-                    event_id: event_id.clone(),
-                    from: msg.from.clone(),
-                    subject: msg.subject.clone(),
-                    intent: msg.intent.clone(),
-                    timestamp: event.timestamp,
-                };
                 let nats_guard = self.state.nats_client_mut().await;
                 if let Some(ref client) = *nats_guard {
+                    // JetStream durable delivery (Phase 2)
+                    if let Err(e) = client.publish_message_event(&msg.to, event).await {
+                        eprintln!("[ming-qiao] JetStream publish failed: {} (SurrealDB is authoritative)", e);
+                        tracing::warn!("JetStream message publish failed: {}", e);
+                    }
+
+                    // Ephemeral notification hint
+                    let notification = MessageNotification {
+                        event_id: event_id.clone(),
+                        from: msg.from.clone(),
+                        subject: msg.subject.clone(),
+                        intent: msg.intent.clone(),
+                        timestamp: event.timestamp,
+                    };
                     if let Err(e) = client.publish_message_notification(&msg.to, &notification).await {
                         eprintln!("[ming-qiao] NATS message notification to '{}' failed: {}", msg.to, e);
                         tracing::warn!("NATS message notification failed: {}", e);

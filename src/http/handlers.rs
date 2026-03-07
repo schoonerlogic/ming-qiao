@@ -465,16 +465,27 @@ pub async fn create_thread(
         }
     }
 
-    // Extract message fields for NATS notification before broadcast consumes event
+    // Extract message fields and clone event for NATS before broadcast consumes it
     let (msg_to, msg_from, msg_subject, msg_intent) = match &event.payload {
         EventPayload::Message(m) => (m.to.clone(), m.from.clone(), m.subject.clone(), m.intent.clone()),
         _ => unreachable!(),
     };
+    let event_for_js = event.clone();
 
     // Broadcast to WebSocket listeners
     state.broadcast_event(event);
 
-    // Publish NATS message notification
+    // Publish to JetStream AGENT_MESSAGES for durable cross-process sync (Phase 2)
+    {
+        let nats_guard = state.nats_client_mut().await;
+        if let Some(ref client) = *nats_guard {
+            if let Err(e) = client.publish_message_event(&msg_to, &event_for_js).await {
+                warn!("JetStream message publish failed: {} (SurrealDB is authoritative)", e);
+            }
+        }
+    }
+
+    // Publish NATS message notification (ephemeral hint for live sessions)
     {
         let nats_guard = state.nats_client_mut().await;
         if let Some(ref client) = *nats_guard {
@@ -634,16 +645,27 @@ pub async fn reply_to_thread(
         }
     }
 
-    // Extract message fields for NATS notification before broadcast consumes event
+    // Extract message fields and clone event for NATS before broadcast consumes it
     let (reply_to, reply_from, reply_subject, reply_intent) = match &event.payload {
         EventPayload::Message(m) => (m.to.clone(), m.from.clone(), m.subject.clone(), m.intent.clone()),
         _ => unreachable!(),
     };
+    let event_for_js = event.clone();
 
     // Broadcast to WebSocket listeners
     state.broadcast_event(event);
 
-    // Publish NATS message notification
+    // Publish to JetStream AGENT_MESSAGES for durable cross-process sync (Phase 2)
+    {
+        let nats_guard = state.nats_client_mut().await;
+        if let Some(ref client) = *nats_guard {
+            if let Err(e) = client.publish_message_event(&reply_to, &event_for_js).await {
+                warn!("JetStream message publish failed: {} (SurrealDB is authoritative)", e);
+            }
+        }
+    }
+
+    // Publish NATS message notification (ephemeral hint for live sessions)
     {
         let nats_guard = state.nats_client_mut().await;
         if let Some(ref client) = *nats_guard {

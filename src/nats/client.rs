@@ -160,6 +160,41 @@ impl NatsAgentClient {
         Ok(())
     }
 
+    /// Publish a message event to JetStream for durable delivery.
+    ///
+    /// Used by the HTTP server to publish EventEnvelopes to the AGENT_MESSAGES
+    /// stream after writing to SurrealDB. This enables cross-process sync via
+    /// JetStream instead of ephemeral core NATS.
+    ///
+    /// Subject: `am.msg.{to_agent}`
+    ///
+    /// Returns the JetStream sequence number on success.
+    pub async fn publish_message_event(
+        &self,
+        to_agent: &str,
+        event: &crate::events::EventEnvelope,
+    ) -> Result<u64, ClientError> {
+        let subject = AgentSubjects::message_event(to_agent);
+        let payload = serde_json::to_vec(event)?;
+
+        // Set Nats-Msg-Id for server-side dedup (120s window)
+        let mut headers = async_nats::HeaderMap::new();
+        headers.insert(
+            async_nats::header::NATS_MESSAGE_ID,
+            event.id.to_string().as_str(),
+        );
+
+        let ack = self
+            .jetstream
+            .publish_with_headers(subject, headers, payload.into())
+            .await
+            .map_err(|e| ClientError::Publish(e.to_string()))?
+            .await
+            .map_err(|e| ClientError::Publish(e.to_string()))?;
+
+        Ok(ack.sequence)
+    }
+
     /// Publish a message notification hint via core NATS (ephemeral, no JetStream).
     ///
     /// Published to the *recipient's* message subject — not our own.

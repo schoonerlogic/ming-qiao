@@ -13,6 +13,7 @@ use crate::db::{Indexer, Persistence};
 use crate::events::EventEnvelope;
 use crate::http::auth::AuthConfig;
 use crate::merlin::MerlinNotifier;
+use async_nats::jetstream;
 use crate::nats::{NatsAgentClient, NatsMessage};
 use crate::state::config::{Config, ObservationMode};
 
@@ -56,6 +57,9 @@ struct AppStateInner {
 
     /// NATS agent client (None if disabled or unreachable)
     nats_client: RwLock<Option<NatsAgentClient>>,
+
+    /// JetStream context for durable message publishing (None if NATS disabled)
+    jetstream_context: RwLock<Option<jetstream::Context>>,
 
     /// Broadcast channel for NATS messages received from other agents
     nats_tx: broadcast::Sender<NatsMessage>,
@@ -214,6 +218,7 @@ impl AppState {
                 indexer: RwLock::new(indexer),
                 merlin_notifier: Arc::new(MerlinNotifier::new()),
                 nats_client: RwLock::new(None),
+                jetstream_context: RwLock::new(None),
                 nats_tx,
                 auth_config: RwLock::new(auth_config),
                 keyring,
@@ -321,6 +326,16 @@ impl AppState {
     /// Check if NATS is connected
     pub async fn nats_connected(&self) -> bool {
         self.inner.nats_client.read().await.is_some()
+    }
+
+    /// Store the JetStream context for durable message publishing.
+    pub async fn set_jetstream_context(&self, ctx: jetstream::Context) {
+        *self.inner.jetstream_context.write().await = Some(ctx);
+    }
+
+    /// Get the JetStream context (if NATS is connected).
+    pub async fn jetstream_context(&self) -> Option<jetstream::Context> {
+        self.inner.jetstream_context.read().await.clone()
     }
 
     /// Get the broadcast sender for injecting events into the local bus

@@ -7,6 +7,7 @@
 //! | `AGENT_TASKS` | `am.agent.*.task.>` | Work queue | 7 days | Task coordination |
 //! | `AGENT_NOTES` | `am.agent.*.notes.>` | Standard | 30 days | Session notes |
 //! | `AGENT_OBSERVATIONS` | `am.observe.>` | Standard | 30 days | Observer insights |
+//! | `AGENT_MESSAGES` | `am.msg.>` | Standard | 7 days | Durable message delivery |
 //!
 //! Presence heartbeats use core NATS (no JetStream) — they are ephemeral
 //! and don't need persistence or replay.
@@ -26,6 +27,12 @@ pub const STREAM_AGENT_NOTES: &str = "AGENT_NOTES";
 
 /// Stream name for observer insights (Laozi-Jung, future observers).
 pub const STREAM_AGENT_OBSERVATIONS: &str = "AGENT_OBSERVATIONS";
+
+/// Stream name for durable message delivery (Phase 2 — JetStream delivery).
+///
+/// MCP subprocesses publish EventEnvelopes here when the HTTP API is unreachable.
+/// The HTTP server's durable consumer ingests them into SurrealDB + Indexer.
+pub const STREAM_AGENT_MESSAGES: &str = "AGENT_MESSAGES";
 
 // ============================================================================
 // Stream configurations
@@ -87,6 +94,31 @@ pub fn agent_observations_stream() -> jetstream::stream::Config {
         retention: jetstream::stream::RetentionPolicy::Limits,
         max_age: Duration::from_secs(30 * 24 * 3600), // 30 days
         storage: jetstream::stream::StorageType::File,
+        ..Default::default()
+    }
+}
+
+/// Configuration for the AGENT_MESSAGES JetStream stream.
+///
+/// Durable delivery for inter-agent messages. MCP subprocesses publish
+/// EventEnvelopes here when the HTTP API is unreachable (Tier 2 fallback).
+/// The HTTP server consumes from this stream and writes to SurrealDB + Indexer.
+///
+/// Subject pattern: `am.msg.{to_agent}` — per Thales directive, no project
+/// dimension. Can be extended later if multi-project routing is needed.
+///
+/// - Retention: limits (messages persist until max_age)
+/// - Max age: 7 days
+/// - Storage: file (survives server restart)
+/// - Dedup window: 120s (prevents duplicate publish on retry)
+pub fn agent_messages_stream() -> jetstream::stream::Config {
+    jetstream::stream::Config {
+        name: STREAM_AGENT_MESSAGES.to_string(),
+        subjects: vec!["am.msg.>".to_string()],
+        retention: jetstream::stream::RetentionPolicy::Limits,
+        max_age: Duration::from_secs(7 * 24 * 3600), // 7 days
+        storage: jetstream::stream::StorageType::File,
+        duplicate_window: Duration::from_secs(120), // 2 min dedup window
         ..Default::default()
     }
 }
@@ -176,6 +208,26 @@ pub fn notes_all_consumer_config(agent: &str) -> (String, jetstream::consumer::p
     (consumer_name, config)
 }
 
+/// Create a durable pull consumer for the HTTP server's message ingester.
+///
+/// Consumes EventEnvelopes from the AGENT_MESSAGES stream and writes them
+/// to SurrealDB + Indexer. On startup, replays any unacked messages
+/// (events published while the HTTP server was down).
+///
+/// Consumer name: `messages-ingester`
+pub fn message_ingester_consumer_config() -> (String, jetstream::consumer::pull::Config) {
+    let consumer_name = "messages-ingester".to_string();
+
+    let config = jetstream::consumer::pull::Config {
+        durable_name: Some(consumer_name.clone()),
+        filter_subject: "am.msg.>".to_string(),
+        ack_policy: jetstream::consumer::AckPolicy::Explicit,
+        ..Default::default()
+    };
+
+    (consumer_name, config)
+}
+
 /// Create a durable pull consumer for all observations.
 ///
 /// Subscribes to `am.observe.>`. Used by agents that want to receive
@@ -246,6 +298,20 @@ pub async fn ensure_streams(js: &jetstream::Context) -> Result<(), StreamSetupEr
         observations.cached_info().state.messages
     );
 
+    let messages = js
+        .get_or_create_stream(agent_messages_stream())
+        .await
+        .map_err(|e| StreamSetupError::Create {
+            stream: STREAM_AGENT_MESSAGES.to_string(),
+            reason: e.to_string(),
+        })?;
+
+    tracing::info!(
+        "Stream '{}' ready ({} messages)",
+        STREAM_AGENT_MESSAGES,
+        messages.cached_info().state.messages
+    );
+
     Ok(())
 }
 
@@ -304,16 +370,44 @@ mod tests {
     }
 
     #[test]
+    fn test_agent_messages_stream_config() {
+        let config = agent_messages_stream();
+        assert_eq!(config.name, "AGENT_MESSAGES");
+        assert_eq!(config.subjects, vec!["am.msg.>"]);
+        assert_eq!(
+            config.retention,
+            jetstream::stream::RetentionPolicy::Limits
+        );
+        assert_eq!(config.max_age, Duration::from_secs(7 * 24 * 3600));
+        assert_eq!(config.storage, jetstream::stream::StorageType::File);
+        assert_eq!(config.duplicate_window, Duration::from_secs(120));
+    }
+
+    #[test]
+    fn test_message_ingester_consumer_config() {
+        let (name, config) = message_ingester_consumer_config();
+        assert_eq!(name, "messages-ingester");
+        assert_eq!(config.durable_name.as_deref(), Some("messages-ingester"));
+        assert_eq!(config.filter_subject, "am.msg.>");
+        assert_eq!(
+            config.ack_policy,
+            jetstream::consumer::AckPolicy::Explicit
+        );
+    }
+
+    #[test]
     fn test_streams_use_am_prefix() {
         let tasks = agent_tasks_stream();
         let notes = agent_notes_stream();
         let observations = agent_observations_stream();
+        let messages = agent_messages_stream();
 
         for subject in tasks
             .subjects
             .iter()
             .chain(notes.subjects.iter())
             .chain(observations.subjects.iter())
+            .chain(messages.subjects.iter())
         {
             assert!(
                 subject.starts_with("am."),
@@ -431,6 +525,7 @@ mod tests {
             notes_consumer_config("a", "p").1,
             notes_all_consumer_config("a").1,
             observations_all_consumer_config("a").1,
+            message_ingester_consumer_config().1,
         ];
 
         for config in &configs {

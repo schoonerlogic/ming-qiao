@@ -24,6 +24,7 @@ use tracing_subscriber::{fmt, EnvFilter};
 use ming_qiao::http::HttpServer;
 use ming_qiao::mcp::McpServer;
 use ming_qiao::nats::{NatsAgentClient, NatsMessage};
+use ming_qiao::nats::streams;
 use ming_qiao::state::AppState;
 
 /// Initialize logging with tracing
@@ -226,6 +227,102 @@ fn spawn_event_nats_subscriber(
     });
 }
 
+/// Spawn a background task that consumes message events from JetStream
+/// and writes them to SurrealDB + Indexer.
+///
+/// This is the durable delivery consumer (Phase 2). MCP subprocesses publish
+/// EventEnvelopes to the AGENT_MESSAGES stream when the HTTP API is unreachable.
+/// This consumer ingests them on the HTTP server side, ensuring no messages are lost.
+///
+/// On startup, any unacked messages (published while HTTP was down) are replayed.
+fn spawn_jetstream_message_consumer(state: &AppState, js: async_nats::jetstream::Context) {
+    let state = state.clone();
+
+    tokio::spawn(async move {
+        let stream = match js.get_stream(streams::STREAM_AGENT_MESSAGES).await {
+            Ok(s) => s,
+            Err(e) => {
+                error!("Failed to get AGENT_MESSAGES stream: {}", e);
+                return;
+            }
+        };
+
+        let (consumer_name, config) = streams::message_ingester_consumer_config();
+        let consumer = match stream.get_or_create_consumer(&consumer_name, config).await {
+            Ok(c) => c,
+            Err(e) => {
+                error!("Failed to create message ingester consumer: {}", e);
+                return;
+            }
+        };
+
+        let mut messages = match consumer.messages().await {
+            Ok(m) => m,
+            Err(e) => {
+                error!("Failed to start message ingester: {}", e);
+                return;
+            }
+        };
+
+        info!("JetStream message ingester active (consumer: {})", consumer_name);
+
+        use futures_util::StreamExt;
+        while let Some(msg_result) = messages.next().await {
+            let msg = match msg_result {
+                Ok(m) => m,
+                Err(e) => {
+                    warn!("JetStream message ingester error: {}", e);
+                    continue;
+                }
+            };
+
+            match serde_json::from_slice::<ming_qiao::events::EventEnvelope>(&msg.payload) {
+                Ok(event) => {
+                    // Write to SurrealDB
+                    if let Err(e) = state.persistence().store_event(&event).await {
+                        // Check if it's a duplicate (already in DB)
+                        let err_str = e.to_string();
+                        if err_str.contains("already exists") || err_str.contains("duplicate") {
+                            // Expected during replay — event was already written by HTTP path
+                            info!("JetStream ingester: event {} already in SurrealDB (dedup)", event.id);
+                        } else {
+                            warn!("JetStream ingester: SurrealDB write failed for {}: {} (will redeliver)", event.id, e);
+                            // Don't ack — JetStream will redeliver
+                            continue;
+                        }
+                    }
+
+                    // Update Indexer (dedup via seen_ids)
+                    {
+                        let mut indexer = state.indexer_mut().await;
+                        if let Err(e) = indexer.process_event(&event) {
+                            // Dedup rejection is expected, not an error
+                            info!("JetStream ingester: indexer skipped event {}: {}", event.id, e);
+                        }
+                    }
+
+                    // Broadcast to WebSocket listeners
+                    state.broadcast_event(event);
+
+                    // Ack — message successfully processed
+                    if let Err(e) = msg.ack().await {
+                        warn!("JetStream ingester: failed to ack message: {}", e);
+                    }
+                }
+                Err(e) => {
+                    warn!("JetStream ingester: bad EventEnvelope payload: {}", e);
+                    // Ack garbage so it doesn't redeliver forever
+                    if let Err(e) = msg.ack().await {
+                        warn!("JetStream ingester: failed to ack bad message: {}", e);
+                    }
+                }
+            }
+        }
+
+        info!("JetStream message ingester ended");
+    });
+}
+
 /// Run the HTTP server
 async fn run_http_server() -> Result<(), Box<dyn std::error::Error>> {
     let config_path = env::var("MING_QIAO_CONFIG").unwrap_or_else(|_| "ming-qiao.toml".to_string());
@@ -256,6 +353,10 @@ async fn run_http_server() -> Result<(), Box<dyn std::error::Error>> {
         // Extract event sync parts before moving client into state
         let (nats_raw, events_subject) = client.event_sync_parts();
 
+        // Store JetStream context for durable message publishing (Phase 2)
+        let js_context = client.jetstream().clone();
+        state.set_jetstream_context(js_context.clone()).await;
+
         let nats_tx = state.nats_message_sender();
 
         if let Err(e) = client.subscribe_all_tasks(nats_tx.clone()).await {
@@ -285,7 +386,11 @@ async fn run_http_server() -> Result<(), Box<dyn std::error::Error>> {
         spawn_event_nats_publisher(&state, nats_raw.clone(), events_subject.clone(), true);
         spawn_event_nats_subscriber(&state, nats_raw, events_subject, true);
 
-        info!("NATS agent client active for HTTP server (subscriptions + heartbeat + persistence + event sync)");
+        // JetStream durable message consumer (Phase 2)
+        // Ingests EventEnvelopes published by MCP subprocesses when HTTP was unreachable
+        spawn_jetstream_message_consumer(&state, js_context);
+
+        info!("NATS agent client active for HTTP server (subscriptions + heartbeat + persistence + event sync + JetStream ingester)");
     }
 
     // Start watcher dispatcher for observer agents (e.g. Laozi-Jung)

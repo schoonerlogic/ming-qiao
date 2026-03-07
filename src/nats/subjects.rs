@@ -138,6 +138,21 @@ impl AgentSubjects {
     }
 
     // ========================================================================
+    // Message events (JetStream — durable delivery, Phase 2)
+    // ========================================================================
+
+    /// Durable message event subject for a specific recipient.
+    ///
+    /// Used by the AGENT_MESSAGES JetStream stream for guaranteed delivery.
+    /// MCP subprocesses publish here when the HTTP API is unreachable (Tier 2).
+    /// The HTTP server's message ingester consumer processes these.
+    ///
+    /// `am.msg.{to_agent}`
+    pub fn message_event(to_agent: &str) -> String {
+        format!("am.msg.{}", to_agent)
+    }
+
+    // ========================================================================
     // Message notifications (core NATS — ephemeral, notification hint)
     // ========================================================================
 
@@ -329,6 +344,23 @@ mod tests {
             AgentSubjects::all_agents_task_wildcard("mingqiao"),
             "am.agent.*.task.mingqiao.>"
         );
+    }
+
+    // ========================================================================
+    // Message events (JetStream durable delivery)
+    // ========================================================================
+
+    #[test]
+    fn test_message_event_subject() {
+        assert_eq!(
+            AgentSubjects::message_event("thales"),
+            "am.msg.thales"
+        );
+    }
+
+    #[test]
+    fn test_message_event_subject_starts_with_am() {
+        assert!(AgentSubjects::message_event("aleph").starts_with("am."));
     }
 
     // ========================================================================
