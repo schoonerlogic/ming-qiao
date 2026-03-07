@@ -91,14 +91,57 @@ impl AppState {
         let db_username = config.database.resolved_username();
         let db_password = config.database.resolved_password();
 
-        let persistence = Persistence::connect_with_auth(
-            &config.database.url,
-            db_username.as_deref(),
-            db_password.as_deref(),
-            config.database.auth_level,
-        )
-        .await
-        .expect("Failed to connect to SurrealDB");
+        // Retry SurrealDB connection with exponential backoff.
+        // SurrealDB may not be ready immediately after a system reboot.
+        let persistence = {
+            let max_retries = 5;
+            let mut delay = std::time::Duration::from_secs(1);
+            let mut last_err = None;
+            let mut connected = None;
+
+            for attempt in 1..=max_retries {
+                match Persistence::connect_with_auth(
+                    &config.database.url,
+                    db_username.as_deref(),
+                    db_password.as_deref(),
+                    config.database.auth_level,
+                )
+                .await
+                {
+                    Ok(p) => {
+                        if attempt > 1 {
+                            tracing::info!(
+                                "Connected to SurrealDB on attempt {}/{}",
+                                attempt,
+                                max_retries
+                            );
+                        }
+                        connected = Some(p);
+                        break;
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            "SurrealDB connection attempt {}/{} failed: {} (retrying in {:?})",
+                            attempt,
+                            max_retries,
+                            e,
+                            delay
+                        );
+                        last_err = Some(e);
+                        tokio::time::sleep(delay).await;
+                        delay *= 2;
+                    }
+                }
+            }
+
+            connected.unwrap_or_else(|| {
+                panic!(
+                    "Failed to connect to SurrealDB after {} attempts: {}",
+                    max_retries,
+                    last_err.map(|e| e.to_string()).unwrap_or_default()
+                )
+            })
+        };
 
         // Load HTTP auth config if enabled
         let auth_config = if config.auth.enabled {
