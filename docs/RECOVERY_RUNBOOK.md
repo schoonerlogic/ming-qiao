@@ -140,10 +140,19 @@ def reinject(agent, line_indices):
         print(f"{'✓' if ok else '✗'} {msg.get('from')} → {agent}: {msg.get('subject','')[:50]}")
 ```
 
-### 2.3 Restart ming-qiao after re-injection
+### 2.3 Rehydrate the in-memory indexer
 
-The HTTP server's in-memory indexer doesn't see events written by MCP subprocesses. Restart to rehydrate:
+The HTTP server's in-memory indexer doesn't see events written by MCP subprocesses or direct DB writes. Use the rehydrate endpoint to re-sync without restarting:
 
+```bash
+curl -s -X POST http://localhost:7777/api/admin/rehydrate \
+  -H "Authorization: Bearer <any-valid-agent-token>" \
+  -H "Content-Type: application/json"
+```
+
+Expected: `{"status":"rehydrated","events_processed":N,"events_skipped":0,...}`
+
+If the rehydrate endpoint is unavailable (older binary), fall back to a full restart:
 ```bash
 launchctl kickstart -k gui/$(id -u)/com.astralmaris.ming-qiao
 sleep 3
@@ -276,6 +285,12 @@ If missing, create before starting the agent — not after. See `Agent MCP Confi
 ### FalkorDB timeout persistence — RESOLVED
 **Was:** 30s timeout reset to 0 on every container restart
 **Fix:** Added `--timeout 30` to `REDIS_ARGS` in docker-compose-oracle.yml (2026-03-07)
+
+### Indexer drift (messages exist in DB but not in inbox API)
+**Symptom:** Messages visible via direct SurrealDB query but absent from `/api/inbox` or `check_messages`
+**Cause:** Events written to SurrealDB via MCP subprocess (Path B) bypass the in-memory indexer
+**Fix:** `POST /api/admin/rehydrate` — rebuilds indexer from SurrealDB without restart
+**Permanent fix:** Eliminate Path B — all writes must go through HTTP API (see Thales decision 2026-03-07)
 
 ### Message delivery during outage
 **Symptom:** Messages land in notification files but not SurrealDB

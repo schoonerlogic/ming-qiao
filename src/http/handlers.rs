@@ -89,6 +89,60 @@ pub async fn health_check(State(state): State<AppState>) -> impl IntoResponse {
 }
 
 // ============================================================================
+// Admin — Indexer Rehydration
+// ============================================================================
+
+/// Re-sync the in-memory indexer from SurrealDB without restart.
+///
+/// Replays all stored events through the indexer, picking up any events
+/// that were written to SurrealDB by external processes (MCP subprocesses)
+/// but missed by the running server's event pipeline.
+pub async fn rehydrate_indexer(State(state): State<AppState>) -> impl IntoResponse {
+    let events = match state.persistence().get_all_events().await {
+        Ok(e) => e,
+        Err(e) => {
+            tracing::error!("Rehydration failed — could not read events: {}", e);
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({
+                    "status": "error",
+                    "message": format!("Failed to read events: {}", e)
+                })),
+            );
+        }
+    };
+
+    let total_events = events.len();
+    let new_events;
+
+    {
+        let mut indexer = state.indexer_mut().await;
+        let before = indexer.events_processed();
+        for event in &events {
+            if let Err(e) = indexer.process_event(event) {
+                tracing::warn!("Rehydration skipped event {}: {}", event.id, e);
+            }
+        }
+        new_events = indexer.events_processed() - before;
+    }
+
+    tracing::info!(
+        "Rehydration complete: {} total events, {} new",
+        total_events,
+        new_events
+    );
+
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({
+            "status": "ok",
+            "total_events": total_events,
+            "new_events": new_events
+        })),
+    )
+}
+
+// ============================================================================
 // Inbox Handlers
 // ============================================================================
 
