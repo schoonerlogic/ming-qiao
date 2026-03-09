@@ -6,20 +6,19 @@
 
 set -euo pipefail
 
+# Load shared security functions (path hardening, atomic writes, token stripping)
+source "$(dirname "$0")/cocktail-lib.sh"
+
 # Read hook input from stdin to get session context
 INPUT=$(cat)
 
-# Determine agent ID from the project directory
-# The cwd tells us which agent workspace we're in
+# Determine agent ID from the project directory (hardened path resolution)
 CWD=$(echo "$INPUT" | jq -r '.cwd // empty')
-if [[ "$CWD" == *"/aleph"* ]]; then
-    AGENT="aleph"
-elif [[ "$CWD" == *"/luban"* ]]; then
-    AGENT="luban"
-elif [[ "$CWD" == *"/merlin"* ]]; then
-    AGENT="merlin"
-else
-    AGENT="${MING_QIAO_AGENT_ID:-}"
+AGENT="${MING_QIAO_AGENT_ID:-}"
+if [[ -z "$AGENT" ]]; then
+    if [[ -n "$CWD" ]]; then
+        resolve_agent_id "$CWD" || true
+    fi
 fi
 
 if [[ -z "$AGENT" ]]; then
@@ -31,8 +30,14 @@ if [[ -n "${CLAUDE_ENV_FILE:-}" ]]; then
     echo "export MING_QIAO_AGENT_ID=${AGENT}" >> "$CLAUDE_ENV_FILE"
 fi
 
-NOTIFY_FILE="/Users/proteus/astralmaris/ming-qiao/notifications/${AGENT}.jsonl"
-LASTREAD_FILE="/Users/proteus/astralmaris/ming-qiao/notifications/${AGENT}.lastread"
+NOTIFY_DIR="/Users/proteus/astralmaris/ming-qiao/notifications"
+NOTIFY_FILE="${NOTIFY_DIR}/${AGENT}.jsonl"
+LASTREAD_FILE="${NOTIFY_DIR}/${AGENT}.lastread"
+
+# Reject symlinked notification directory
+if [[ -L "$NOTIFY_DIR" ]]; then
+    exit 0
+fi
 
 if [[ ! -f "$NOTIFY_FILE" ]]; then
     exit 0

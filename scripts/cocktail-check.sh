@@ -13,23 +13,28 @@
 
 set -euo pipefail
 
+# Load shared security functions (path hardening, atomic writes, token stripping)
+source "$(dirname "$0")/cocktail-lib.sh"
+
 INPUT=$(cat)
 
-# Derive agent ID from env or cwd
+# Derive agent ID from env or cwd (hardened path resolution)
 AGENT="${MING_QIAO_AGENT_ID:-}"
 if [[ -z "$AGENT" ]]; then
     CWD=$(echo "$INPUT" | jq -r '.cwd // empty' 2>/dev/null)
-    if [[ "$CWD" == *"/aleph"* ]]; then
-        AGENT="aleph"
-    elif [[ "$CWD" == *"/luban"* ]]; then
-        AGENT="luban"
-    elif [[ "$CWD" == *"/merlin"* ]]; then
-        AGENT="merlin"
+    if [[ -n "$CWD" ]]; then
+        resolve_agent_id "$CWD" || true
     fi
 fi
 [[ -z "$AGENT" ]] && exit 0
 
 NOTIFY_DIR="/Users/proteus/astralmaris/ming-qiao/notifications"
+
+# Reject symlinked notification directory
+if [[ -L "$NOTIFY_DIR" ]]; then
+    exit 0
+fi
+
 INTERRUPT_FILE="$NOTIFY_DIR/${AGENT}.interrupt"
 NOTIFY_FILE="$NOTIFY_DIR/${AGENT}.jsonl"
 LASTREAD_FILE="$NOTIFY_DIR/${AGENT}.lastread"
@@ -59,7 +64,7 @@ fi
 
 if [[ "$ACKNOWLEDGED" == true && -f "$NOTIFY_FILE" ]]; then
     TOTAL_LINES=$(wc -l < "$NOTIFY_FILE" | tr -d ' ')
-    echo "$TOTAL_LINES" > "$LASTREAD_FILE"
+    atomic_write "$LASTREAD_FILE" "$TOTAL_LINES"
     exit 0  # Just acknowledged — no need to alert
 fi
 

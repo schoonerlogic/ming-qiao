@@ -7,3 +7,6 @@ config/surreal-creds.env
 config/surreal-root.env
 config/keys/*.seed
 config/nkeys/*.nk
+
+# Ming-qiao pending notifications (never commit — may contain metadata)
+PENDING_MESSAGES.md

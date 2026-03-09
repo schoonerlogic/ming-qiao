@@ -33,13 +33,15 @@
 Every agent MUST:
 
 ```
-0. Check notifications     — Read notifications/{your-agent-id}.jsonl for new messages
-1. Check ming-qiao inbox  — GET /api/inbox/{your-agent-id}
-2. Read active threads     — GET /api/threads
-3. Read .agent-locks.json  — Check for file locks
-4. Verify no conflicts     — If conflict exists, STOP and coordinate
-5. Announce your intent    — POST /api/threads (message to council)
-6. Proceed with task
+0. CHECK FOR PENDING_MESSAGES.md — Look in your worktree root. If this file exists,
+   READ IT FIRST — it contains urgent directives. Delete it after processing.
+1. Check notifications     — Read notifications/{your-agent-id}.jsonl for new messages
+2. Check ming-qiao inbox  — GET /api/inbox/{your-agent-id}
+3. Read active threads     — GET /api/threads
+4. Read .agent-locks.json  — Check for file locks
+5. Verify no conflicts     — If conflict exists, STOP and coordinate
+6. Announce your intent    — POST /api/threads (message to council)
+7. Proceed with task
 ```
 
 ---
@@ -251,13 +253,14 @@ You are **Aleph** (א), the first letter — the origin point. You are the maste
 **Every new session, before doing anything else:**
 
 ```
-0. Check notifications         → Use MCP read_inbox or read notifications/aleph.jsonl
-1. Check ming-qiao inbox      → MCP read_inbox (preferred) or GET /api/inbox/aleph
-2. Read active threads         → GET /api/threads
-3. Read .agent-locks.json      → Active file locks
-4. Check Luban's status        → Query ming-qiao for his recent messages
-5. Query recent decisions      → MCP search_history / list_decisions
-6. Greet Proteus with status summary (include pending request-intent messages)
+0. Check PENDING_MESSAGES.md   → If it exists in your worktree root, read it first — messages are waiting. Delete after processing inbox.
+1. Check notifications         → Use MCP read_inbox or read notifications/aleph.jsonl
+2. Check ming-qiao inbox      → MCP read_inbox (preferred) or GET /api/inbox/aleph
+3. Read active threads         → GET /api/threads
+4. Read .agent-locks.json      → Active file locks
+5. Check Luban's status        → Query ming-qiao for his recent messages
+6. Query recent decisions      → MCP search_history / list_decisions
+7. Greet Proteus with status summary (include pending request-intent messages)
 ```
 
 **Status summary template:**

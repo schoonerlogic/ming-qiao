@@ -6,25 +6,33 @@
 
 set -euo pipefail
 
+# Load shared security functions (path hardening, atomic writes, token stripping)
+source "$(dirname "$0")/cocktail-lib.sh"
+
 # Read hook input from stdin
 INPUT=$(cat)
 
-# Derive agent ID from cwd — CLAUDE_ENV_FILE vars don't reach hook subprocesses
+# Derive agent ID from cwd (hardened path resolution)
 AGENT="${MING_QIAO_AGENT_ID:-}"
 if [[ -z "$AGENT" ]]; then
     CWD=$(echo "$INPUT" | jq -r '.cwd // empty' 2>/dev/null)
-    if [[ "$CWD" == *"/aleph"* ]]; then
-        AGENT="aleph"
-    elif [[ "$CWD" == *"/luban"* ]]; then
-        AGENT="luban"
+    if [[ -n "$CWD" ]]; then
+        resolve_agent_id "$CWD" || true
     fi
 fi
 if [[ -z "$AGENT" ]]; then
     exit 0
 fi
 
-NOTIFY_FILE="/Users/proteus/astralmaris/ming-qiao/notifications/${AGENT}.jsonl"
-LASTREAD_FILE="/Users/proteus/astralmaris/ming-qiao/notifications/${AGENT}.lastread"
+NOTIFY_DIR="/Users/proteus/astralmaris/ming-qiao/notifications"
+
+# Reject symlinked notification directory
+if [[ -L "$NOTIFY_DIR" ]]; then
+    exit 0
+fi
+
+NOTIFY_FILE="${NOTIFY_DIR}/${AGENT}.jsonl"
+LASTREAD_FILE="${NOTIFY_DIR}/${AGENT}.lastread"
 
 if [[ ! -f "$NOTIFY_FILE" ]]; then
     exit 0
@@ -45,7 +53,7 @@ NEW_LINES=$(tail -n +"$((LAST_SEEN + 1))" "$NOTIFY_FILE")
 URGENT=$(echo "$NEW_LINES" | jq -r 'select(.intent == "request" or .intent == "discuss") | "  From: \(.from) — \"\(.subject)\" (intent: \(.intent))"' 2>/dev/null || true)
 
 if [[ -z "$URGENT" ]]; then
-    echo "$TOTAL_LINES" > "$LASTREAD_FILE"
+    atomic_write "$LASTREAD_FILE" "$TOTAL_LINES"
     exit 0
 fi
 
@@ -59,4 +67,4 @@ jq -n --arg ctx "$(printf '⚠️ INTERRUPT: %d urgent message(s) arrived while 
   }
 }'
 
-echo "$TOTAL_LINES" > "$LASTREAD_FILE"
+atomic_write "$LASTREAD_FILE" "$TOTAL_LINES"
