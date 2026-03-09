@@ -124,7 +124,7 @@ pub async fn get_inbox(
         .collect();
     drop(indexer);
 
-    let messages: Vec<_> = messages_clone
+    let mut filtered: Vec<_> = messages_clone
         .into_iter()
         .filter(|msg| {
             // Filter by sender if specified
@@ -134,6 +134,13 @@ pub async fn get_inbox(
                 true
             }
         })
+        .collect();
+
+    // Sort by created_at (newest first), THEN apply limit
+    filtered.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+
+    let messages: Vec<_> = filtered
+        .into_iter()
         .take(query.limit as usize)
         .map(|msg| {
             serde_json::json!({
@@ -144,7 +151,7 @@ pub async fn get_inbox(
                 "content": msg.content,
                 "intent": msg.intent,
                 "priority": msg.priority,
-                "timestamp": msg.created_at
+                "created_at": msg.created_at.to_rfc3339()
             })
         })
         .collect();
@@ -409,13 +416,17 @@ pub async fn create_thread(
         _ => unreachable!(),
     };
 
+    // Clone for JetStream durable publish (broadcast_event takes ownership)
+    let event_for_js = event.clone();
+
     // Broadcast to WebSocket listeners
     state.broadcast_event(event);
 
-    // Publish NATS message notification
+    // Publish NATS message notification + JetStream durable delivery
     {
         let nats_guard = state.nats_client_mut().await;
         if let Some(ref client) = *nats_guard {
+            // Ephemeral notification hint (core NATS — real-time nudge)
             let notification = MessageNotification {
                 event_id: event_id.to_string(),
                 from: msg_from,
@@ -425,6 +436,17 @@ pub async fn create_thread(
             };
             if let Err(e) = client.publish_message_notification(&msg_to, &notification).await {
                 warn!("NATS message notification failed: {}", e);
+            }
+
+            // Durable message event (JetStream — Phase 2a best-effort sync)
+            // SurrealDB is authoritative; JetStream publish failure is non-fatal.
+            match client.publish_message_event(&msg_to, &event_for_js).await {
+                Ok(seq) => {
+                    tracing::debug!("JetStream publish ok: event={}, seq={}", event_id, seq);
+                }
+                Err(e) => {
+                    warn!("JetStream message publish failed for {}: {} (non-fatal, SurrealDB is authoritative)", event_id, e);
+                }
             }
         }
     }
@@ -1109,6 +1131,67 @@ pub async fn submit_observation(
             "event_id": event_id.to_string(),
             "nats_subject": nats_subject,
             "created_at": now
+        })),
+    )
+}
+
+// ============================================================================
+// Admin Handlers
+// ============================================================================
+
+/// Rehydrate the in-memory indexer from SurrealDB.
+///
+/// Replaces the current indexer with a fresh one built by replaying all stored
+/// events. Use this when the indexer has drifted (e.g. due to direct DB writes
+/// or missed events).
+pub async fn rehydrate_indexer(
+    State(state): State<AppState>,
+) -> impl IntoResponse {
+    use tracing::info;
+
+    // Load all events from SurrealDB
+    let events = match state.persistence().get_all_events().await {
+        Ok(events) => events,
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({
+                    "error": {
+                        "code": "REHYDRATE_FAILED",
+                        "message": format!("Failed to load events from SurrealDB: {}", e)
+                    }
+                })),
+            );
+        }
+    };
+
+    let event_count = events.len();
+
+    // Build a fresh indexer from all events
+    let mut new_indexer = crate::db::Indexer::new();
+    let mut skipped = 0u32;
+    for event in &events {
+        if let Err(e) = new_indexer.process_event(event) {
+            warn!("Rehydration skipped event {}: {}", event.id, e);
+            skipped += 1;
+        }
+    }
+
+    // Swap in the new indexer
+    {
+        let mut indexer = state.indexer_mut().await;
+        *indexer = new_indexer;
+    }
+
+    info!("Indexer rehydrated: {} events processed, {} skipped", event_count, skipped);
+
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({
+            "status": "rehydrated",
+            "events_processed": event_count,
+            "events_skipped": skipped,
+            "rehydrated_at": Utc::now()
         })),
     )
 }

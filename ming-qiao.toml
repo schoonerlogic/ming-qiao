@@ -10,7 +10,7 @@ enabled = true
 url = "nats://localhost:4222"
 # Security P0 (RA-003): NKey auth active
 auth_mode = "nkey"
-nkey_seed_file = "config/nkeys/aleph.nk"
+nkey_seed_file = "/Users/proteus/astralmaris/ming-qiao/main/config/nkeys/aleph.nk"
 
 [database]
 url = "ws://localhost:8000"

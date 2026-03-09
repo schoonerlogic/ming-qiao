@@ -226,6 +226,130 @@ fn spawn_event_nats_subscriber(
     });
 }
 
+/// Spawn a background task that consumes messages from the AGENT_MESSAGES
+/// JetStream stream and ingests them into SurrealDB + Indexer.
+///
+/// This is the Phase 2a durable delivery consumer. It ensures that messages
+/// published to JetStream (either as best-effort sync from the HTTP server,
+/// or as Tier 2 fallback from MCP subprocesses in Phase 2b) are properly
+/// ingested into the authoritative data store.
+///
+/// Dedup: Indexer `seen_ids` rejects events already processed. SurrealDB
+/// `event_id` unique index catches duplicates at the DB level.
+fn spawn_jetstream_message_consumer(
+    state: &AppState,
+    js: async_nats::jetstream::Context,
+) {
+    use futures_util::StreamExt;
+
+    let state = state.clone();
+
+    tokio::spawn(async move {
+        let stream = match js
+            .get_stream(ming_qiao::nats::streams::STREAM_AGENT_MESSAGES)
+            .await
+        {
+            Ok(s) => s,
+            Err(e) => {
+                error!("Failed to get AGENT_MESSAGES stream: {}", e);
+                return;
+            }
+        };
+
+        let (consumer_name, config) =
+            ming_qiao::nats::streams::messages_ingester_consumer_config("main");
+
+        let consumer = match stream
+            .get_or_create_consumer(&consumer_name, config)
+            .await
+        {
+            Ok(c) => c,
+            Err(e) => {
+                error!("Failed to create messages ingester consumer: {}", e);
+                return;
+            }
+        };
+
+        let mut messages = match consumer.messages().await {
+            Ok(m) => m,
+            Err(e) => {
+                error!("Failed to start messages ingester stream: {}", e);
+                return;
+            }
+        };
+
+        info!(
+            "JetStream message consumer active (consumer: {})",
+            consumer_name
+        );
+
+        while let Some(msg_result) = messages.next().await {
+            let msg = match msg_result {
+                Ok(m) => m,
+                Err(e) => {
+                    warn!("JetStream message consumer error: {}", e);
+                    continue;
+                }
+            };
+
+            match serde_json::from_slice::<ming_qiao::events::EventEnvelope>(&msg.payload) {
+                Ok(event) => {
+                    // Check Indexer dedup first (fast path — avoids DB round-trip)
+                    let already_seen = {
+                        let indexer = state.indexer().await;
+                        indexer.has_event(&event.id)
+                    };
+
+                    if already_seen {
+                        // Already processed — ack and skip
+                        if let Err(e) = msg.ack().await {
+                            warn!("Failed to ack duplicate JetStream message: {}", e);
+                        }
+                        continue;
+                    }
+
+                    // Write to SurrealDB (dedup via unique event_id index)
+                    if let Err(e) = state.persistence().store_event(&event).await {
+                        // If it's a duplicate key error, that's fine — just ack
+                        let err_str = e.to_string();
+                        if err_str.contains("already exists") || err_str.contains("duplicate") {
+                            info!("JetStream→DB duplicate for {}, acking", event.id);
+                        } else {
+                            warn!("JetStream→DB store failed for {}: {} (will redeliver)", event.id, e);
+                            // Don't ack — JetStream will redeliver
+                            continue;
+                        }
+                    }
+
+                    // Update Indexer
+                    {
+                        let mut indexer = state.indexer_mut().await;
+                        if let Err(e) = indexer.process_event(&event) {
+                            warn!("Indexer rejected JetStream event {}: {}", event.id, e);
+                        }
+                    }
+
+                    // Broadcast to WebSocket
+                    state.broadcast_event(event);
+
+                    if let Err(e) = msg.ack().await {
+                        warn!("Failed to ack JetStream message: {}", e);
+                    }
+                }
+                Err(e) => {
+                    warn!("Bad event from JetStream AGENT_MESSAGES: {}", e);
+                    // Ack garbage to avoid infinite redelivery
+                    if let Err(e) = msg.ack().await {
+                        warn!("Failed to ack bad JetStream message: {}", e);
+                    }
+                }
+            }
+        }
+
+        info!("JetStream message consumer ended");
+    });
+}
+
 /// Run the HTTP server
 async fn run_http_server() -> Result<(), Box<dyn std::error::Error>> {
     let config_path = env::var("MING_QIAO_CONFIG").unwrap_or_else(|_| "ming-qiao.toml".to_string());
@@ -255,6 +379,8 @@ async fn run_http_server() -> Result<(), Box<dyn std::error::Error>> {
     if let Some(mut client) = NatsAgentClient::connect(&nats_config, &agent_id, &project).await {
         // Extract event sync parts before moving client into state
         let (nats_raw, events_subject) = client.event_sync_parts();
+        // Clone JetStream context for the message consumer (before client moves into state)
+        let js_context = client.jetstream().clone();
 
         let nats_tx = state.nats_message_sender();
 
@@ -285,7 +411,10 @@ async fn run_http_server() -> Result<(), Box<dyn std::error::Error>> {
         spawn_event_nats_publisher(&state, nats_raw.clone(), events_subject.clone(), true);
         spawn_event_nats_subscriber(&state, nats_raw, events_subject, true);
 
-        info!("NATS agent client active for HTTP server (subscriptions + heartbeat + persistence + event sync)");
+        // Phase 2a: Durable message consumer (AGENT_MESSAGES → SurrealDB + Indexer)
+        spawn_jetstream_message_consumer(&state, js_context);
+
+        info!("NATS agent client active for HTTP server (subscriptions + heartbeat + persistence + event sync + JetStream messages)");
     }
 
     // Start watcher dispatcher for observer agents (e.g. Laozi-Jung)

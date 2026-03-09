@@ -38,6 +38,8 @@ pub fn api_routes(state: AppState) -> Router<AppState> {
         .route("/api/config", patch(handlers::update_config))
         // Observations
         .route("/api/observe", post(handlers::submit_observation))
+        // Admin
+        .route("/api/admin/rehydrate", post(handlers::rehydrate_indexer))
         // Apply write auth middleware to all routes in this group
         .route_layer(middleware::from_fn_with_state(state, auth::require_write_auth));
 

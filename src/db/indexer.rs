@@ -45,6 +45,11 @@ impl Indexer {
         self.events_processed
     }
 
+    /// Check if an event has already been processed (dedup check).
+    pub fn has_event(&self, id: &uuid::Uuid) -> bool {
+        self.seen_ids.contains(&id.to_string())
+    }
+
     /// Process a single event and update materialized views.
     ///
     /// Called by the write path after storing the event in SurrealDB.

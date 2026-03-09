@@ -159,6 +159,28 @@ impl AgentSubjects {
     }
 
     // ========================================================================
+    // Message events (JetStream — durable delivery, Phase 2)
+    // ========================================================================
+
+    /// JetStream subject for a message event addressed to a specific agent.
+    ///
+    /// Used by the HTTP server to publish message events to the AGENT_MESSAGES
+    /// stream after writing to SurrealDB. The consumer on the HTTP server
+    /// ingests these for cross-process Indexer consistency.
+    ///
+    /// `am.agent.{to_agent}.msg.sent`
+    pub fn message_event(to_agent: &str) -> String {
+        format!("am.agent.{}.msg.sent", to_agent)
+    }
+
+    /// Subscribe pattern for all agent message events.
+    ///
+    /// `am.agent.*.msg.>`
+    pub fn all_agents_message_events() -> String {
+        "am.agent.*.msg.>".to_string()
+    }
+
+    // ========================================================================
     // Session notes (JetStream — persistent, 30-day retention)
     // ========================================================================
 
@@ -276,6 +298,8 @@ mod tests {
         assert!(AgentSubjects::all_agents_messages("mingqiao").starts_with("am."));
         assert!(AgentSubjects::all_agents_notes().starts_with("am."));
         assert!(AgentSubjects::council_announce().starts_with("am."));
+        assert!(AgentSubjects::message_event("thales").starts_with("am."));
+        assert!(AgentSubjects::all_agents_message_events().starts_with("am."));
     }
 
     // ========================================================================
@@ -356,6 +380,26 @@ mod tests {
         // Messages to different agents produce different subjects
         assert_ne!(aleph.message(), luban.message());
         assert_eq!(luban.message(), "am.agent.luban.message.mingqiao");
+    }
+
+    // ========================================================================
+    // Message events (JetStream)
+    // ========================================================================
+
+    #[test]
+    fn test_message_event_subject() {
+        assert_eq!(
+            AgentSubjects::message_event("thales"),
+            "am.agent.thales.msg.sent"
+        );
+    }
+
+    #[test]
+    fn test_all_agents_message_events() {
+        assert_eq!(
+            AgentSubjects::all_agents_message_events(),
+            "am.agent.*.msg.>"
+        );
     }
 
     // ========================================================================

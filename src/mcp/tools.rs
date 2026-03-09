@@ -498,23 +498,35 @@ impl ToolRegistry {
         self.state.broadcast_event(event.clone());
         self.state.merlin_notifier().notify(event.clone(), &self.state);
 
-        // 4. Publish NATS message notification for MessageSent events
+        // 4. Publish NATS message notification + JetStream durable delivery
         if event.event_type == EventType::MessageSent {
             if let EventPayload::Message(ref msg) = event.payload {
-                let notification = MessageNotification {
-                    event_id: event_id.clone(),
-                    from: msg.from.clone(),
-                    subject: msg.subject.clone(),
-                    intent: msg.intent.clone(),
-                    timestamp: event.timestamp,
-                };
                 let nats_guard = self.state.nats_client_mut().await;
                 if let Some(ref client) = *nats_guard {
+                    // Ephemeral notification hint (core NATS)
+                    let notification = MessageNotification {
+                        event_id: event_id.clone(),
+                        from: msg.from.clone(),
+                        subject: msg.subject.clone(),
+                        intent: msg.intent.clone(),
+                        timestamp: event.timestamp,
+                    };
                     if let Err(e) = client.publish_message_notification(&msg.to, &notification).await {
                         eprintln!("[ming-qiao] NATS message notification to '{}' failed: {}", msg.to, e);
                         tracing::warn!("NATS message notification failed: {}", e);
                     } else {
                         eprintln!("[ming-qiao] NATS notification sent to '{}': {}", msg.to, msg.subject);
+                    }
+
+                    // Durable message event (JetStream — Phase 2a best-effort sync)
+                    match client.publish_message_event(&msg.to, event).await {
+                        Ok(seq) => {
+                            eprintln!("[ming-qiao] JetStream publish ok: event={}, seq={}", event_id, seq);
+                        }
+                        Err(e) => {
+                            eprintln!("[ming-qiao] JetStream message publish failed for {}: {} (non-fatal)", event_id, e);
+                            tracing::warn!("JetStream message publish failed: {}", e);
+                        }
                     }
                 } else {
                     eprintln!("[ming-qiao] No NATS client — notification to '{}' skipped", msg.to);
@@ -635,13 +647,13 @@ impl ToolRegistry {
                         true
                     }
                 })
-                .take(limit)
                 .cloned()
                 .collect()
         };
 
-        // Sort by timestamp (most recent first)
+        // Sort by timestamp (most recent first), THEN apply limit
         messages.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+        messages.truncate(limit);
 
         if messages.is_empty() {
             return Ok(CallToolResult::text(format!(
@@ -1085,7 +1097,7 @@ impl ToolRegistry {
             .and_then(|v| v.as_str())
             .ok_or_else(|| McpError::InvalidInput("'agent' is required".to_string()))?;
 
-        let messages: Vec<_> = {
+        let mut messages: Vec<_> = {
             let indexer = self.state.indexer().await;
             indexer
                 .get_messages_to_agent(agent)
@@ -1093,6 +1105,9 @@ impl ToolRegistry {
                 .cloned()
                 .collect()
         };
+
+        // Sort by created_at (newest first)
+        messages.sort_by(|a, b| b.created_at.cmp(&a.created_at));
 
         let json_messages: Vec<_> = messages
             .iter()

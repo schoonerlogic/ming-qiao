@@ -184,6 +184,37 @@ impl NatsAgentClient {
         Ok(())
     }
 
+    /// Publish a message event to the AGENT_MESSAGES JetStream stream.
+    ///
+    /// Best-effort sync: called after SurrealDB write in the HTTP server's
+    /// `create_thread` handler. The durable consumer on the HTTP server
+    /// ingests these for cross-process consistency.
+    ///
+    /// Uses `Nats-Msg-Id` header for server-side dedup (120s window).
+    ///
+    /// Subject: `am.agent.{to_agent}.msg.sent`
+    pub async fn publish_message_event(
+        &self,
+        to_agent: &str,
+        event: &crate::events::EventEnvelope,
+    ) -> Result<u64, ClientError> {
+        let subject = AgentSubjects::message_event(to_agent);
+        let payload = serde_json::to_vec(event)?;
+
+        let mut headers = async_nats::HeaderMap::new();
+        headers.insert("Nats-Msg-Id", event.id.to_string());
+
+        let ack = self
+            .jetstream
+            .publish_with_headers(subject, headers, payload.into())
+            .await
+            .map_err(|e| ClientError::Publish(e.to_string()))?
+            .await
+            .map_err(|e| ClientError::Publish(e.to_string()))?;
+
+        Ok(ack.sequence)
+    }
+
     /// Publish a task assignment via JetStream.
     ///
     /// Publishes to the *assignee's* task subject — not our own.
