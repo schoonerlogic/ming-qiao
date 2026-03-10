@@ -21,7 +21,7 @@
   let error = $derived(threadsStore.error);
 
   // Unique participants from threads
-  let participants = $derived(() => {
+  let participants = $derived.by(() => {
     const uniqueAgents = new Set<string>();
     threads.forEach(thread => {
       thread.participants.forEach(p => uniqueAgents.add(p));
@@ -30,7 +30,7 @@
   });
 
   // Filtered threads
-  let filteredThreads = $derived(() => {
+  let filteredThreads = $derived.by(() => {
     return threads.filter(thread => {
       // Status filter
       if (statusFilter !== 'all' && thread.status !== statusFilter) {

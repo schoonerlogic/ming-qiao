@@ -1,0 +1,251 @@
+#!/usr/bin/env bash
+# oracle — Merlin's ORACLE knowledge graph tools
+# Usage: oracle <command> [args]
+#
+# Commands:
+#   status                  Full system health + graph stats
+#   nodes <query>           Search entity nodes
+#   facts <query>           Search facts/relationships
+#   search <query>          Search both nodes and facts
+#   ingest <title> <body>   Ingest content (interactive source prompt)
+#   ingest-url <url>        Fetch URL content and ingest
+#   ingest-arxiv <id>       Fetch arXiv abstract and ingest
+#   queue                   Show papers/backlog/ waiting for ingestion
+#   help                    Show this help
+
+set -euo pipefail
+
+ORACLE_SCRIPTS="/Users/proteus/astralmaris/oracle/main/scripts"
+MCP_URL="http://localhost:8001/mcp"
+BACKLOG="/Users/proteus/astralmaris/oracle/main/papers/backlog"
+
+BOLD='\033[1m'
+DIM='\033[2m'
+CYAN='\033[36m'
+GREEN='\033[32m'
+YELLOW='\033[33m'
+RED='\033[31m'
+RESET='\033[0m'
+
+cmd="${1:-help}"
+shift 2>/dev/null || true
+
+case "$cmd" in
+
+status)
+    echo -e "${BOLD}ORACLE System Status${RESET}\n"
+
+    # Graphiti MCP
+    printf "  Graphiti MCP (:8001)  "
+    health=$(curl -sf "http://localhost:8001/health" 2>/dev/null)
+    if [ $? -eq 0 ]; then
+        echo -e "${GREEN}HEALTHY${RESET}"
+        echo -e "    ${DIM}${health}${RESET}"
+    else
+        echo -e "${RED}DOWN${RESET}"
+    fi
+
+    # FalkorDB
+    printf "  FalkorDB (:6379)      "
+    if redis-cli -p 6379 ping >/dev/null 2>&1 || docker exec $(docker ps -q --filter name=falkor 2>/dev/null) redis-cli ping >/dev/null 2>&1; then
+        info=$(redis-cli -p 6379 info memory 2>/dev/null | grep used_memory_human | tr -d '\r' || echo "")
+        keys=$(redis-cli -p 6379 dbsize 2>/dev/null | tr -d '\r' || echo "")
+        echo -e "${GREEN}HEALTHY${RESET}  ${DIM}${info} ${keys}${RESET}"
+    else
+        echo -e "${RED}DOWN${RESET}"
+    fi
+
+    # Ollama models
+    printf "  Ollama models         "
+    models=$(curl -sf "http://localhost:11434/api/tags" 2>/dev/null | python3 -c "
+import sys,json
+d=json.load(sys.stdin)
+names=[m['name'] for m in d.get('models',[])]
+print(', '.join(names))
+" 2>/dev/null)
+    echo -e "${GREEN}${models}${RESET}"
+
+    # Docker containers
+    echo ""
+    echo -e "${BOLD}Containers${RESET}"
+    docker ps --filter "name=falkor" --filter "name=graphiti" --format "  {{.Names}}\t{{.Status}}\t{{.Ports}}" 2>/dev/null || echo "  (docker unavailable)"
+    ;;
+
+nodes)
+    query="${1:?Usage: oracle nodes <query>}"
+    python3 "$ORACLE_SCRIPTS/oracle-query.py" nodes "$query" --url "$MCP_URL" "${@:2}"
+    ;;
+
+facts)
+    query="${1:?Usage: oracle facts <query>}"
+    python3 "$ORACLE_SCRIPTS/oracle-query.py" facts "$query" --url "$MCP_URL" "${@:2}"
+    ;;
+
+search)
+    query="${1:?Usage: oracle search <query>}"
+    python3 "$ORACLE_SCRIPTS/oracle-query.py" search "$query" --url "$MCP_URL" "${@:2}"
+    ;;
+
+ingest)
+    title="${1:?Usage: oracle ingest <title> <body>}"
+    shift
+    body="$*"
+    if [ -z "$body" ]; then
+        echo "Reading body from stdin (Ctrl-D to finish):"
+        body=$(cat)
+    fi
+    read -p "Source (e.g. arxiv:2602.12345, url:..., note): " source
+    python3 "$ORACLE_SCRIPTS/oracle-ingest.py" \
+        --name "$title" \
+        --body "$body" \
+        --source "$source" \
+        --url "$MCP_URL"
+    ;;
+
+ingest-url)
+    url="${1:?Usage: oracle ingest-url <url>}"
+    echo -e "${CYAN}Fetching:${RESET} $url"
+    # Fetch page text
+    content=$(curl -sL "$url" | python3 -c "
+import sys, re
+html = sys.stdin.read()
+# Strip tags, decode entities
+text = re.sub(r'<script[^>]*>.*?</script>', '', html, flags=re.DOTALL)
+text = re.sub(r'<style[^>]*>.*?</style>', '', text, flags=re.DOTALL)
+text = re.sub(r'<[^>]+>', ' ', text)
+text = re.sub(r'\s+', ' ', text).strip()
+# Truncate to ~4000 chars for ingestion
+print(text[:4000])
+")
+    if [ -z "$content" ]; then
+        echo -e "${RED}Failed to fetch content${RESET}"
+        exit 1
+    fi
+    echo -e "${DIM}Fetched ${#content} chars${RESET}"
+    read -p "Title: " title
+    python3 "$ORACLE_SCRIPTS/oracle-ingest.py" \
+        --name "$title" \
+        --body "$content" \
+        --source "url:$url" \
+        --url "$MCP_URL"
+    ;;
+
+ingest-arxiv)
+    arxiv_id="${1:?Usage: oracle ingest-arxiv <arxiv_id> (e.g. 2602.17100)}"
+    # Strip version suffix if present
+    arxiv_id=$(echo "$arxiv_id" | sed 's/v[0-9]*$//')
+    echo -e "${CYAN}Fetching arXiv:${RESET} $arxiv_id"
+
+    # Fetch from arXiv API
+    metadata=$(curl -sL "http://export.arxiv.org/api/query?id_list=$arxiv_id" | python3 -c "
+import sys, re
+xml = sys.stdin.read()
+title = re.search(r'<title>(.*?)</title>', xml, re.DOTALL)
+title = title.group(1).strip() if title else 'Unknown'
+# Skip the feed title
+titles = re.findall(r'<title>(.*?)</title>', xml, re.DOTALL)
+if len(titles) > 1:
+    title = titles[1].strip()
+title = re.sub(r'\s+', ' ', title)
+
+summary = re.search(r'<summary>(.*?)</summary>', xml, re.DOTALL)
+summary = summary.group(1).strip() if summary else ''
+summary = re.sub(r'\s+', ' ', summary)
+
+authors = re.findall(r'<name>(.*?)</name>', xml)
+author_str = ', '.join(authors[:10])
+
+cats = re.findall(r'<category[^>]*term=\"([^\"]+)\"', xml)
+cat_str = ', '.join(cats[:5])
+
+import json
+print(json.dumps({
+    'title': title,
+    'summary': summary,
+    'authors': author_str,
+    'categories': cat_str
+}))
+")
+
+    title=$(echo "$metadata" | python3 -c "import sys,json; print(json.load(sys.stdin)['title'])")
+    summary=$(echo "$metadata" | python3 -c "import sys,json; print(json.load(sys.stdin)['summary'])")
+    authors=$(echo "$metadata" | python3 -c "import sys,json; print(json.load(sys.stdin)['authors'])")
+    categories=$(echo "$metadata" | python3 -c "import sys,json; print(json.load(sys.stdin)['categories'])")
+
+    echo -e "${BOLD}$title${RESET}"
+    echo -e "${DIM}Authors: $authors${RESET}"
+    echo -e "${DIM}Categories: $categories${RESET}"
+    echo -e "${DIM}Abstract: ${summary:0:200}...${RESET}"
+    echo ""
+
+    body="Title: $title
+Authors: $authors
+Categories: $categories
+Abstract: $summary"
+
+    read -p "Ingest this paper? [Y/n] " confirm
+    if [ "${confirm:-Y}" != "n" ] && [ "${confirm:-Y}" != "N" ]; then
+        python3 "$ORACLE_SCRIPTS/oracle-ingest.py" \
+            --name "$title" \
+            --body "$body" \
+            --source "arxiv:$arxiv_id" \
+            --url "$MCP_URL"
+    else
+        echo "Skipped."
+    fi
+    ;;
+
+queue)
+    echo -e "${BOLD}Ingestion Backlog${RESET}\n"
+    if [ -d "$BACKLOG" ]; then
+        count=$(find "$BACKLOG" -type f | wc -l | tr -d ' ')
+        echo -e "  ${count} files in papers/backlog/"
+        find "$BACKLOG" -type f -exec basename {} \; | head -20
+    else
+        echo "  (no backlog directory)"
+    fi
+    ;;
+
+help|*)
+    echo -e "${BOLD}oracle${RESET} — ORACLE knowledge graph tools\n"
+    echo -e "${BOLD}Commands:${RESET}"
+    echo -e "  ${CYAN}oracle status${RESET}                 System health + graph stats"
+    echo -e "  ${CYAN}oracle nodes${RESET} <query>          Search entity nodes"
+    echo -e "  ${CYAN}oracle facts${RESET} <query>          Search facts/relationships"
+    echo -e "  ${CYAN}oracle search${RESET} <query>         Search nodes + facts"
+    echo -e "  ${CYAN}oracle ingest${RESET} <title> <body>  Ingest content into graph"
+    echo -e "  ${CYAN}oracle ingest-url${RESET} <url>       Fetch and ingest from URL"
+    echo -e "  ${CYAN}oracle ingest-arxiv${RESET} <id>      Fetch and ingest arXiv paper"
+    echo -e "  ${CYAN}oracle queue${RESET}                  Show ingestion backlog"
+    echo ""
+    echo -e "${BOLD}Examples:${RESET}"
+    echo ""
+    echo -e "  ${DIM}# Check that ORACLE is healthy${RESET}"
+    echo -e "  oracle status"
+    echo ""
+    echo -e "  ${DIM}# Ingest a paper from arXiv (fetches title, authors, abstract)${RESET}"
+    echo -e "  oracle ingest-arxiv 2602.17100"
+    echo -e "  oracle ingest-arxiv 2304.02034"
+    echo ""
+    echo -e "  ${DIM}# Ingest a blog post or article by URL${RESET}"
+    echo -e "  oracle ingest-url https://martinfowler.com/articles/some-article.html"
+    echo ""
+    echo -e "  ${DIM}# Ingest with manual text (reads from stdin if no body given)${RESET}"
+    echo -e "  oracle ingest 'ATLAS-01 Results' 'Post-hoc adapter merging fails. Joint training succeeds.'"
+    echo -e "  echo 'long content...' | oracle ingest 'My Paper'"
+    echo ""
+    echo -e "  ${DIM}# Search the knowledge graph for entities${RESET}"
+    echo -e "  oracle nodes 'transformer architecture'"
+    echo -e "  oracle nodes 'Qwen'"
+    echo ""
+    echo -e "  ${DIM}# Search for relationships and facts${RESET}"
+    echo -e "  oracle facts 'adapter composition'"
+    echo -e "  oracle facts 'joint training'"
+    echo ""
+    echo -e "  ${DIM}# Combined search (nodes + facts)${RESET}"
+    echo -e "  oracle search 'singular learning theory'"
+    echo ""
+    echo -e "  ${DIM}# Check what's waiting to be ingested${RESET}"
+    echo -e "  oracle queue"
+    ;;
+esac
