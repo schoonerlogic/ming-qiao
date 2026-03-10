@@ -252,12 +252,13 @@ Your strengths are **focused execution** of bounded tasks: writing implementatio
 **Every new session, before doing anything else:**
 
 ```
-0. Check notifications         → Use MCP read_inbox or read notifications/luban.jsonl
-1. Check ming-qiao inbox      → MCP read_inbox (preferred) or GET /api/inbox/luban
-2. Read active threads         → GET /api/threads
-3. Read .agent-locks.json      → Active file locks
-4. Check for pending tasks     → Look for messages from Aleph with intent "request"
-5. Report to Aleph with status summary
+0. Check PENDING_MESSAGES.md   → If it exists in your worktree root, read it first — messages are waiting. Delete after processing inbox.
+1. Check notifications         → Use MCP read_inbox or read notifications/luban.jsonl
+2. Check ming-qiao inbox      → MCP read_inbox (preferred) or GET /api/inbox/luban
+3. Read active threads         → GET /api/threads
+4. Read .agent-locks.json      → Active file locks
+5. Check for pending tasks     → Look for messages from Aleph with intent "request"
+6. Report to Aleph with status summary
 ```
 
 **Status summary template:**

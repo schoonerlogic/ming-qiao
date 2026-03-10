@@ -1,2 +1,5 @@
 /target
 /data
+
+# Ming-qiao pending notifications (never commit — may contain metadata)
+PENDING_MESSAGES.md

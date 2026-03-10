@@ -127,7 +127,7 @@ File shared to the bridge for other agents to access.
   "artifact_id": "art-20260121-143100",
   "shared_by": "aleph",
   "path": "artifacts/s3-strategy-v0.1.md",
-  "original_path": "/Users/protozoan/extraction-team/docs/S3_STRATEGY.md",
+  "original_path": "/Users/proteus/astralmaris/extraction-team/docs/S3_STRATEGY.md",
   "sha256": "abc123...",
   "bytes": 4523,
   "content_type": "text/markdown",
