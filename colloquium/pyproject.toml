@@ -1,0 +1,10 @@
+[project]
+name = "colloquium-voice"
+version = "0.1.0"
+description = "Council Colloquium Voice Adapter — provider-agnostic agent voice invocation"
+requires-python = ">=3.11"
+dependencies = [
+    "aiohttp>=3.9.0",
+    "pyyaml>=6.0",
+    "click>=8.0",
+]

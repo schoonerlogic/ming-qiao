@@ -7,3 +7,9 @@ config/surreal-creds.env
 config/surreal-root.env
 config/keys/*.seed
 config/nkeys/*.nk
+*.DS_Store
+logs/
+*.bak
+PENDING_MESSAGES.md
+docs/messages-to-relay.md
+__pycache__/

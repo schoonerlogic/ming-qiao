@@ -1,0 +1,68 @@
+# agent-capabilities.toml — Runtime capability declarations for Council agents
+#
+# The awakener reads this to determine how to notify each agent.
+# Adding a new agent requires one entry here, not a code change.
+#
+# Fields:
+#   worktree          - Primary worktree path for the agent
+#   all_worktrees     - All worktree paths (space-separated) for session detection
+#   runtime           - CLI binary name (claude, kimi, ollama, etc.)
+#   headless_capable  - Can the runtime be invoked with --print for background handling?
+#   pending_file      - Write PENDING_MESSAGES.md to worktree? (belt-and-suspenders for all)
+#   webhook_url       - HTTP endpoint for real-time notification (Phase C — future)
+
+[agents.aleph]
+worktree = "/Users/proteus/astralmaris/ming-qiao/aleph"
+all_worktrees = "/Users/proteus/astralmaris/ming-qiao/aleph /Users/proteus/astralmaris/astral-forge/aleph /Users/proteus/astralmaris/inference-kitchen/aleph"
+runtime = "claude"
+headless_capable = true
+pending_file = true
+webhook_url = ""
+
+[agents.luban]
+worktree = "/Users/proteus/astralmaris/ming-qiao/luban"
+all_worktrees = "/Users/proteus/astralmaris/ming-qiao/luban /Users/proteus/astralmaris/inference-kitchen/luban"
+runtime = "claude"
+headless_capable = true
+pending_file = true
+webhook_url = ""
+
+[agents.ogma]
+worktree = "/Users/proteus/astralmaris/everwatch-spire/ogma"
+all_worktrees = "/Users/proteus/astralmaris/everwatch-spire/ogma"
+runtime = "claude"
+headless_capable = true
+pending_file = true
+webhook_url = ""
+
+[agents.mataya]
+worktree = "/Users/proteus/astralmaris/latent-winds/mataya"
+all_worktrees = "/Users/proteus/astralmaris/latent-winds/mataya"
+runtime = "kimi"
+headless_capable = false
+pending_file = true
+webhook_url = ""
+
+[agents.laozi-jung]
+worktree = "/Users/proteus/astralmaris/echoessence/main"
+all_worktrees = "/Users/proteus/astralmaris/echoessence/main"
+runtime = "claude"
+headless_capable = true
+pending_file = true
+webhook_url = ""
+
+[agents.thales]
+worktree = "/Users/proteus/astralmaris/astral-forge/main"
+all_worktrees = "/Users/proteus/astralmaris/astral-forge/main"
+runtime = "claude-desktop"
+headless_capable = false
+pending_file = true
+webhook_url = ""
+
+[agents.merlin]
+worktree = "/Users/proteus/astralmaris/ming-qiao/merlin"
+all_worktrees = "/Users/proteus/astralmaris/ming-qiao/merlin"
+runtime = "manual"
+headless_capable = false
+pending_file = true
+webhook_url = ""
