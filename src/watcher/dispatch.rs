@@ -3,6 +3,8 @@
 //! Subscribes to the AppState broadcast channel and dispatches matching events
 //! to each watcher's configured action (file append or webhook).
 
+use std::collections::HashSet;
+
 use tokio::task::JoinHandle;
 use tracing::{info, warn};
 
@@ -103,9 +105,27 @@ impl WatcherDispatcher {
         let project = project.to_string();
 
         let handle = tokio::spawn(async move {
+            // Dedup guard: the broadcast channel can fire the same event twice
+            // when both the HTTP handler and the JetStream ingester call
+            // broadcast_event() for the same event. Track seen event IDs to
+            // prevent duplicate writes to watchers.
+            let mut seen_event_ids: HashSet<String> = HashSet::new();
+
             loop {
                 match rx.recv().await {
                     Ok(event) => {
+                        // Dedup: skip events we've already dispatched
+                        let event_id = event.id.to_string();
+                        if !seen_event_ids.insert(event_id) {
+                            continue;
+                        }
+
+                        // Prune seen set periodically to avoid unbounded growth
+                        // (keep last 10000 entries)
+                        if seen_event_ids.len() > 10_000 {
+                            seen_event_ids.clear();
+                        }
+
                         let event_subjects = subjects_for_event(&event, &project);
                         let event_type_str = event.event_type.to_string();
 

@@ -169,6 +169,13 @@ pub async fn get_inbox(
     Path(agent): Path<String>,
     Query(query): Query<InboxQuery>,
 ) -> impl IntoResponse {
+    // Get server-side read cursor for unread filtering
+    let read_cursor = if query.unread_only {
+        state.persistence().get_read_cursor(&agent).await.unwrap_or(None)
+    } else {
+        None
+    };
+
     // Use indexer for O(1) lookup of messages sent TO this agent
     let indexer = state.indexer().await;
     let messages_clone: Vec<_> = indexer
@@ -183,10 +190,18 @@ pub async fn get_inbox(
         .filter(|msg| {
             // Filter by sender if specified
             if let Some(ref from) = query.from {
-                &msg.from == from
-            } else {
-                true
+                if &msg.from != from {
+                    return false;
+                }
             }
+            // Filter by read cursor (unread_only): only show messages newer than cursor
+            if let Some(ref cursor_id) = read_cursor {
+                // UUIDv7 event IDs are lexicographically ordered by time
+                if msg.id.as_str() <= cursor_id.as_str() {
+                    return false;
+                }
+            }
+            true
         })
         .collect();
 
@@ -194,6 +209,16 @@ pub async fn get_inbox(
     filtered.sort_by(|a, b| b.created_at.cmp(&a.created_at));
     let total_count = filtered.len();
     filtered.truncate(query.limit as usize);
+
+    // Auto-advance read cursor to the highest event ID returned
+    if !filtered.is_empty() {
+        if let Some(newest) = filtered.iter().max_by_key(|m| &m.id) {
+            let newest_id = newest.id.clone();
+            if let Err(e) = state.persistence().update_read_cursor(&agent, &newest_id).await {
+                warn!("Failed to update read cursor for {}: {}", agent, e);
+            }
+        }
+    }
 
     let messages: Vec<_> = filtered
         .into_iter()
@@ -214,7 +239,7 @@ pub async fn get_inbox(
     Json(serde_json::json!({
         "agent": agent,
         "messages": messages,
-        "unread_count": messages.len(),
+        "unread_count": total_count,
         "total_count": total_count
     }))
 }

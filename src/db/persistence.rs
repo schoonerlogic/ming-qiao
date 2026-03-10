@@ -44,6 +44,10 @@ DEFINE INDEX IF NOT EXISTS event_id_idx ON event COLUMNS event_id UNIQUE;
 DEFINE INDEX IF NOT EXISTS agent_idx ON event COLUMNS agent_id;
 DEFINE INDEX IF NOT EXISTS type_idx ON event COLUMNS event_type;
 DEFINE INDEX IF NOT EXISTS timestamp_idx ON event COLUMNS timestamp;
+
+-- Agent read cursors (server-side tracking — runtime-agnostic)
+DEFINE TABLE IF NOT EXISTS agent_read_cursor SCHEMALESS;
+DEFINE INDEX IF NOT EXISTS agent_id_idx ON agent_read_cursor COLUMNS agent_id UNIQUE;
 "#;
 
 /// SurrealDB persistence layer for ming-qiao.
@@ -323,6 +327,48 @@ impl Persistence {
             .map_err(db_err)?;
         let rows: Vec<Value> = result.take(0).map_err(db_err)?;
         rows.into_iter().map(row_to_envelope).collect()
+    }
+
+    // =====================================================================
+    // Agent read cursors (server-side tracking — runtime-agnostic)
+    // =====================================================================
+
+    /// Get the last-read event ID for an agent.
+    ///
+    /// Returns `None` if the agent has never read their inbox.
+    pub async fn get_read_cursor(&self, agent_id: &str) -> Result<Option<String>, PersistenceError> {
+        let mut result = self.db
+            .query("SELECT VALUE last_read_event_id FROM agent_read_cursor WHERE agent_id = $aid LIMIT 1")
+            .bind(("aid", agent_id.to_string()))
+            .await
+            .map_err(db_err)?;
+        let rows: Vec<Option<String>> = result.take(0).map_err(db_err)?;
+        Ok(rows.into_iter().next().flatten())
+    }
+
+    /// Update the read cursor for an agent to the given event ID.
+    ///
+    /// Uses UPSERT to create or update in a single atomic operation.
+    pub async fn update_read_cursor(
+        &self,
+        agent_id: &str,
+        last_read_event_id: &str,
+    ) -> Result<(), PersistenceError> {
+        let now = chrono::Utc::now().to_rfc3339();
+        self.db
+            .query(
+                "UPSERT agent_read_cursor SET \
+                 agent_id = $aid, \
+                 last_read_event_id = $eid, \
+                 last_read_at = $now \
+                 WHERE agent_id = $aid"
+            )
+            .bind(("aid", agent_id.to_string()))
+            .bind(("eid", last_read_event_id.to_string()))
+            .bind(("now", now))
+            .await
+            .map_err(db_err)?;
+        Ok(())
     }
 
     // =====================================================================
@@ -657,5 +703,28 @@ mod tests {
         let db = Persistence::new().await.unwrap();
         let result = db.get_event("nonexistent").await.unwrap();
         assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_read_cursor_roundtrip() {
+        let db = Persistence::new().await.unwrap();
+
+        // No cursor initially
+        let cursor = db.get_read_cursor("aleph").await.unwrap();
+        assert!(cursor.is_none());
+
+        // Set cursor
+        db.update_read_cursor("aleph", "event-001").await.unwrap();
+        let cursor = db.get_read_cursor("aleph").await.unwrap();
+        assert_eq!(cursor.as_deref(), Some("event-001"));
+
+        // Advance cursor (upsert)
+        db.update_read_cursor("aleph", "event-005").await.unwrap();
+        let cursor = db.get_read_cursor("aleph").await.unwrap();
+        assert_eq!(cursor.as_deref(), Some("event-005"));
+
+        // Different agent has no cursor
+        let other = db.get_read_cursor("luban").await.unwrap();
+        assert!(other.is_none());
     }
 }

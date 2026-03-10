@@ -622,12 +622,19 @@ impl ToolRegistry {
         args: Value,
         agent_id: &str,
     ) -> Result<CallToolResult, McpError> {
-        let _unread_only = args
+        let unread_only = args
             .get("unread_only")
             .and_then(|v| v.as_bool())
             .unwrap_or(true);
         let from_agent = args.get("from_agent").and_then(|v| v.as_str());
         let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(10) as usize;
+
+        // Get server-side read cursor for unread filtering
+        let read_cursor = if unread_only {
+            self.state.persistence().get_read_cursor(agent_id).await.unwrap_or(None)
+        } else {
+            None
+        };
 
         // Use Indexer for O(1) lookups — clone messages to release the lock
         let mut messages: Vec<_> = {
@@ -637,10 +644,17 @@ impl ToolRegistry {
                 .into_iter()
                 .filter(|msg| {
                     if let Some(from) = from_agent {
-                        msg.from == from
-                    } else {
-                        true
+                        if msg.from != from {
+                            return false;
+                        }
                     }
+                    // Filter by read cursor (unread_only): only show messages newer than cursor
+                    if let Some(ref cursor_id) = read_cursor {
+                        if msg.id.as_str() <= cursor_id.as_str() {
+                            return false;
+                        }
+                    }
+                    true
                 })
                 .cloned()
                 .collect()
@@ -650,14 +664,24 @@ impl ToolRegistry {
         messages.sort_by(|a, b| b.created_at.cmp(&a.created_at));
         messages.truncate(limit);
 
+        // Auto-advance read cursor to the highest event ID returned
+        if !messages.is_empty() {
+            if let Some(newest) = messages.iter().max_by_key(|m| &m.id) {
+                if let Err(e) = self.state.persistence().update_read_cursor(agent_id, &newest.id).await {
+                    tracing::warn!("Failed to update read cursor for {}: {}", agent_id, e);
+                }
+            }
+        }
+
         if messages.is_empty() {
             return Ok(CallToolResult::text(format!(
-                "## Inbox for {}\n\nNo messages.",
-                agent_id
+                "## Inbox for {}\n\nNo {} messages.",
+                agent_id,
+                if unread_only { "unread" } else { "" }
             )));
         }
 
-        let mut output = format!("## Inbox for {}\n\n", agent_id);
+        let mut output = format!("## Inbox for {} ({} unread)\n\n", agent_id, messages.len());
         for msg in messages {
             output.push_str(&format!(
                 "### {} [{}]\n**From:** {} | **Priority:** {:?} | **Intent:** {:?} | **Expected:** {:?}\n**ID:** {}\n\n---\n\n",
