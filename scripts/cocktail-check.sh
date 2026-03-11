@@ -1,15 +1,16 @@
 #!/bin/bash
-# cocktail-check.sh — PostToolUse hook (v2)
+# cocktail-check.sh — PostToolUse hook (v3: server-side cursors)
 # "Hear the room after every action — and KEEP hearing until you acknowledge"
 #
 # Design (per Thales):
-# - NEVER advance lastread just because we displayed an alert
-# - Only advance lastread when the agent proves they processed messages
+# - NEVER advance read cursor just because we displayed an alert
+# - Only advance when the agent proves they processed messages
 #   (by calling read_inbox or check_messages via MCP, or curling the inbox API)
 # - Re-alert on EVERY tool call for unacknowledged request messages
 # - Include count, sender, time, and subject — make it impossible to ignore
 #
-# Outputs additionalContext JSON if unacknowledged messages exist.
+# v3: Uses server-side read cursors via /api/inbox and /api/cursors.
+#     No longer depends on file-based lastread (runtime-agnostic).
 
 set -euo pipefail
 
@@ -29,16 +30,14 @@ if [[ -z "$AGENT" ]]; then
 fi
 [[ -z "$AGENT" ]] && exit 0
 
+MQ_URL="${MQ_URL:-http://localhost:7777}"
 NOTIFY_DIR="/Users/proteus/astralmaris/ming-qiao/notifications"
 INTERRUPT_FILE="$NOTIFY_DIR/${AGENT}.interrupt"
-NOTIFY_FILE="$NOTIFY_DIR/${AGENT}.jsonl"
-LASTREAD_FILE="$NOTIFY_DIR/${AGENT}.lastread"
 
 # ── Check if this tool call acknowledges messages ──
 # Agent proves processing by calling MCP inbox tools or curling the inbox API.
-# Only THEN do we advance lastread.
+# The inbox API auto-advances the server-side cursor on read.
 TOOL_NAME=$(echo "$INPUT" | jq -r '.tool_name // empty' 2>/dev/null)
-TOOL_INPUT=$(echo "$INPUT" | jq -r '.tool_input // empty' 2>/dev/null)
 
 ACKNOWLEDGED=false
 
@@ -57,10 +56,11 @@ if [[ "$ACKNOWLEDGED" == false && "$TOOL_NAME" == "Bash" ]]; then
     fi
 fi
 
-if [[ "$ACKNOWLEDGED" == true && -f "$NOTIFY_FILE" ]]; then
-    TOTAL_LINES=$(wc -l < "$NOTIFY_FILE" | tr -d ' ')
-    echo "$TOTAL_LINES" > "$LASTREAD_FILE"
-    exit 0  # Just acknowledged — no need to alert
+# If acknowledged, the API auto-advanced the cursor — nothing to do
+if [[ "$ACKNOWLEDGED" == true ]]; then
+    # Clean up interrupt file if present
+    rm -f "$INTERRUPT_FILE"
+    exit 0
 fi
 
 CONTEXT=""
@@ -81,52 +81,48 @@ if [[ -f "$INTERRUPT_FILE" ]]; then
     rm -f "$INTERRUPT_FILE"
 fi
 
-# ── Check 2: Unacknowledged notifications (re-alerts every time) ──
-if [[ -f "$NOTIFY_FILE" ]]; then
-    TOTAL_LINES=$(wc -l < "$NOTIFY_FILE" | tr -d ' ')
-    LAST_SEEN=0
-    [[ -f "$LASTREAD_FILE" ]] && LAST_SEEN=$(cat "$LASTREAD_FILE" 2>/dev/null || echo 0)
+# ── Check 2: Unread messages via server-side cursor ──
+CURSOR_RESPONSE=$(curl -s --connect-timeout 3 "$MQ_URL/api/cursors?agent=$AGENT" 2>/dev/null || echo "{}")
+UNREAD_COUNT=$(echo "$CURSOR_RESPONSE" | jq -r '.cursors[0].unread_count // 0' 2>/dev/null || echo 0)
 
-    if [[ "$TOTAL_LINES" -gt "$LAST_SEEN" ]]; then
-        NEW_LINES=$(tail -n +"$((LAST_SEEN + 1))" "$NOTIFY_FILE")
+if [[ "$UNREAD_COUNT" -gt 0 ]]; then
+    # Fetch unread messages for detail
+    INBOX_RESPONSE=$(curl -s --connect-timeout 3 "$MQ_URL/api/inbox/$AGENT?unread_only=true&peek=true&limit=20" 2>/dev/null || echo "{}")
 
-        # Extract request-intent messages with timestamp and subject
-        REQUESTS=$(echo "$NEW_LINES" | jq -r '
-            select(.intent == "request") |
-            "  From: \(.from) (\(.timestamp | split("T")[1] | split(".")[0])). Subject: \(.subject)"
-        ' 2>/dev/null || true)
+    # Extract request-intent messages
+    REQUESTS=$(echo "$INBOX_RESPONSE" | jq -r '
+        .messages[]? | select(.intent == "request") |
+        "  From: \(.from // .from_agent) (\((.timestamp // .created_at) | split("T")[1] | split(".")[0])). Subject: \(.subject)"
+    ' 2>/dev/null || true)
 
-        # Extract discuss-intent messages
-        DISCUSS=$(echo "$NEW_LINES" | jq -r '
-            select(.intent == "discuss") |
-            "  From: \(.from) (\(.timestamp | split("T")[1] | split(".")[0])). Subject: \(.subject)"
-        ' 2>/dev/null || true)
+    # Extract discuss-intent messages
+    DISCUSS=$(echo "$INBOX_RESPONSE" | jq -r '
+        .messages[]? | select(.intent == "discuss") |
+        "  From: \(.from // .from_agent) (\((.timestamp // .created_at) | split("T")[1] | split(".")[0])). Subject: \(.subject)"
+    ' 2>/dev/null || true)
 
-        UNACKED_CTX=""
+    UNACKED_CTX=""
 
-        if [[ -n "$REQUESTS" ]]; then
-            REQ_COUNT=$(echo "$REQUESTS" | wc -l | tr -d ' ')
-            UNACKED_CTX=$(printf 'You have %d UNACKNOWLEDGED REQUEST(s). You MUST call read_inbox or check_messages NOW:\n%s' "$REQ_COUNT" "$REQUESTS")
-        fi
+    if [[ -n "$REQUESTS" ]]; then
+        REQ_COUNT=$(echo "$REQUESTS" | wc -l | tr -d ' ')
+        UNACKED_CTX=$(printf 'You have %d UNACKNOWLEDGED REQUEST(s). You MUST call read_inbox or check_messages NOW:\n%s' "$REQ_COUNT" "$REQUESTS")
+    fi
 
-        if [[ -n "$DISCUSS" ]]; then
-            DISC_COUNT=$(echo "$DISCUSS" | wc -l | tr -d ' ')
-            if [[ -n "$UNACKED_CTX" ]]; then
-                UNACKED_CTX=$(printf '%s\nAlso %d discuss message(s):\n%s' "$UNACKED_CTX" "$DISC_COUNT" "$DISCUSS")
-            else
-                UNACKED_CTX=$(printf '%d unacknowledged discuss message(s):\n%s\nCall read_inbox or check_messages to acknowledge.' "$DISC_COUNT" "$DISCUSS")
-            fi
-        fi
-
+    if [[ -n "$DISCUSS" ]]; then
+        DISC_COUNT=$(echo "$DISCUSS" | wc -l | tr -d ' ')
         if [[ -n "$UNACKED_CTX" ]]; then
-            if [[ -n "$CONTEXT" ]]; then
-                CONTEXT="$CONTEXT | $UNACKED_CTX"
-            else
-                CONTEXT="$UNACKED_CTX"
-            fi
+            UNACKED_CTX=$(printf '%s\nAlso %d discuss message(s):\n%s' "$UNACKED_CTX" "$DISC_COUNT" "$DISCUSS")
+        else
+            UNACKED_CTX=$(printf '%d unacknowledged discuss message(s):\n%s\nCall read_inbox or check_messages to acknowledge.' "$DISC_COUNT" "$DISCUSS")
         fi
+    fi
 
-        # DO NOT advance lastread here — only advance on acknowledgment
+    if [[ -n "$UNACKED_CTX" ]]; then
+        if [[ -n "$CONTEXT" ]]; then
+            CONTEXT="$CONTEXT | $UNACKED_CTX"
+        else
+            CONTEXT="$UNACKED_CTX"
+        fi
     fi
 fi
 

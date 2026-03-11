@@ -1,15 +1,18 @@
 #!/bin/bash
-# cocktail-stop-check.sh — Stop hook
+# cocktail-stop-check.sh — Stop hook (v3: server-side cursors)
 # "Don't stop if someone is talking to you"
 # Blocks the agent from stopping if there are unread request-intent messages.
 # Exit code 2 = block stop. Exit code 0 = allow stop.
+#
+# v3: Uses server-side read cursors via /api/cursors and /api/inbox.
+#     No longer depends on file-based lastread (runtime-agnostic).
 
 set -euo pipefail
 
 # Read hook input from stdin
 INPUT=$(cat)
 
-# Derive agent ID from cwd — CLAUDE_ENV_FILE vars don't reach hook subprocesses
+# Derive agent ID from cwd
 AGENT="${MING_QIAO_AGENT_ID:-}"
 if [[ -z "$AGENT" ]]; then
     CWD=$(echo "$INPUT" | jq -r '.cwd // empty' 2>/dev/null)
@@ -25,27 +28,19 @@ if [[ -z "$AGENT" ]]; then
     exit 0
 fi
 
-NOTIFY_FILE="/Users/proteus/astralmaris/ming-qiao/notifications/${AGENT}.jsonl"
-LASTREAD_FILE="/Users/proteus/astralmaris/ming-qiao/notifications/${AGENT}.lastread"
+MQ_URL="${MQ_URL:-http://localhost:7777}"
 
-if [[ ! -f "$NOTIFY_FILE" ]]; then
-    exit 0
-fi
+# Quick check: any unread at all?
+CURSOR_RESPONSE=$(curl -s --connect-timeout 3 "$MQ_URL/api/cursors?agent=$AGENT" 2>/dev/null || echo "{}")
+UNREAD_COUNT=$(echo "$CURSOR_RESPONSE" | jq -r '.cursors[0].unread_count // 0' 2>/dev/null || echo 0)
 
-TOTAL_LINES=$(wc -l < "$NOTIFY_FILE" | tr -d ' ')
-
-LAST_SEEN=0
-if [[ -f "$LASTREAD_FILE" ]]; then
-    LAST_SEEN=$(cat "$LASTREAD_FILE" 2>/dev/null || echo 0)
-fi
-
-if [[ "$TOTAL_LINES" -le "$LAST_SEEN" ]]; then
+if [[ "$UNREAD_COUNT" -le 0 ]]; then
     exit 0  # All caught up, ok to stop
 fi
 
 # Check for unread request-intent messages only (discuss can wait)
-NEW_LINES=$(tail -n +"$((LAST_SEEN + 1))" "$NOTIFY_FILE")
-REQUESTS=$(echo "$NEW_LINES" | jq -r 'select(.intent == "request") | "  From: \(.from) — \"\(.subject)\"" ' 2>/dev/null || true)
+INBOX_RESPONSE=$(curl -s --connect-timeout 3 "$MQ_URL/api/inbox/$AGENT?unread_only=true&peek=true&limit=50" 2>/dev/null || echo "{}")
+REQUESTS=$(echo "$INBOX_RESPONSE" | jq -r '.messages[]? | select(.intent == "request") | "  From: \(.from // .from_agent) — \"\(.subject)\""' 2>/dev/null || true)
 
 if [[ -z "$REQUESTS" ]]; then
     exit 0  # No pending requests, ok to stop

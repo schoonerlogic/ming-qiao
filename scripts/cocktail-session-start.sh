@@ -1,8 +1,11 @@
 #!/bin/bash
-# cocktail-session-start.sh — SessionStart hook
+# cocktail-session-start.sh — SessionStart hook (v3: server-side cursors)
 # "Know the room when you arrive"
 # Injects pending notification summary as context at session start.
 # Also sets MING_QIAO_AGENT_ID via CLAUDE_ENV_FILE for subsequent hooks/commands.
+#
+# v3: Uses server-side read cursors via /api/cursors and /api/inbox.
+#     No longer depends on file-based lastread (runtime-agnostic).
 
 set -euo pipefail
 
@@ -10,7 +13,6 @@ set -euo pipefail
 INPUT=$(cat)
 
 # Determine agent ID from the project directory
-# The cwd tells us which agent workspace we're in
 CWD=$(echo "$INPUT" | jq -r '.cwd // empty')
 if [[ "$CWD" == *"/aleph"* ]]; then
     AGENT="aleph"
@@ -31,22 +33,13 @@ if [[ -n "${CLAUDE_ENV_FILE:-}" ]]; then
     echo "export MING_QIAO_AGENT_ID=${AGENT}" >> "$CLAUDE_ENV_FILE"
 fi
 
-NOTIFY_FILE="/Users/proteus/astralmaris/ming-qiao/notifications/${AGENT}.jsonl"
-LASTREAD_FILE="/Users/proteus/astralmaris/ming-qiao/notifications/${AGENT}.lastread"
+MQ_URL="${MQ_URL:-http://localhost:7777}"
 
-if [[ ! -f "$NOTIFY_FILE" ]]; then
-    exit 0
-fi
+# Query server-side cursor for unread count
+CURSOR_RESPONSE=$(curl -s --connect-timeout 3 "$MQ_URL/api/cursors?agent=$AGENT" 2>/dev/null || echo "{}")
+UNREAD_COUNT=$(echo "$CURSOR_RESPONSE" | jq -r '.cursors[0].unread_count // 0' 2>/dev/null || echo 0)
 
-TOTAL_LINES=$(wc -l < "$NOTIFY_FILE" | tr -d ' ')
-
-LAST_SEEN=0
-if [[ -f "$LASTREAD_FILE" ]]; then
-    LAST_SEEN=$(cat "$LASTREAD_FILE" 2>/dev/null || echo 0)
-fi
-
-if [[ "$TOTAL_LINES" -le "$LAST_SEEN" ]]; then
-    # No new messages
+if [[ "$UNREAD_COUNT" -le 0 ]]; then
     jq -n --arg ctx "Session start: No new messages in inbox." \
     '{
       hookSpecificOutput: {
@@ -57,19 +50,19 @@ if [[ "$TOTAL_LINES" -le "$LAST_SEEN" ]]; then
     exit 0
 fi
 
-# Categorize new messages
-NEW_LINES=$(tail -n +"$((LAST_SEEN + 1))" "$NOTIFY_FILE")
-REQUESTS=$(echo "$NEW_LINES" | jq -r 'select(.intent == "request") | "  REQUEST: From \(.from) — \"\(.subject)\"" ' 2>/dev/null || true)
-DISCUSSIONS=$(echo "$NEW_LINES" | jq -r 'select(.intent == "discuss") | "  DISCUSS: From \(.from) — \"\(.subject)\"" ' 2>/dev/null || true)
-INFORMS=$(echo "$NEW_LINES" | jq -r 'select(.intent == "inform") | "  INFORM: From \(.from) — \"\(.subject)\"" ' 2>/dev/null || true)
+# Fetch unread messages for categorization
+INBOX_RESPONSE=$(curl -s --connect-timeout 3 "$MQ_URL/api/inbox/$AGENT?unread_only=true&peek=true&limit=50" 2>/dev/null || echo "{}")
 
-NEW_COUNT=$((TOTAL_LINES - LAST_SEEN))
+REQUESTS=$(echo "$INBOX_RESPONSE" | jq -r '.messages[]? | select(.intent == "request") | "  REQUEST: From \(.from // .from_agent) — \"\(.subject)\""' 2>/dev/null || true)
+DISCUSSIONS=$(echo "$INBOX_RESPONSE" | jq -r '.messages[]? | select(.intent == "discuss") | "  DISCUSS: From \(.from // .from_agent) — \"\(.subject)\""' 2>/dev/null || true)
+INFORMS=$(echo "$INBOX_RESPONSE" | jq -r '.messages[]? | select(.intent == "inform") | "  INFORM: From \(.from // .from_agent) — \"\(.subject)\""' 2>/dev/null || true)
+
 REQ_COUNT=0; DISC_COUNT=0; INF_COUNT=0
 [[ -n "$REQUESTS" ]] && REQ_COUNT=$(echo "$REQUESTS" | wc -l | tr -d ' ')
 [[ -n "$DISCUSSIONS" ]] && DISC_COUNT=$(echo "$DISCUSSIONS" | wc -l | tr -d ' ')
 [[ -n "$INFORMS" ]] && INF_COUNT=$(echo "$INFORMS" | wc -l | tr -d ' ')
 
-SUMMARY="Session start: ${NEW_COUNT} pending message(s) (${REQ_COUNT} request, ${DISC_COUNT} discuss, ${INF_COUNT} inform)"
+SUMMARY="Session start: ${UNREAD_COUNT} pending message(s) (${REQ_COUNT} request, ${DISC_COUNT} discuss, ${INF_COUNT} inform)"
 [[ -n "$REQUESTS" ]] && SUMMARY="$SUMMARY"$'\n'"$REQUESTS"
 [[ -n "$DISCUSSIONS" ]] && SUMMARY="$SUMMARY"$'\n'"$DISCUSSIONS"
 [[ -n "$INFORMS" ]] && SUMMARY="$SUMMARY"$'\n'"$INFORMS"
@@ -83,4 +76,4 @@ jq -n --arg ctx "$SUMMARY" \
   }
 }'
 
-# Do NOT update lastread here — let the agent actually read the messages first
+# Do NOT advance cursor here — let the agent actually read via inbox API

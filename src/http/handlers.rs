@@ -235,6 +235,10 @@ pub struct InboxQuery {
     #[serde(default = "default_limit")]
     pub limit: u32,
     pub from: Option<String>,
+    /// If true, return messages without advancing the read cursor.
+    /// Used by hooks to peek at unread messages for alert content.
+    #[serde(default)]
+    pub peek: bool,
 }
 
 fn default_true() -> bool {
@@ -293,7 +297,8 @@ pub async fn get_inbox(
     filtered.truncate(query.limit as usize);
 
     // Auto-advance read cursor to the highest event ID returned
-    if !filtered.is_empty() {
+    // Skip if peek=true (hooks use peek to check without advancing)
+    if !query.peek && !filtered.is_empty() {
         if let Some(newest) = filtered.iter().max_by_key(|m| &m.id) {
             let newest_id = newest.id.clone();
             if let Err(e) = state.persistence().update_read_cursor(&agent, &newest_id).await {
