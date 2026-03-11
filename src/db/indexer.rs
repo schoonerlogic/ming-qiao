@@ -280,6 +280,17 @@ impl Indexer {
             .collect()
     }
 
+    /// Get all unique agent IDs that have messages addressed to them.
+    pub fn all_recipient_agents(&self) -> Vec<String> {
+        let mut agents: HashSet<String> = HashSet::new();
+        for msg in self.messages.values() {
+            if msg.to != "all" && msg.to != "council" {
+                agents.insert(msg.to.clone());
+            }
+        }
+        agents.into_iter().collect()
+    }
+
     pub fn get_decisions(&self) -> Vec<&Decision> {
         self.decisions.values().collect()
     }

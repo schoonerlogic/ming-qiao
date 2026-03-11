@@ -74,7 +74,9 @@ pub fn api_routes(state: AppState) -> Router<AppState> {
         // Config (read)
         .route("/api/config", get(handlers::get_config))
         // Search
-        .route("/api/search", get(handlers::search));
+        .route("/api/search", get(handlers::search))
+        // Read cursors (for am-fleet comms)
+        .route("/api/cursors", get(handlers::get_cursors));
 
     read_routes.merge(write_routes).merge(signed_routes)
 }

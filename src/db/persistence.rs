@@ -6,6 +6,8 @@ use surrealdb::engine::any::Any;
 use surrealdb::opt::auth::{Database, Namespace, Root};
 use surrealdb::Surreal;
 
+use serde::Deserialize;
+
 use crate::db::error::PersistenceError;
 use crate::events::EventEnvelope;
 use crate::nats::messages::{Presence, SessionNote, TaskAssignment, TaskStatusUpdate};
@@ -49,6 +51,14 @@ DEFINE INDEX IF NOT EXISTS timestamp_idx ON event COLUMNS timestamp;
 DEFINE TABLE IF NOT EXISTS agent_read_cursor SCHEMALESS;
 DEFINE INDEX IF NOT EXISTS agent_id_idx ON agent_read_cursor COLUMNS agent_id UNIQUE;
 "#;
+
+/// Read cursor state for an agent, as stored in SurrealDB.
+#[derive(Debug, Clone, Deserialize)]
+pub struct AgentReadCursor {
+    pub agent_id: String,
+    pub last_read_event_id: String,
+    pub last_read_at: String,
+}
 
 /// SurrealDB persistence layer for ming-qiao.
 ///
@@ -344,6 +354,18 @@ impl Persistence {
             .map_err(db_err)?;
         let rows: Vec<Option<String>> = result.take(0).map_err(db_err)?;
         Ok(rows.into_iter().next().flatten())
+    }
+
+    /// Get all read cursors across all agents.
+    pub async fn get_all_cursors(&self) -> Result<Vec<AgentReadCursor>, PersistenceError> {
+        let mut result = self.db
+            .query("SELECT * OMIT id FROM agent_read_cursor ORDER BY agent_id ASC")
+            .await
+            .map_err(db_err)?;
+        let rows: Vec<Value> = result.take(0).map_err(db_err)?;
+        rows.into_iter()
+            .map(|v| Ok(serde_json::from_value(v)?))
+            .collect()
     }
 
     /// Update the read cursor for an agent to the given event ID.

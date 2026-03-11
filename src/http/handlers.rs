@@ -89,6 +89,88 @@ pub async fn health_check(State(state): State<AppState>) -> impl IntoResponse {
 }
 
 // ============================================================================
+// Agent Read Cursors
+// ============================================================================
+
+/// Get read cursor state for all agents (or a specific agent).
+///
+/// Used by `am-fleet comms` to verify cursor health across the fleet.
+/// Returns cursor position, total messages addressed to agent, and gap.
+pub async fn get_cursors(
+    State(state): State<AppState>,
+    Query(query): Query<CursorQuery>,
+) -> impl IntoResponse {
+    let persistence = state.persistence();
+
+    // Get all cursors from SurrealDB
+    let cursors = match persistence.get_all_cursors().await {
+        Ok(c) => c,
+        Err(e) => {
+            return Json(serde_json::json!({
+                "error": format!("Failed to read cursors: {}", e)
+            }));
+        }
+    };
+
+    // Build cursor info with message counts from indexer
+    let indexer = state.indexer().await;
+    let mut results = Vec::new();
+
+    // If a specific agent is requested, only return that one
+    let agents: Vec<String> = if let Some(ref agent) = query.agent {
+        vec![agent.clone()]
+    } else {
+        // Collect all agents that have either a cursor or messages
+        let mut agent_set: std::collections::HashSet<String> = cursors.iter()
+            .map(|c| c.agent_id.clone())
+            .collect();
+        // Also include agents with messages but no cursor
+        for agent_id in indexer.all_recipient_agents() {
+            agent_set.insert(agent_id);
+        }
+        let mut agents: Vec<_> = agent_set.into_iter().collect();
+        agents.sort();
+        agents
+    };
+
+    for agent_id in &agents {
+        let total_messages = indexer.get_messages_to_agent(agent_id).len();
+        let cursor = cursors.iter().find(|c| &c.agent_id == agent_id);
+
+        let (cursor_event_id, last_read_at, unread_count) = match cursor {
+            Some(c) => {
+                // Count messages newer than cursor
+                let unread = indexer.get_messages_to_agent(agent_id)
+                    .iter()
+                    .filter(|m| m.id.as_str() > c.last_read_event_id.as_str())
+                    .count();
+                (Some(c.last_read_event_id.clone()), Some(c.last_read_at.clone()), unread)
+            }
+            None => (None, None, total_messages),
+        };
+
+        results.push(serde_json::json!({
+            "agent_id": agent_id,
+            "cursor_event_id": cursor_event_id,
+            "last_read_at": last_read_at,
+            "total_messages": total_messages,
+            "unread_count": unread_count,
+        }));
+    }
+
+    drop(indexer);
+
+    Json(serde_json::json!({
+        "cursors": results
+    }))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CursorQuery {
+    pub agent: Option<String>,
+}
+
+// ============================================================================
 // Admin — Indexer Rehydration
 // ============================================================================
 
