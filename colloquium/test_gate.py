@@ -225,13 +225,13 @@ def test_5_response_envelope():
     # Write a test audit entry and verify its signed contents
     from pipeline import _write_audit_log, CastingResult
     from adapter import ColloquiumResponse
-    from oracle_client import OracleBriefing
+    from astrolabe_client import AstrolabeBriefing
 
     test_result = CastingResult(
         response=ColloquiumResponse(agent_id="aleph", content="test", model="sonnet"),
         invocation_envelope=inv_envelope,
         response_envelope=resp_envelope,
-        oracle_briefing=OracleBriefing(nodes=[], facts=[], raw_query="test", available=True),
+        astrolabe_briefing=AstrolabeBriefing(nodes=[], facts=[], raw_query="test", available=True),
         commitment_detected=False,
         posted=False,
         thread_id="test-thread-001",
@@ -252,8 +252,8 @@ def test_5_response_envelope():
     check("audit links invocation to response",
           entry["response_envelope"]["payload"]["invocation_id"]
           == entry["invocation_envelope"]["event_id"])
-    check("audit has oracle stats",
-          "oracle_available" in entry and "oracle_node_count" in entry)
+    check("audit has astrolabe stats",
+          "astrolabe_available" in entry and "astrolabe_node_count" in entry)
     check("audit has commitment flag",
           "commitment_detected" in entry and entry["commitment_detected"] is False)
 

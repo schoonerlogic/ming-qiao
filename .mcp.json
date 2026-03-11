@@ -12,7 +12,7 @@
                 "MINGQIAO_DB_PASSWORD": "rKokq6Y1kNmbrJuLhbklO23ig5xiVEmD"
             }
         },
-        "oracle": {
+        "astrolabe": {
             "type": "http",
             "url": "http://localhost:8001/mcp"
         }

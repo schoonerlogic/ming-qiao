@@ -2,7 +2,7 @@
 """
 Colloquium Casting — Phase 2.
 
-Full pipeline: ORACLE briefing + signed envelopes + voice invocation.
+Full pipeline: ASTROLABE briefing + signed envelopes + voice invocation.
 
 Usage:
     # Single voice dry run
@@ -36,7 +36,7 @@ from pipeline import cast
 @click.command()
 @click.option("--thread", "thread_id", help="Ming-qiao thread ID to respond to")
 @click.option("--proposal", help="Custom proposal text (instead of reading from thread)")
-@click.option("--tags", help="Comma-separated ORACLE context tags")
+@click.option("--tags", help="Comma-separated ASTROLABE context tags")
 @click.option("--agent", "agents", multiple=True, help="Agent(s) to cast (repeatable). Default: aleph")
 @click.option("--all", "all_agents", is_flag=True, help="Cast all 7 Council voices")
 @click.option("--post", "do_post", is_flag=True, help="Post response to ming-qiao thread")
@@ -64,8 +64,8 @@ def main(thread_id, proposal, tags, agents, all_agents, do_post, model, authored
     for result in results:
         provenance = "authored" if not result.response.autonomous else "autonomous"
         click.echo()
-        click.echo(f"ORACLE: {'available' if result.oracle_briefing.available else 'UNAVAILABLE'} "
-                   f"({len(result.oracle_briefing.nodes)} nodes, {len(result.oracle_briefing.facts)} facts)")
+        click.echo(f"ASTROLABE: {'available' if result.astrolabe_briefing.available else 'UNAVAILABLE'} "
+                   f"({len(result.astrolabe_briefing.nodes)} nodes, {len(result.astrolabe_briefing.facts)} facts)")
         click.echo(f"Invocation: {result.invocation_envelope.event_id} (signed, verified)")
         click.echo(f"Provenance: {provenance}")
         click.echo(f"Commitment: {'DETECTED — held' if result.commitment_detected else 'none'}")

@@ -5,7 +5,7 @@ Structured multi-agent deliberation system for the AstralMaris Council. Six auto
 ## Prerequisites
 
 - **ming-qiao** running at `localhost:7777`
-- **ORACLE** (Graphiti MCP) running at `localhost:8001`
+- **ASTROLABE** (Graphiti MCP) running at `localhost:8001`
 - **claude CLI** installed and authenticated (subscription)
 - Python 3.12+ with `uv`
 
@@ -66,7 +66,7 @@ python cast.py --thread <thread-id> --all --post --tags "keyword1,keyword2"
 | `--all` | Cast all 6 autonomous voices |
 | `--agent <name>` | Cast specific voice(s), repeatable. e.g. `--agent aleph --agent ogma` |
 | `--model <alias>` | Model for all voices. Default: `sonnet`. Options: `sonnet`, `opus` |
-| `--tags <csv>` | Comma-separated ORACLE context tags. Improves briefing quality |
+| `--tags <csv>` | Comma-separated ASTROLABE context tags. Improves briefing quality |
 | `--post` | Post responses to ming-qiao thread. Without this, dry run only |
 | `--proposal <text>` | Custom proposal text instead of reading from thread |
 | `--thread <id>` | Ming-qiao thread ID |
@@ -96,7 +96,7 @@ Attempting `--agent merlin` will return an error by design.
 
 For each voice, the pipeline:
 
-1. **ORACLE briefing** — queries the knowledge graph for entities and facts matching context tags
+1. **ASTROLABE briefing** — queries the knowledge graph for entities and facts matching context tags
 2. **Thread read** — pulls the proposal and any prior responses from ming-qiao
 3. **Agent work context** — loads relevant recent work (from `work_context/<agent>.md` if present)
 4. **Sign invocation envelope** — Ed25519 signed with the agent's key (Ogma controls 1-3)
@@ -162,7 +162,7 @@ All agents share one keyring. Each has a private seed. Both are required for the
 
 **`claude CLI not found`** — Ensure `claude` is in your PATH. Check: `which claude`
 
-**ORACLE returns 0 results** — Check that Graphiti MCP is running: `curl http://localhost:8001/mcp`
+**ASTROLABE returns 0 results** — Check that Graphiti MCP is running: `curl http://localhost:8001/mcp`
 
 **404 on thread read** — Verify thread ID. The endpoint is singular: `/api/thread/<id>` not `/api/threads/<id>`
 

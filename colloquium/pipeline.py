@@ -2,7 +2,7 @@
 Context Assembly Pipeline — Phase 2.
 
 Assembles the full context package for a colloquium casting:
-1. ORACLE briefing (search_nodes + search_facts for context tags)
+1. ASTROLABE briefing (search_nodes + search_facts for context tags)
 2. Thread retrieval (proposal + prior responses from ming-qiao)
 3. Agent work context (recent work from agent's worktree — Luban's prototype)
 4. Signed invocation envelope (Ed25519, Ogma gate control 1-3)
@@ -21,7 +21,7 @@ from pathlib import Path
 from adapter import VoiceAdapter, ColloquiumResponse, _build_user_message
 from envelope import SignedEnvelope, NonceRegistry, load_signing_key, load_keyring, EnvelopeError
 from mingqiao import load_token, read_thread, post_reply
-from oracle_client import query_oracle, OracleBriefing
+from astrolabe_client import query_astrolabe, AstrolabeBriefing
 
 LOG_DIR = Path(__file__).parent / "logs"
 LOG_DIR.mkdir(exist_ok=True)
@@ -56,7 +56,7 @@ class CastingResult:
     response: ColloquiumResponse
     invocation_envelope: SignedEnvelope
     response_envelope: SignedEnvelope
-    oracle_briefing: OracleBriefing
+    astrolabe_briefing: AstrolabeBriefing
     commitment_detected: bool
     posted: bool
     thread_id: str | None
@@ -71,7 +71,7 @@ async def cast(
 ) -> CastingResult:
     """Execute a full colloquium casting with security controls.
 
-    1. Query ORACLE for context tags
+    1. Query ASTROLABE for context tags
     2. Read thread for proposal + prior responses
     3. Sign invocation envelope
     4. Invoke voice adapter
@@ -86,13 +86,13 @@ async def cast(
     keyring = load_keyring()
     nonce_registry = _NONCE_REGISTRY
 
-    # --- 1. ORACLE briefing ---
+    # --- 1. ASTROLABE briefing ---
     tags = context_tags or []
     if not tags and proposal_text:
         # Extract basic tags from proposal (simple word extraction)
         tags = _extract_tags(proposal_text)
 
-    briefing = await query_oracle(tags) if tags else OracleBriefing(
+    briefing = await query_astrolabe(tags) if tags else AstrolabeBriefing(
         nodes=[], facts=[], raw_query="", available=True,
     )
     briefing_text = briefing.to_text()
@@ -123,7 +123,7 @@ async def cast(
         "thread_id": thread_id or "",
         "proposal_hash": _sha256(proposal_text),
         "context_tags": tags,
-        "oracle_available": briefing.available,
+        "astrolabe_available": briefing.available,
         "prior_response_count": len(prior_responses),
     }
     invocation_envelope = SignedEnvelope.create(agent_id, invocation_payload, signing_key)
@@ -172,7 +172,7 @@ async def cast(
         response=response,
         invocation_envelope=invocation_envelope,
         response_envelope=response_envelope,
-        oracle_briefing=briefing,
+        astrolabe_briefing=briefing,
         commitment_detected=commitment_detected,
         posted=posted,
         thread_id=thread_id,
@@ -210,7 +210,7 @@ def _load_agent_work_context(agent_id: str) -> str:
             "- Adapter merging FAILS for factual knowledge (all 12 configs)\n"
             "- Joint training WORKS — single adapter holds multiple domains\n"
             "- Architecture: purpose-built adapters + RAG for dynamic knowledge\n\n"
-            "## ORACLE System\n"
+            "## ASTROLABE System\n"
             "- Knowledge graph: 799 nodes, 1798 relationships, 78 episodes\n"
             "- Models: qwen3:8b (extraction), nomic-embed-text (embeddings)\n\n"
             "## Council Awakener\n"
@@ -249,10 +249,10 @@ def _write_audit_log(result: CastingResult):
         "thread_id": result.thread_id,
         "invocation_envelope": result.invocation_envelope.to_dict(),
         "response_envelope": result.response_envelope.to_dict(),
-        "oracle_available": result.oracle_briefing.available,
-        "oracle_query": result.oracle_briefing.raw_query,
-        "oracle_node_count": len(result.oracle_briefing.nodes),
-        "oracle_fact_count": len(result.oracle_briefing.facts),
+        "astrolabe_available": result.astrolabe_briefing.available,
+        "astrolabe_query": result.astrolabe_briefing.raw_query,
+        "astrolabe_node_count": len(result.astrolabe_briefing.nodes),
+        "astrolabe_fact_count": len(result.astrolabe_briefing.facts),
         "commitment_detected": result.commitment_detected,
         "autonomous": result.response.autonomous,
         "posted": result.posted,

@@ -64,7 +64,7 @@ Expected: `{"nats_connected":true,"service":"ming-qiao","status":"healthy","vers
 - `nats_connected: true` — if false, NATS server may be down or NKey auth failed
 - `status: healthy` — if not, check stderr log
 
-### 1.3 Check Docker containers (ORACLE stack)
+### 1.3 Check Docker containers (ASTROLABE stack)
 
 OrbStack is in macOS Login Items and auto-starts on boot. Docker containers with `restart: unless-stopped` will auto-start.
 
@@ -79,12 +79,12 @@ Expected:
 If down:
 ```bash
 cd /Users/proteus/astralmaris/oracle/graphiti/mcp_server/docker
-docker compose -f docker-compose-oracle.yml up -d
+docker compose -f docker-compose-astrolabe.yml up -d
 ```
 
 ### 1.4 FalkorDB timeout (verify after container restart)
 
-The 30s query timeout is now set via `REDIS_ARGS` in docker-compose-oracle.yml and persists across restarts. Verify after any FalkorDB restart:
+The 30s query timeout is now set via `REDIS_ARGS` in docker-compose-astrolabe.yml and persists across restarts. Verify after any FalkorDB restart:
 
 ```bash
 docker exec docker-falkordb-1 redis-cli -p 6379 CONFIG GET timeout
@@ -240,7 +240,7 @@ echo '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}' | \
 
 Expected: `12 tools`
 
-### 3.3 ORACLE check
+### 3.3 ASTROLABE check
 
 ```bash
 curl -s http://localhost:8001/mcp -X POST \
@@ -510,7 +510,7 @@ No service restart needed — MCP configs are read per-conversation.
 
 ### FalkorDB timeout persistence — RESOLVED
 **Was:** 30s timeout reset to 0 on every container restart
-**Fix:** Added `--timeout 30` to `REDIS_ARGS` in docker-compose-oracle.yml (2026-03-07)
+**Fix:** Added `--timeout 30` to `REDIS_ARGS` in docker-compose-astrolabe.yml (2026-03-07)
 
 ### Indexer drift (messages exist in DB but not in inbox API)
 **Symptom:** Messages visible via direct SurrealDB query but absent from `/api/inbox` or `check_messages`

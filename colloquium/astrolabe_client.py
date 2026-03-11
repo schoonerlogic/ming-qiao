@@ -1,5 +1,5 @@
 """
-ORACLE MCP client for colloquium context assembly.
+ASTROLABE MCP client for colloquium context assembly.
 
 Queries the Graphiti MCP server (http://localhost:8001/mcp) for nodes, facts,
 and episodes relevant to a colloquium proposal's context tags.
@@ -12,13 +12,13 @@ from dataclasses import dataclass
 
 import aiohttp
 
-ORACLE_MCP_URL = "http://localhost:8001/mcp"
+ASTROLABE_MCP_URL = "http://localhost:8001/mcp"
 GRAPHITI_GROUP_ID = "oracle_main"
 
 
 @dataclass
-class OracleBriefing:
-    """Structured ORACLE query results for a colloquium briefing."""
+class AstrolabeBriefing:
+    """Structured ASTROLABE query results for a colloquium briefing."""
     nodes: list[dict]
     facts: list[dict]
     raw_query: str
@@ -28,10 +28,10 @@ class OracleBriefing:
     def to_text(self, max_tokens: int = 2000) -> str:
         """Render briefing as text for the context package."""
         if not self.available:
-            return f"[ORACLE unavailable: {self.error}]"
+            return f"[ASTROLABE unavailable: {self.error}]"
 
         if not self.nodes and not self.facts:
-            return f"[ORACLE query '{self.raw_query}' returned no relevant results. The graph may lack coverage for this topic.]"
+            return f"[ASTROLABE query '{self.raw_query}' returned no relevant results. The graph may lack coverage for this topic.]"
 
         parts = []
 
@@ -83,7 +83,7 @@ async def _mcp_call(session: aiohttp.ClientSession, session_id: str | None, tool
         },
     }
 
-    async with session.post(ORACLE_MCP_URL, json=payload, headers=headers) as resp:
+    async with session.post(ASTROLABE_MCP_URL, json=payload, headers=headers) as resp:
         new_session_id = resp.headers.get("Mcp-Session-Id", session_id or "")
 
         body = await resp.text()
@@ -128,13 +128,13 @@ async def _mcp_init(session: aiohttp.ClientSession) -> str:
         "Content-Type": "application/json",
         "Accept": "application/json, text/event-stream",
     }
-    async with session.post(ORACLE_MCP_URL, json=payload, headers=headers) as resp:
+    async with session.post(ASTROLABE_MCP_URL, json=payload, headers=headers) as resp:
         session_id = resp.headers.get("Mcp-Session-Id", "")
         return session_id
 
 
-async def query_oracle(context_tags: list[str], max_nodes: int = 10, max_facts: int = 10) -> OracleBriefing:
-    """Query ORACLE for entities and facts relevant to context tags."""
+async def query_astrolabe(context_tags: list[str], max_nodes: int = 10, max_facts: int = 10) -> AstrolabeBriefing:
+    """Query ASTROLABE for entities and facts relevant to context tags."""
     query = " ".join(context_tags)
 
     try:
@@ -159,7 +159,7 @@ async def query_oracle(context_tags: list[str], max_nodes: int = 10, max_facts: 
             nodes = _extract_content(nodes_result, "nodes")
             facts = _extract_content(facts_result, "facts")
 
-            return OracleBriefing(
+            return AstrolabeBriefing(
                 nodes=nodes,
                 facts=facts,
                 raw_query=query,
@@ -167,7 +167,7 @@ async def query_oracle(context_tags: list[str], max_nodes: int = 10, max_facts: 
             )
 
     except Exception as e:
-        return OracleBriefing(
+        return AstrolabeBriefing(
             nodes=[],
             facts=[],
             raw_query=query,

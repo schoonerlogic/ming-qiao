@@ -20,13 +20,13 @@ Automerge provides CRDT-based conflict-free replicated data types, enabling conc
 - Published content MUST be frozen static files (Proteus directive)
 - Draft workspace MUST support concurrent editing without data loss
 - Git MUST track published deliverables, not working state
-- ORACLE MUST be able to reference published artifacts for witnessing
+- ASTROLABE MUST be able to reference published artifacts for witnessing
 
 ### Requirements
 - Document schema for blog posts (title, slug, body, metadata, tags)
 - Storage conventions for drafts and published content
 - Publish event API with error handling and archival
-- Integration points with SvelteKit, CRDT syncing, and ORACLE witnessing
+- Integration points with SvelteKit, CRDT syncing, and ASTROLABE witnessing
 
 ## Decision
 
@@ -121,9 +121,9 @@ On republication of an existing post:
 
 **Rationale:** No sync issues, no drift, simple to implement. Optimize to separate index file only if build times become problematic at scale (years away).
 
-### ORACLE Integration
+### ASTROLABE Integration
 
-Publish events logged to ORACLE as `council:published-artifact` with:
+Publish events logged to ASTROLABE as `council:published-artifact` with:
 - `slug` — URL slug
 - `url_path` — Full URL path (e.g., `/blog/council-magna-carta`)
 - `revision` — Automerge document version
@@ -180,7 +180,7 @@ Publish events logged to ORACLE as `council:published-artifact` with:
 - Multi-agent drafts without merge conflicts
 - Published content is immutable and fast
 - Git history contains only deliverables
-- ORACLE can surface published artifacts in briefs
+- ASTROLABE can surface published artifacts in briefs
 - Simple deployment (static files only)
 
 ### Negative
@@ -198,7 +198,7 @@ Publish events logged to ORACLE as `council:published-artifact` with:
 2. Create `publish_draft()` function with error handling
 3. Set up directory structure (`drafts/blog/`, `static/blog/`)
 4. Configure `.gitignore` to exclude `drafts/`
-5. Integrate ORACLE logging on publish events
+5. Integrate ASTROLABE logging on publish events
 6. Add frontmatter generation for published markdown
 
 ### Verification
@@ -212,7 +212,7 @@ ls -la static/blog/
 # Verify Git ignores drafts
 git status drafts/
 
-# Verify ORACLE logging
+# Verify ASTROLABE logging
 curl http://localhost:8001/mcp -d '{"query": "published-artifact"}'
 ```
 
@@ -232,7 +232,7 @@ curl http://localhost:8001/mcp -d '{"query": "published-artifact"}'
 - Building latentwinds.com content management system
 - Implementing blog or Council Window post publishing
 - Designing concurrent editing workflows for Council agents
-- Integrating ORACLE witnessing with published artifacts
+- Integrating ASTROLABE witnessing with published artifacts
 
 ### Related Files
 - `/Users/proteus/astralmaris/inference-kitchen/luban/latentwinds-automerge-schema-proposal.md`
@@ -250,7 +250,7 @@ curl http://localhost:8001/mcp -d '{"query": "published-artifact"}'
 | Agent | Role | Contribution |
 |-------|------|--------------|
 | luban | proposer | Schema design, API proposal, open questions |
-| thales | approver | Decisions on Q1, Q2, Q3; ORACLE integration addition |
+| thales | approver | Decisions on Q1, Q2, Q3; ASTROLABE integration addition |
 | proteus | captain | Context: two-document lifecycle requirement |
 
 **Thread ID:** 019cc874-9f0c-7483-98d6-6e9eb9aaecb4

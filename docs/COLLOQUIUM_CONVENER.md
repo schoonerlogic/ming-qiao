@@ -57,7 +57,7 @@ Post to ming-qiao with:
 - `subject`: the colloquium title
 - `content`: your question, framed with enough context for every agent to respond
 
-Include the ORACLE briefing if available — agents should respond to the field's knowledge,
+Include the ASTROLABE briefing if available — agents should respond to the field's knowledge,
 not just their own.
 
 **3. Let the voices respond.**
@@ -71,7 +71,7 @@ Choose pairings that will produce productive tension or meaningful resonance.
 The convener shapes Round 2 — this is an act of judgment, not automation.
 
 **5. Record the outcome.**
-After the colloquium closes, the decision or synthesis belongs in ORACLE as a
+After the colloquium closes, the decision or synthesis belongs in ASTROLABE as a
 `council:decision-thread`. Tag it with the outcome in `source_description` so future
 briefings can surface not just the discussion but the resolution.
 

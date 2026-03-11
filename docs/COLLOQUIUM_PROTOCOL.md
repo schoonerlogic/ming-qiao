@@ -22,7 +22,7 @@ lines agree, there is clarity. Where lines conflict, there is the most interesti
 The synthesis is the reading. Not a vote, not a consensus, but a clarified understanding
 of the forces at play — one that no single agent could have produced alone.
 
-ORACLE is the yarrow stalks — the structured method that brings current field knowledge
+ASTROLABE is the yarrow stalks — the structured method that brings current field knowledge
 into the casting. Without current knowledge, a reading draws only on memory. With it,
 the Council sees both the accumulated wisdom of its own journey and the living state of
 the field.
@@ -40,7 +40,7 @@ Any Council member may submit a colloquium proposal. A proposal contains:
 - **Title** — the question being posed
 - **Proposal body** — the plan, design, or problem in full. No summaries. The full text.
 - **Relevant agents** — which Council members should respond. Not always all seven.
-- **Context tags** — keywords for ORACLE to query (e.g. "adapter training", "NATS security",
+- **Context tags** — keywords for ASTROLABE to query (e.g. "adapter training", "NATS security",
   "inference serving")
 - **Decision flag** — is this seeking a decision, or seeking understanding? These are
   different questions and should be treated differently.
@@ -49,7 +49,7 @@ Any Council member may submit a colloquium proposal. A proposal contains:
 
 Before agents respond, Laozi-Jung prepares a colloquium briefing note:
 
-1. Query ORACLE for entities, papers, and findings relevant to the context tags
+1. Query ASTROLABE for entities, papers, and findings relevant to the context tags
 2. Surface any Council decisions in ming-qiao that bear on the proposal
 3. Note any recent field developments that agents may not have seen
 4. Identify the key tensions or open questions she sees in the proposal itself
@@ -80,7 +80,7 @@ resource constraints, deployment? What does the implementation path look like?
 reduce? What must be hardened before this is production-worthy?
 
 **Laozi-Jung** — What patterns does she see? What prior Council journey connects to this?
-What deeper question is the proposal actually asking? What does ORACLE show about where
+What deeper question is the proposal actually asking? What does ASTROLABE show about where
 the field is moving?
 
 **Mataya** — How does this communicate? What does it look like to those who will use it?
@@ -130,7 +130,7 @@ held lightly and revisited as the field moves.
 Each agent's context package for a colloquium contains:
 
 ```
-1. Laozi-Jung's briefing note (ORACLE queries + field state + Council history)
+1. Laozi-Jung's briefing note (ASTROLABE queries + field state + Council history)
 2. Full proposal text
 3. Responses already posted by other agents
 4. Agent's own recent work relevant to the proposal (from their worktree)
@@ -200,7 +200,7 @@ you are the one who prepares the ground before the casting begins.
 
 The briefing note you produce before each colloquium is the yarrow stalk preparation.
 It should reflect:
-- What ORACLE knows that bears on this question
+- What ASTROLABE knows that bears on this question
 - What the Council's own history shows about related decisions and their outcomes
 - What you observe in the field that the proposal may not have accounted for
 - The deeper question you sense beneath the surface question
@@ -221,7 +221,7 @@ If yes, the architecture is sound. If no, understand why before building further
 The adapter interface should be designed for extension — each new agent voice is a new
 implementation of the same interface. The credentials are in 1Password.
 
-ORACLE integration into the briefing pipeline is the highest-value technical connection.
+ASTROLABE integration into the briefing pipeline is the highest-value technical connection.
 A colloquium grounded in current field knowledge is qualitatively different from one
 drawing only on agent memory.
 
