@@ -1,18 +1,18 @@
 #!/usr/bin/env python3
-"""ORACLE Research Intelligence — Graph Query CLI
+"""ASTROLABE Research Intelligence — Graph Query CLI
 
 Query the Graphiti MCP knowledge graph from the terminal.
-Supports natural language queries against ORACLE's entity/fact graph.
+Supports natural language queries against ASTROLABE's entity/fact graph.
 
 Usage:
-    oracle-query.py nodes "transformer attention mechanisms"
-    oracle-query.py facts "LoRA training techniques"
-    oracle-query.py facts "adapter composition" --center-node <uuid>
-    oracle-query.py episodes
-    oracle-query.py status
-    oracle-query.py search "knowledge distillation"   # search both nodes + facts
+    astrolabe-query.py nodes "transformer attention mechanisms"
+    astrolabe-query.py facts "LoRA training techniques"
+    astrolabe-query.py facts "adapter composition" --center-node <uuid>
+    astrolabe-query.py episodes
+    astrolabe-query.py status
+    astrolabe-query.py search "knowledge distillation"   # search both nodes + facts
 
-Requires: Graphiti MCP server running at localhost:8000 (via docker-compose-oracle.yml)
+Requires: Graphiti MCP server running at localhost:8000 (via docker-compose-astrolabe.yml)
 """
 
 import argparse
@@ -24,7 +24,7 @@ import urllib.request
 import uuid as uuid_mod
 
 MCP_URL = "http://localhost:8000/mcp"
-DEFAULT_GROUP = "oracle-main"
+DEFAULT_GROUP = "astrolabe-main"
 
 # Terminal colors (ANSI)
 BOLD = "\033[1m"
@@ -91,7 +91,7 @@ def mcp_initialize() -> bool:
         "params": {
             "protocolVersion": "2025-03-26",
             "capabilities": {},
-            "clientInfo": {"name": "oracle-query", "version": "1.0"},
+            "clientInfo": {"name": "astrolabe-query", "version": "1.0"},
         },
     }
     result, _ = _mcp_post(init_payload)
@@ -339,7 +339,7 @@ def cmd_episodes(args):
 
 def cmd_status(args):
     """Check MCP server and database status."""
-    print(f"\n{BOLD}ORACLE Status:{RESET}\n")
+    print(f"\n{BOLD}ASTROLABE Status:{RESET}\n")
 
     # Health check
     try:
@@ -423,7 +423,7 @@ def cmd_status(args):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="ORACLE Research Intelligence — Graph Query CLI",
+        description="ASTROLABE Research Intelligence — Graph Query CLI",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=textwrap.dedent("""\
             Examples:
@@ -467,7 +467,7 @@ def main():
     p_eps.add_argument("--max", type=int, default=10, help="Max results (default: 10)")
 
     # status
-    sub.add_parser("status", help="Check ORACLE system status")
+    sub.add_parser("status", help="Check ASTROLABE system status")
 
     args = parser.parse_args()
 
