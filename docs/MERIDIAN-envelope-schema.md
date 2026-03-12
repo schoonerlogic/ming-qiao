@@ -29,7 +29,10 @@ The ingest envelope is the JSON contract between Meridian (content fetcher/curat
   "content": "This paper demonstrates that adaptive LoRA rank selection based on layer-wise gradient norms improves fine-tuning efficiency by 23% on instruction-following benchmarks...",
   "domain_tags": ["lora", "fine-tuning", "evaluation"],
   "relevance_note": "Directly applicable to AstralMaris Method — our current fixed-rank approach may be leaving performance on the table.",
+  "relevance_score": 0.87,
+  "source_agent": "meridian",
   "enrichment_status": "quarantined",
+  "rejection_reason": null,
   "fetched_at": "2026-03-12T08:30:00Z",
   "ingested_at": null,
   "meridian_model": "qwen3:14b",
@@ -63,6 +66,9 @@ These fields are NOT passed to ASTROLABE directly. They exist in the envelope fo
 | `source_url` | string | recommended | **audit only** | Original URL. Write-once. Not exposed to UI directly — Ogma audits the full provenance chain; mataya sees curated state only. |
 | `domain_tags` | string[] | yes | UI + audit | Which AstralMaris concern areas this item touches. See [Domain Tags](#domain-tags). |
 | `relevance_note` | string | yes | UI | Why Meridian selected this item. One sentence explaining relevance to AstralMaris work. This is the curatorial signal Laozi-Jung identified as essential. |
+| `relevance_score` | float | yes | UI + audit | Meridian's confidence in relevance, 0.0–1.0. Drives threshold enforcement: >0.8 auto-ingest, 0.5–0.8 queue for review, <0.5 discard. See [Relevance Threshold Enforcement](#relevance-threshold-enforcement). |
+| `source_agent` | string | yes | **audit only** | Which agent produced this envelope. Write-once. Enables canary spot-checks by querying ASTROLABE episodes by source_agent. |
+| `rejection_reason` | string \| null | no | UI + audit | Why this envelope was rejected. Write-once — populated only when `enrichment_status` transitions to `rejected`. Null for all other statuses. Audit trail for exclusions is as important as audit trail for inclusions. |
 | `enrichment_status` | enum | yes | UI + audit | Pipeline stage. See [Enrichment Status](#enrichment-status). |
 | `fetched_at` | ISO 8601 | yes | UI + audit | When Meridian fetched/discovered the content. |
 | `ingested_at` | ISO 8601 \| null | no | UI + audit | When ASTROLABE ingestion completed. Null while quarantined or in progress. |
@@ -115,16 +121,18 @@ Per Ogma's security requirements, envelope fields follow strict mutability rules
 **Write-once fields (immutable after creation):**
 - `name`, `source`, `source_type`, `source_url`, `source_description`
 - `content` (the distilled text — set once during sanitization)
-- `domain_tags`, `relevance_note`
+- `domain_tags`, `relevance_note`, `relevance_score`
+- `source_agent`
 - `fetched_at`
 - `pre_sanitization_hash`, `post_sanitization_hash`
 - `meridian_model`
+- `rejection_reason` (set once on `rejected` transition — null until then)
 
 **Forward-only fields (transitions are monotonic, never backward):**
 - `enrichment_status` — valid transitions: `quarantined → ingesting → complete | failed | rejected`. No backward transitions. A `failed` item may be retried by creating a new envelope, not by resetting the original.
 - `ingested_at` — set once when status reaches `complete`. Never cleared.
 
-**Mandatory audit fields:** `source_url`, `fetched_at`, `pre_sanitization_hash`, `post_sanitization_hash`, `enrichment_status`. These MUST be present on every envelope. An envelope missing any of these is invalid and should not enter the pipeline.
+**Mandatory audit fields:** `source_url`, `source_agent`, `relevance_score`, `fetched_at`, `pre_sanitization_hash`, `post_sanitization_hash`, `enrichment_status`. These MUST be present on every envelope. An envelope missing any of these is invalid and must not enter the pipeline. See [Envelope Validation](#envelope-validation).
 
 This is append-only by design, not convention. Implementations should enforce these constraints at the type level (e.g., Rust newtypes, frozen dataclasses) rather than relying on documentation alone.
 
@@ -134,8 +142,8 @@ This is append-only by design, not convention. Implementations should enforce th
 
 | Visible to | Fields |
 |------------|--------|
-| **Mataya (UI)** | `name`, `source_type`, `domain_tags`, `relevance_note`, `enrichment_status`, `fetched_at`, `ingested_at`, `post_sanitization_hash`, `content` (post-sanitization only) |
-| **Ogma (audit)** | All fields — full provenance chain including `source_url`, `pre_sanitization_hash`, raw metadata |
+| **Mataya (UI)** | `name`, `source_type`, `domain_tags`, `relevance_note`, `relevance_score`, `enrichment_status`, `rejection_reason`, `fetched_at`, `ingested_at`, `post_sanitization_hash`, `content` (post-sanitization only) |
+| **Ogma (audit)** | All fields — full provenance chain including `source_url`, `source_agent`, `pre_sanitization_hash`, raw metadata |
 | **ASTROLABE (ingestion)** | `name`, `source`, `source_description`, `content` only (see [Mapping to add_memory](#mapping-to-astrolabe-add_memory-call)) |
 
 ---
@@ -150,9 +158,58 @@ The `enrichment_status` field tracks where an item is in the pipeline. This is t
 | `ingesting` | Currently being processed by astrolabe-ingest.py / Graphiti entity resolver. | Show with spinner or "processing" indicator. |
 | `complete` | Successfully ingested into ASTROLABE. Entities and facts extracted. | Show as resolved. Link to graph entities if available. |
 | `failed` | Ingestion failed (timeout, NodeResolutions error, etc.). | Show with error state. Include failure reason for debugging. |
-| `rejected` | Manually rejected from quarantine (future: if Council curation is added). | Show as struck-through or filtered out. |
+| `rejected` | Rejected from quarantine — either by relevance threshold (<0.5) or manual Council curation. `rejection_reason` field contains the cause. | Show as struck-through or filtered out. Display `rejection_reason`. |
 
 The temporal gap between `quarantined` and `complete` (~11 min/item on qwen3:14b) is itself a signal about pipeline health. The UI should make this visible, not hide it.
+
+---
+
+## Relevance Threshold Enforcement
+
+The `relevance_score` field drives automated routing decisions at the quarantine boundary. Meridian assigns a score from 0.0 to 1.0 when it evaluates fetched content against AstralMaris concern areas.
+
+| Score range | Action | Rationale |
+|-------------|--------|-----------|
+| **> 0.8** | Auto-ingest | High confidence. Envelope enters quarantine with `enrichment_status: "quarantined"` and proceeds to ingestion without manual review. |
+| **0.5 – 0.8** | Queue for review | Moderate confidence. Envelope enters quarantine but is flagged for canary reviewer attention before ingestion proceeds. |
+| **< 0.5** | Discard | Low confidence. Envelope is written with `enrichment_status: "rejected"` and `rejection_reason` populated with the model's assessment. Never enters the ingestion queue. |
+
+These thresholds are security-relevant content filtering, not convenience. They bound what enters the knowledge graph autonomously vs. what requires human judgment. Threshold values are configurable but changes require Council discussion.
+
+---
+
+## Envelope Validation
+
+The scheduler validates every envelope before transitioning it from `quarantined` to `ingesting`. This is the enforcement point for the "no action bypasses the pipeline" constraint.
+
+### Mandatory field check
+
+The following fields MUST be present and non-null on every envelope:
+
+- `name`
+- `source`
+- `source_type`
+- `source_url`
+- `source_description`
+- `content`
+- `domain_tags` (non-empty array)
+- `relevance_note`
+- `relevance_score` (float, 0.0–1.0)
+- `source_agent`
+- `fetched_at` (valid ISO 8601)
+- `pre_sanitization_hash`
+- `post_sanitization_hash`
+- `enrichment_status`
+
+### Validation behavior
+
+- **Valid envelope:** Proceeds to `ingesting` status normally.
+- **Invalid envelope:** Transitions to `enrichment_status: "failed"` with a specific validation error describing which field was missing or malformed. No silent drops — every rejection is recorded with cause.
+- **Validation error format:** The error must identify the specific field(s) that failed validation. Generic "validation failed" messages create debugging blind spots. Example: `"Validation failed: missing mandatory field 'source_agent'; 'relevance_score' is not a valid float"`.
+
+### When validation runs
+
+Validation is a gate at the `quarantined → ingesting` transition. It runs synchronously in the scheduler before any ASTROLABE API call is made. An envelope that fails validation never touches ASTROLABE.
 
 ---
 
@@ -185,7 +242,10 @@ What Meridian should put in the `content` field varies by source type. The graph
                               (Audit: inspectable by Ogma)
                                             ↓
                               Scheduler picks up envelope
-                              enrichment_status: "ingesting"
+                              Envelope validation (mandatory fields check)
+                                            ↓
+                              Valid → enrichment_status: "ingesting"
+                              Invalid → enrichment_status: "failed" (with specific error)
                                             ↓
                               astrolabe-ingest.py → add_memory MCP call
                               (only pipeline fields sent to ASTROLABE)
@@ -218,6 +278,6 @@ The metadata fields (`domain_tags`, `relevance_note`, `enrichment_status`, etc.)
 
 ## Open Questions
 
-1. **Envelope storage format:** JSON files in a quarantine directory? SQLite table? The choice affects how mataya's UI reads pending items and how Ogma audits them. Directory of JSON files is simplest; SQLite is more queryable.
-2. **Enrichment_status persistence:** Who updates the status field — the ingest scheduler, or a callback from the pipeline? If the pipeline crashes mid-ingestion, how does the status recover?
-3. **Post-sanitization hash deduplication:** Should Meridian skip items whose `post_sanitization_hash` matches an already-ingested envelope? Prevents re-ingestion of identical content from different sources. The `pre_sanitization_hash` should NOT be used for dedup — different raw sources may produce the same distillation.
+1. ~~**Envelope storage format:**~~ **Resolved.** JSON files in a quarantine directory. Simpler audit surface than SQLite. (Decision: Council thread 2026-03-12)
+2. **Enrichment_status persistence:** Who updates the status field — the ingest scheduler, or a callback from the pipeline? If the pipeline crashes mid-ingestion, how does the status recover? **Partial:** Watchdog with 30-minute timeout recovers stuck `ingesting` items (Decision: Council thread 2026-03-12).
+3. ~~**Post-sanitization hash deduplication:**~~ **Resolved.** Meridian deduplicates at the boundary using `post_sanitization_hash`. Items whose hash matches an already-ingested envelope are skipped. `pre_sanitization_hash` is NOT used for dedup. (Decision: Council thread 2026-03-12)
