@@ -350,6 +350,111 @@ fn spawn_jetstream_message_consumer(
     });
 }
 
+/// Spawn a background task that consumes messages from AGENT_MESSAGES for a
+/// specific agent via a per-agent durable pull consumer.
+///
+/// On connect, pulls any backlog (messages sent while the agent was offline),
+/// feeds them into the Indexer via `process_event()`, and broadcasts to the
+/// event channel so `maybe_notify()` can surface them to the MCP client.
+///
+/// Consumer name: `messages-{agent}-agent` (e.g., `messages-aleph-agent`)
+fn spawn_agent_message_consumer(
+    state: &AppState,
+    js: async_nats::jetstream::Context,
+    agent_id: &str,
+) {
+    use futures_util::StreamExt;
+
+    let state = state.clone();
+    let agent_id = agent_id.to_string();
+
+    tokio::spawn(async move {
+        let stream = match js
+            .get_stream(ming_qiao::nats::streams::STREAM_AGENT_MESSAGES)
+            .await
+        {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("[ming-qiao] Failed to get AGENT_MESSAGES stream for agent consumer: {}", e);
+                return;
+            }
+        };
+
+        let (consumer_name, config) =
+            ming_qiao::nats::streams::messages_agent_consumer_config(&agent_id);
+
+        let consumer = match stream
+            .get_or_create_consumer(&consumer_name, config)
+            .await
+        {
+            Ok(c) => c,
+            Err(e) => {
+                eprintln!("[ming-qiao] Failed to create agent consumer '{}': {}", consumer_name, e);
+                return;
+            }
+        };
+
+        let mut messages = match consumer.messages().await {
+            Ok(m) => m,
+            Err(e) => {
+                eprintln!("[ming-qiao] Failed to start agent consumer stream '{}': {}", consumer_name, e);
+                return;
+            }
+        };
+
+        eprintln!(
+            "[ming-qiao] Per-agent durable consumer active (consumer: {})",
+            consumer_name
+        );
+
+        while let Some(msg_result) = messages.next().await {
+            let msg = match msg_result {
+                Ok(m) => m,
+                Err(e) => {
+                    eprintln!("[ming-qiao] Agent consumer error: {}", e);
+                    continue;
+                }
+            };
+
+            match serde_json::from_slice::<ming_qiao::events::EventEnvelope>(&msg.payload) {
+                Ok(event) => {
+                    // Check Indexer dedup (fast path)
+                    let already_seen = {
+                        let indexer = state.indexer().await;
+                        indexer.has_event(&event.id)
+                    };
+
+                    if !already_seen {
+                        // Feed into Indexer
+                        {
+                            let mut indexer = state.indexer_mut().await;
+                            if let Err(e) = indexer.process_event(&event) {
+                                eprintln!("[ming-qiao] Indexer rejected agent consumer event {}: {}", event.id, e);
+                            }
+                        }
+
+                        // Broadcast so maybe_notify() can surface to MCP client
+                        state.broadcast_event(event);
+                    }
+
+                    if let Err(e) = msg.ack().await {
+                        eprintln!("[ming-qiao] Failed to ack agent consumer message: {}", e);
+                    }
+                }
+                Err(e) => {
+                    eprintln!("[ming-qiao] Bad event from agent consumer: {}", e);
+                    // Ack garbage to avoid infinite redelivery
+                    if let Err(e) = msg.ack().await {
+                        eprintln!("[ming-qiao] Failed to ack bad agent consumer message: {}", e);
+                    }
+                }
+            }
+        }
+
+        eprintln!("[ming-qiao] Agent consumer '{}' ended", consumer_name);
+    });
+}
+
 /// Run the HTTP server
 async fn run_http_server() -> Result<(), Box<dyn std::error::Error>> {
     let config_path = env::var("MING_QIAO_CONFIG").unwrap_or_else(|_| "ming-qiao.toml".to_string());
@@ -475,6 +580,8 @@ async fn run_mcp_server() -> Result<(), Box<dyn std::error::Error>> {
     if let Some(mut client) = NatsAgentClient::connect(&nats_config, &agent_id, &project).await {
         // Extract event sync parts before moving client into state
         let (nats_raw, events_subject) = client.event_sync_parts();
+        // Clone JetStream context for the per-agent durable consumer
+        let js_context = client.jetstream().clone();
 
         let nats_tx = state.nats_message_sender();
 
@@ -513,7 +620,10 @@ async fn run_mcp_server() -> Result<(), Box<dyn std::error::Error>> {
         spawn_event_nats_publisher(&state, nats_raw.clone(), events_subject.clone(), false);
         spawn_event_nats_subscriber(&state, nats_raw, events_subject, false);
 
-        eprintln!("[ming-qiao] NATS connected for agent '{}' (event sync active)", agent_id);
+        // Per-agent durable consumer: pull backlog from AGENT_MESSAGES on connect
+        spawn_agent_message_consumer(&state, js_context, &agent_id);
+
+        eprintln!("[ming-qiao] NATS connected for agent '{}' (event sync + durable consumer active)", agent_id);
     } else {
         eprintln!("[ming-qiao] NATS not enabled or connection failed, running without NATS");
     }

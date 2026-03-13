@@ -224,6 +224,27 @@ pub fn observations_all_consumer_config(agent: &str) -> (String, jetstream::cons
     (consumer_name, config)
 }
 
+/// Create a durable pull consumer for an agent's message delivery.
+///
+/// Each agent gets its own consumer on AGENT_MESSAGES, filtered to messages
+/// addressed to that agent (`am.agent.{agent}.msg.>`). This ensures durable
+/// delivery regardless of when the agent connects — backlog is pulled on startup.
+///
+/// Consumer name: `messages-{agent}-agent` (e.g., `messages-aleph-agent`)
+pub fn messages_agent_consumer_config(agent: &str) -> (String, jetstream::consumer::pull::Config) {
+    let consumer_name = format!("messages-{}-agent", agent);
+    let filter = format!("am.agent.{}.msg.>", agent);
+
+    let config = jetstream::consumer::pull::Config {
+        durable_name: Some(consumer_name.clone()),
+        filter_subject: filter,
+        ack_policy: jetstream::consumer::AckPolicy::Explicit,
+        ..Default::default()
+    };
+
+    (consumer_name, config)
+}
+
 /// Create a durable pull consumer config for the HTTP server's message ingester.
 ///
 /// Subscribes to `am.agent.*.msg.>` to receive all agent messages from JetStream.
@@ -502,6 +523,7 @@ mod tests {
             notes_consumer_config("thales", "mingqiao").0,
             notes_all_consumer_config("laozi-jung").0,
             observations_all_consumer_config("laozi-jung").0,
+            messages_agent_consumer_config("aleph").0,
         ];
 
         for name in &names {
@@ -515,6 +537,29 @@ mod tests {
     }
 
     #[test]
+    fn test_messages_agent_consumer_config() {
+        let (name, config) = messages_agent_consumer_config("aleph");
+        assert_eq!(name, "messages-aleph-agent");
+        assert_eq!(config.durable_name.as_deref(), Some("messages-aleph-agent"));
+        assert_eq!(config.filter_subject, "am.agent.aleph.msg.>");
+        assert_eq!(
+            config.ack_policy,
+            jetstream::consumer::AckPolicy::Explicit
+        );
+    }
+
+    #[test]
+    fn test_messages_agent_consumer_different_agents() {
+        let (aleph_name, aleph_config) = messages_agent_consumer_config("aleph");
+        let (luban_name, luban_config) = messages_agent_consumer_config("luban");
+
+        assert_ne!(aleph_name, luban_name);
+        assert_ne!(aleph_config.filter_subject, luban_config.filter_subject);
+        assert!(aleph_config.filter_subject.contains("aleph"));
+        assert!(luban_config.filter_subject.contains("luban"));
+    }
+
+    #[test]
     fn test_all_consumers_use_explicit_ack() {
         let configs: Vec<jetstream::consumer::pull::Config> = vec![
             task_consumer_config("a", "p").1,
@@ -523,6 +568,7 @@ mod tests {
             notes_all_consumer_config("a").1,
             observations_all_consumer_config("a").1,
             messages_ingester_consumer_config("main").1,
+            messages_agent_consumer_config("a").1,
         ];
 
         for config in &configs {
