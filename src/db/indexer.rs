@@ -250,6 +250,41 @@ impl Indexer {
         Ok(self.agents.get_mut(agent_id).expect("just inserted"))
     }
 
+    // --- Mutation Methods ---
+
+    /// Mark a message as read by a specific agent.
+    pub fn mark_read(&mut self, message_id: &str, agent_id: &str) -> bool {
+        if let Some(msg) = self.messages.get_mut(message_id) {
+            if !msg.read_by.contains(&agent_id.to_string()) {
+                msg.read_by.push(agent_id.to_string());
+            }
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Get the count of unread messages for an agent, plus a preview of the latest.
+    pub fn get_unread_count(&self, agent_id: &str) -> (u32, Option<&Message>) {
+        let mut count = 0u32;
+        let mut latest: Option<&Message> = None;
+
+        for msg in self.messages.values() {
+            // Message is addressed to this agent (or broadcast) and not from them
+            if (msg.to == agent_id || msg.to == "all" || msg.to == "council")
+                && msg.from != agent_id
+                && !msg.read_by.contains(&agent_id.to_string())
+            {
+                count += 1;
+                if latest.is_none() || msg.created_at > latest.unwrap().created_at {
+                    latest = Some(msg);
+                }
+            }
+        }
+
+        (count, latest)
+    }
+
     // --- Query Methods ---
 
     pub fn get_thread(&self, id: &str) -> Option<&Thread> {

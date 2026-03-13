@@ -24,6 +24,7 @@ pub fn api_routes() -> Router<AppState> {
         )
         // Inbox
         .route("/api/inbox/:agent", get(handlers::get_inbox))
+        .route("/api/inbox/:agent/unread", get(handlers::get_unread_count))
         // Threads
         .route("/api/threads", get(handlers::list_threads))
         .route("/api/threads", post(handlers::create_thread))

@@ -115,19 +115,26 @@ pub async fn get_inbox(
 ) -> impl IntoResponse {
     // Use indexer for O(1) lookup of messages sent TO this agent
     let indexer = state.indexer().await;
-    let messages_clone: Vec<_> = indexer
+    let all_messages: Vec<_> = indexer
         .get_messages_to_agent(&agent)
         .into_iter()
         .cloned()
         .collect();
+    let (unread_count, _) = indexer.get_unread_count(&agent);
     drop(indexer);
 
-    let messages: Vec<_> = messages_clone
+    let messages: Vec<_> = all_messages
         .into_iter()
         .filter(|msg| {
             // Filter by sender if specified
             if let Some(ref from) = query.from {
-                &msg.from == from
+                if &msg.from != from {
+                    return false;
+                }
+            }
+            // Filter by unread if requested
+            if query.unread_only {
+                !msg.read_by.contains(&agent)
             } else {
                 true
             }
@@ -139,16 +146,45 @@ pub async fn get_inbox(
                 "thread_id": msg.thread_id,
                 "from": msg.from,
                 "content": msg.content,
-                "timestamp": msg.created_at
+                "timestamp": msg.created_at,
+                "read": msg.read_by.contains(&agent)
             })
         })
         .collect();
 
+    let total_count = messages.len();
+
     Json(serde_json::json!({
         "agent": agent,
         "messages": messages,
-        "unread_count": messages.len(),
-        "total_count": messages.len()
+        "unread_count": unread_count,
+        "total_count": total_count
+    }))
+}
+
+/// Get unread message count for an agent (lightweight polling endpoint)
+pub async fn get_unread_count(
+    State(state): State<AppState>,
+    Path(agent): Path<String>,
+) -> impl IntoResponse {
+    let indexer = state.indexer().await;
+    let (count, latest) = indexer.get_unread_count(&agent);
+
+    let latest_json = latest.map(|msg| {
+        serde_json::json!({
+            "from": msg.from,
+            "subject": msg.subject,
+            "timestamp": msg.created_at.to_rfc3339(),
+            "thread_id": msg.thread_id,
+            "message_id": msg.id
+        })
+    });
+    drop(indexer);
+
+    Json(serde_json::json!({
+        "agent": agent,
+        "unread_count": count,
+        "latest": latest_json
     }))
 }
 

@@ -84,6 +84,7 @@ impl ToolRegistry {
             "read_inbox" => self.tool_read_inbox(arguments, agent_id).await,
             "reply_to_thread" => self.tool_reply_to_thread(arguments, agent_id).await,
             "read_thread" => self.tool_read_thread(arguments, agent_id).await,
+            "unread_count" => self.tool_unread_count(arguments, agent_id).await,
             _ => Err(McpError::NotFound(format!("Tool not found: {}", name))),
         }
     }
@@ -104,6 +105,7 @@ impl ToolRegistry {
             Self::def_read_inbox(),
             Self::def_reply_to_thread(),
             Self::def_read_thread(),
+            Self::def_unread_count(),
         ]
     }
 
@@ -429,6 +431,23 @@ impl ToolRegistry {
         }
     }
 
+    fn def_unread_count() -> ToolDefinition {
+        ToolDefinition {
+            name: "unread_count".to_string(),
+            description: "Lightweight check for unread messages. Returns count and a preview of the latest unread message. Use this between tasks to stay aware of incoming messages without reading the full inbox.".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "agent": {
+                        "type": "string",
+                        "description": "Agent whose unread count to check (e.g., 'aleph', 'thales')"
+                    }
+                },
+                "required": ["agent"]
+            }),
+        }
+    }
+
     // ========================================================================
     // Tool Implementations
     // ========================================================================
@@ -522,7 +541,7 @@ impl ToolRegistry {
         args: Value,
         agent_id: &str,
     ) -> Result<CallToolResult, McpError> {
-        let _unread_only = args
+        let unread_only = args
             .get("unread_only")
             .and_then(|v| v.as_bool())
             .unwrap_or(true);
@@ -537,7 +556,12 @@ impl ToolRegistry {
                 .into_iter()
                 .filter(|msg| {
                     if let Some(from) = from_agent {
-                        msg.from == from
+                        if msg.from != from {
+                            return false;
+                        }
+                    }
+                    if unread_only {
+                        !msg.read_by.contains(&agent_id.to_string())
                     } else {
                         true
                     }
@@ -550,14 +574,24 @@ impl ToolRegistry {
         // Sort by timestamp (most recent first)
         messages.sort_by(|a, b| b.created_at.cmp(&a.created_at));
 
+        // Mark retrieved messages as read
+        if !messages.is_empty() {
+            let message_ids: Vec<String> = messages.iter().map(|m| m.id.clone()).collect();
+            let mut indexer = self.state.indexer_mut().await;
+            for id in &message_ids {
+                indexer.mark_read(id, agent_id);
+            }
+        }
+
         if messages.is_empty() {
             return Ok(CallToolResult::text(format!(
-                "## Inbox for {}\n\nNo messages.",
-                agent_id
+                "## Inbox for {}\n\nNo {} messages.",
+                agent_id,
+                if unread_only { "unread" } else { "" }
             )));
         }
 
-        let mut output = format!("## Inbox for {}\n\n", agent_id);
+        let mut output = format!("## Inbox for {} ({} messages)\n\n", agent_id, messages.len());
         for msg in messages {
             output.push_str(&format!(
                 "### {} [{}]\n**From:** {} | **Priority:** {:?}\n**ID:** {}\n\n---\n\n",
@@ -575,27 +609,42 @@ impl ToolRegistry {
     async fn tool_read_message(
         &self,
         args: Value,
-        _agent_id: &str,
+        agent_id: &str,
     ) -> Result<CallToolResult, McpError> {
         let message_id = args
             .get("message_id")
             .and_then(|v| v.as_str())
             .ok_or_else(|| McpError::InvalidInput("message_id required".to_string()))?;
 
-        // Use Indexer for O(1) lookup
-        let indexer = self.state.indexer().await;
-        let msg = indexer.get_message(message_id);
+        let mark_read = args
+            .get("mark_read")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(true);
 
-        match msg {
-            Some(msg) => Ok(CallToolResult::text(format!(
-                "## {}\n\n**From:** {}\n**To:** {}\n**Date:** {}\n**Priority:** {:?}\n\n---\n\n{}",
-                msg.subject,
-                msg.from,
-                msg.to,
-                msg.created_at.format("%Y-%m-%d %H:%M:%S UTC"),
-                msg.priority,
-                msg.content
-            ))),
+        // Read the message content first (read lock)
+        let msg_clone = {
+            let indexer = self.state.indexer().await;
+            indexer.get_message(message_id).cloned()
+        };
+
+        match msg_clone {
+            Some(msg) => {
+                // Mark as read if requested (write lock)
+                if mark_read {
+                    let mut indexer = self.state.indexer_mut().await;
+                    indexer.mark_read(message_id, agent_id);
+                }
+
+                Ok(CallToolResult::text(format!(
+                    "## {}\n\n**From:** {}\n**To:** {}\n**Date:** {}\n**Priority:** {:?}\n\n---\n\n{}",
+                    msg.subject,
+                    msg.from,
+                    msg.to,
+                    msg.created_at.format("%Y-%m-%d %H:%M:%S UTC"),
+                    msg.priority,
+                    msg.content
+                )))
+            }
             None => Ok(CallToolResult::text(format!(
                 "Message not found: {}",
                 message_id
@@ -1098,6 +1147,39 @@ impl ToolRegistry {
             .unwrap(),
         ))
     }
+
+    async fn tool_unread_count(
+        &self,
+        args: Value,
+        agent_id: &str,
+    ) -> Result<CallToolResult, McpError> {
+        let agent = args
+            .get("agent")
+            .and_then(|v| v.as_str())
+            .unwrap_or(agent_id);
+
+        let indexer = self.state.indexer().await;
+        let (count, latest) = indexer.get_unread_count(agent);
+
+        let latest_json = latest.map(|msg| {
+            serde_json::json!({
+                "from": msg.from,
+                "subject": msg.subject,
+                "timestamp": msg.created_at.to_rfc3339(),
+                "thread_id": msg.thread_id,
+                "message_id": msg.id
+            })
+        });
+
+        Ok(CallToolResult::text(
+            serde_json::to_string_pretty(&serde_json::json!({
+                "agent": agent,
+                "unread_count": count,
+                "latest": latest_json
+            }))
+            .unwrap(),
+        ))
+    }
 }
 
 #[cfg(test)]
@@ -1110,7 +1192,7 @@ mod tests {
         let registry = ToolRegistry::with_state(state);
         let tools = registry.list();
 
-        assert_eq!(tools.len(), 12);
+        assert_eq!(tools.len(), 13);
 
         let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
         assert!(names.contains(&"send_message"));
@@ -1120,6 +1202,7 @@ mod tests {
         assert!(names.contains(&"create_thread"));
         assert!(names.contains(&"read_inbox"));
         assert!(names.contains(&"reply_to_thread"));
+        assert!(names.contains(&"unread_count"));
         assert!(names.contains(&"read_thread"));
     }
 
