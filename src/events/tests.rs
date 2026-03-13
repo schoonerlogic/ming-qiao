@@ -542,6 +542,123 @@ mod tests {
     }
 
     #[test]
+    fn test_provenance_partial_claimed_fields() {
+        // Only some claimed fields set — others remain None
+        let event = MessageEvent {
+            from: "mataya".to_string(),
+            to: "council".to_string(),
+            subject: "Partial provenance".to_string(),
+            content: "Only model claimed, runtime and mode unknown".to_string(),
+            thread_id: None,
+            priority: Priority::Normal,
+            intent: MessageIntent::Inform,
+            expected_response: ExpectedResponse::default(),
+            require_ack: false,
+            claimed_source_model: Some("kimi-k2".to_string()),
+            claimed_source_runtime: None,
+            claimed_source_mode: None,
+            verified_source_model: None,
+            verified_source_runtime: None,
+            verified_source_mode: None,
+            source_worktree: None,
+            source_session_id: None,
+            provenance_level: ProvenanceLevel::Claimed,
+            provenance_issuer: None,
+        };
+
+        let json = serde_json::to_string(&event).expect("Failed to serialize");
+        let deserialized: MessageEvent = serde_json::from_str(&json)
+            .expect("Failed to deserialize");
+
+        assert_eq!(deserialized.claimed_source_model, Some("kimi-k2".to_string()));
+        assert_eq!(deserialized.claimed_source_runtime, None);
+        assert_eq!(deserialized.claimed_source_mode, None);
+        assert_eq!(deserialized.provenance_level, ProvenanceLevel::Claimed);
+    }
+
+    #[test]
+    fn test_provenance_none_fields_omitted_from_json() {
+        // skip_serializing_if = "Option::is_none" should omit None provenance fields
+        let event = MessageEvent {
+            from: "aleph".to_string(),
+            to: "luban".to_string(),
+            subject: "Omission test".to_string(),
+            content: "None fields should not appear in JSON".to_string(),
+            thread_id: None,
+            priority: Priority::Normal,
+            intent: MessageIntent::Inform,
+            expected_response: ExpectedResponse::default(),
+            require_ack: false,
+            claimed_source_model: None,
+            claimed_source_runtime: None,
+            claimed_source_mode: None,
+            verified_source_model: None,
+            verified_source_runtime: None,
+            verified_source_mode: None,
+            source_worktree: None,
+            source_session_id: None,
+            provenance_level: ProvenanceLevel::Legacy,
+            provenance_issuer: None,
+        };
+
+        let json = serde_json::to_string(&event).expect("Failed to serialize");
+
+        // None fields with skip_serializing_if should be absent from output
+        assert!(!json.contains("claimed_source_model"), "None claimed_source_model should be omitted");
+        assert!(!json.contains("claimed_source_runtime"), "None claimed_source_runtime should be omitted");
+        assert!(!json.contains("verified_source_model"), "None verified_source_model should be omitted");
+        assert!(!json.contains("source_worktree"), "None source_worktree should be omitted");
+        assert!(!json.contains("source_session_id"), "None source_session_id should be omitted");
+        assert!(!json.contains("provenance_issuer"), "None provenance_issuer should be omitted");
+
+        // provenance_level is NOT Option — it should always be present
+        assert!(json.contains("provenance_level"), "provenance_level should always be present");
+        assert!(json.contains("\"legacy\""), "default provenance_level should be legacy");
+    }
+
+    #[test]
+    fn test_provenance_present_fields_in_json() {
+        // When provenance fields are Some, they should appear in JSON
+        let event = MessageEvent {
+            from: "luban".to_string(),
+            to: "aleph".to_string(),
+            subject: "Presence test".to_string(),
+            content: "Set fields should appear in JSON".to_string(),
+            thread_id: None,
+            priority: Priority::Normal,
+            intent: MessageIntent::Inform,
+            expected_response: ExpectedResponse::default(),
+            require_ack: false,
+            claimed_source_model: Some("claude-opus-4-6".to_string()),
+            claimed_source_runtime: Some("claude-cli".to_string()),
+            claimed_source_mode: Some("interactive".to_string()),
+            verified_source_model: None,
+            verified_source_runtime: None,
+            verified_source_mode: None,
+            source_worktree: Some("/worktree".to_string()),
+            source_session_id: Some("sess-1".to_string()),
+            provenance_level: ProvenanceLevel::Claimed,
+            provenance_issuer: None,
+        };
+
+        let json = serde_json::to_string(&event).expect("Failed to serialize");
+
+        // Set fields should appear
+        assert!(json.contains("claimed_source_model"));
+        assert!(json.contains("claimed_source_runtime"));
+        assert!(json.contains("claimed_source_mode"));
+        assert!(json.contains("source_worktree"));
+        assert!(json.contains("source_session_id"));
+        assert!(json.contains("\"claimed\""));
+
+        // None verified fields should still be omitted
+        assert!(!json.contains("verified_source_model"));
+        assert!(!json.contains("verified_source_runtime"));
+        assert!(!json.contains("verified_source_mode"));
+        assert!(!json.contains("provenance_issuer"));
+    }
+
+    #[test]
     fn test_event_payload_decision_variant() {
         // Test EventPayload::Decision round-trip
         let payload = EventPayload::Decision(DecisionEvent {

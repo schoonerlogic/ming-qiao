@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use tracing::warn;
 use uuid::Uuid;
 
-use crate::events::{EventEnvelope, EventPayload, EventType, ExpectedResponse, MessageEvent, MessageIntent, Priority};
+use crate::events::{EventEnvelope, EventPayload, EventType, ExpectedResponse, MessageEvent, MessageIntent, Priority, ProvenanceLevel};
 use crate::http::auth::AuthenticatedAgent;
 use crate::nats::messages::MessageNotification;
 use crate::state::AppState;
@@ -556,6 +556,16 @@ pub async fn create_thread(
             intent,
             expected_response: parse_expected_response(&req.expected_response),
             require_ack: req.require_ack,
+            claimed_source_model: None,
+            claimed_source_runtime: None,
+            claimed_source_mode: None,
+            verified_source_model: None,
+            verified_source_runtime: None,
+            verified_source_mode: None,
+            source_worktree: None,
+            source_session_id: None,
+            provenance_level: ProvenanceLevel::default(),
+            provenance_issuer: None,
         }),
     };
 
@@ -736,6 +746,16 @@ pub async fn reply_to_thread(
             intent,
             expected_response: parse_expected_response(&req.expected_response),
             require_ack: req.require_ack,
+            claimed_source_model: None,
+            claimed_source_runtime: None,
+            claimed_source_mode: None,
+            verified_source_model: None,
+            verified_source_runtime: None,
+            verified_source_mode: None,
+            source_worktree: None,
+            source_session_id: None,
+            provenance_level: ProvenanceLevel::default(),
+            provenance_issuer: None,
         }),
     };
 
@@ -1245,6 +1265,16 @@ pub async fn submit_observation(
             intent: MessageIntent::Inform,
             expected_response: ExpectedResponse::None,
             require_ack: false,
+            claimed_source_model: None,
+            claimed_source_runtime: None,
+            claimed_source_mode: None,
+            verified_source_model: None,
+            verified_source_runtime: None,
+            verified_source_mode: None,
+            source_worktree: None,
+            source_session_id: None,
+            provenance_level: ProvenanceLevel::default(),
+            provenance_issuer: None,
         }),
     };
 

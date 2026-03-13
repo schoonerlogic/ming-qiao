@@ -1079,4 +1079,287 @@ mod tests {
         assert!(subjects.contains(&"All broadcast"));
         assert!(subjects.contains(&"Council broadcast"));
     }
+
+    // ========================================================================
+    // Provenance (v1) Tests — Indexer + Model
+    // ========================================================================
+
+    #[test]
+    fn test_indexer_propagates_provenance_fields() {
+        let event_id = Uuid::now_v7();
+        let event = EventEnvelope {
+            id: event_id,
+            timestamp: Utc::now(),
+            event_type: EventType::MessageSent,
+            agent_id: "luban".to_string(),
+            payload: EventPayload::Message(crate::events::MessageEvent {
+                from: "luban".to_string(),
+                to: "aleph".to_string(),
+                subject: "Provenance propagation test".to_string(),
+                content: "All provenance fields should propagate".to_string(),
+                thread_id: None,
+                priority: Priority::Normal,
+                intent: crate::events::MessageIntent::Inform,
+                expected_response: crate::events::ExpectedResponse::None,
+                require_ack: false,
+                claimed_source_model: Some("claude-opus-4-6".to_string()),
+                claimed_source_runtime: Some("claude-cli".to_string()),
+                claimed_source_mode: Some("interactive".to_string()),
+                verified_source_model: Some("claude-opus-4-6".to_string()),
+                verified_source_runtime: Some("claude-cli".to_string()),
+                verified_source_mode: Some("interactive".to_string()),
+                source_worktree: Some("/Users/proteus/astralmaris/ming-qiao/luban".to_string()),
+                source_session_id: Some("session-abc-123".to_string()),
+                provenance_level: crate::events::ProvenanceLevel::Verified,
+                provenance_issuer: Some("ming-qiao-auth".to_string()),
+            }),
+        };
+
+        let mut indexer = Indexer::new();
+        indexer.process_event(&event).unwrap();
+
+        let message = indexer.get_message(&event_id.to_string()).unwrap();
+
+        assert_eq!(message.claimed_source_model, Some("claude-opus-4-6".to_string()));
+        assert_eq!(message.claimed_source_runtime, Some("claude-cli".to_string()));
+        assert_eq!(message.claimed_source_mode, Some("interactive".to_string()));
+        assert_eq!(message.verified_source_model, Some("claude-opus-4-6".to_string()));
+        assert_eq!(message.verified_source_runtime, Some("claude-cli".to_string()));
+        assert_eq!(message.verified_source_mode, Some("interactive".to_string()));
+        assert_eq!(
+            message.source_worktree,
+            Some("/Users/proteus/astralmaris/ming-qiao/luban".to_string())
+        );
+        assert_eq!(message.source_session_id, Some("session-abc-123".to_string()));
+        assert_eq!(message.provenance_level, crate::events::ProvenanceLevel::Verified);
+        assert_eq!(message.provenance_issuer, Some("ming-qiao-auth".to_string()));
+    }
+
+    #[test]
+    fn test_indexer_legacy_event_gets_default_provenance() {
+        let event_id = Uuid::now_v7();
+        let event = EventEnvelope {
+            id: event_id,
+            timestamp: Utc::now(),
+            event_type: EventType::MessageSent,
+            agent_id: "aleph".to_string(),
+            payload: EventPayload::Message(crate::events::MessageEvent {
+                from: "aleph".to_string(),
+                to: "luban".to_string(),
+                subject: "Legacy event".to_string(),
+                content: "No provenance fields set".to_string(),
+                thread_id: None,
+                priority: Priority::Normal,
+                intent: crate::events::MessageIntent::Inform,
+                expected_response: crate::events::ExpectedResponse::None,
+                require_ack: false,
+                claimed_source_model: None,
+                claimed_source_runtime: None,
+                claimed_source_mode: None,
+                verified_source_model: None,
+                verified_source_runtime: None,
+                verified_source_mode: None,
+                source_worktree: None,
+                source_session_id: None,
+                provenance_level: crate::events::ProvenanceLevel::default(),
+                provenance_issuer: None,
+            }),
+        };
+
+        let mut indexer = Indexer::new();
+        indexer.process_event(&event).unwrap();
+
+        let message = indexer.get_message(&event_id.to_string()).unwrap();
+
+        assert_eq!(message.claimed_source_model, None);
+        assert_eq!(message.claimed_source_runtime, None);
+        assert_eq!(message.claimed_source_mode, None);
+        assert_eq!(message.verified_source_model, None);
+        assert_eq!(message.verified_source_runtime, None);
+        assert_eq!(message.verified_source_mode, None);
+        assert_eq!(message.source_worktree, None);
+        assert_eq!(message.source_session_id, None);
+        assert_eq!(message.provenance_level, crate::events::ProvenanceLevel::Legacy);
+        assert_eq!(message.provenance_issuer, None);
+    }
+
+    #[test]
+    fn test_indexer_claimed_only_provenance() {
+        let event_id = Uuid::now_v7();
+        let event = EventEnvelope {
+            id: event_id,
+            timestamp: Utc::now(),
+            event_type: EventType::MessageSent,
+            agent_id: "mataya".to_string(),
+            payload: EventPayload::Message(crate::events::MessageEvent {
+                from: "mataya".to_string(),
+                to: "council".to_string(),
+                subject: "Claimed-only provenance".to_string(),
+                content: "Only claimed fields set, verified are None".to_string(),
+                thread_id: None,
+                priority: Priority::Normal,
+                intent: crate::events::MessageIntent::Inform,
+                expected_response: crate::events::ExpectedResponse::None,
+                require_ack: false,
+                claimed_source_model: Some("kimi-k2".to_string()),
+                claimed_source_runtime: Some("kimi".to_string()),
+                claimed_source_mode: Some("headless".to_string()),
+                verified_source_model: None,
+                verified_source_runtime: None,
+                verified_source_mode: None,
+                source_worktree: None,
+                source_session_id: Some("kimi-session-42".to_string()),
+                provenance_level: crate::events::ProvenanceLevel::Claimed,
+                provenance_issuer: None,
+            }),
+        };
+
+        let mut indexer = Indexer::new();
+        indexer.process_event(&event).unwrap();
+
+        let message = indexer.get_message(&event_id.to_string()).unwrap();
+
+        // Claimed fields propagated
+        assert_eq!(message.claimed_source_model, Some("kimi-k2".to_string()));
+        assert_eq!(message.claimed_source_runtime, Some("kimi".to_string()));
+        assert_eq!(message.claimed_source_mode, Some("headless".to_string()));
+
+        // Verified fields remain None (server hasn't verified)
+        assert_eq!(message.verified_source_model, None);
+        assert_eq!(message.verified_source_runtime, None);
+        assert_eq!(message.verified_source_mode, None);
+
+        // Level is Claimed, not Verified
+        assert_eq!(message.provenance_level, crate::events::ProvenanceLevel::Claimed);
+        assert_eq!(message.provenance_issuer, None);
+        assert_eq!(message.source_session_id, Some("kimi-session-42".to_string()));
+    }
+
+    #[test]
+    fn test_message_model_provenance_round_trip() {
+        let message = Message {
+            id: "test-prov-rt".to_string(),
+            thread_id: "thread-prov".to_string(),
+            from: "luban".to_string(),
+            to: "aleph".to_string(),
+            subject: "Provenance model test".to_string(),
+            content: "Full provenance round-trip".to_string(),
+            priority: Priority::Normal,
+            intent: crate::events::MessageIntent::Inform,
+            expected_response: crate::events::ExpectedResponse::None,
+            require_ack: false,
+            created_at: Utc::now(),
+            read_by: vec![],
+            claimed_source_model: Some("claude-opus-4-6".to_string()),
+            claimed_source_runtime: Some("claude-cli".to_string()),
+            claimed_source_mode: Some("interactive".to_string()),
+            verified_source_model: Some("claude-opus-4-6".to_string()),
+            verified_source_runtime: Some("claude-cli".to_string()),
+            verified_source_mode: Some("interactive".to_string()),
+            source_worktree: Some("/worktree/path".to_string()),
+            source_session_id: Some("session-xyz".to_string()),
+            provenance_level: crate::events::ProvenanceLevel::Attested,
+            provenance_issuer: Some("ming-qiao-auth".to_string()),
+        };
+
+        let json = serde_json::to_string(&message).unwrap();
+        let deserialized: Message = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(message.claimed_source_model, deserialized.claimed_source_model);
+        assert_eq!(message.claimed_source_runtime, deserialized.claimed_source_runtime);
+        assert_eq!(message.claimed_source_mode, deserialized.claimed_source_mode);
+        assert_eq!(message.verified_source_model, deserialized.verified_source_model);
+        assert_eq!(message.verified_source_runtime, deserialized.verified_source_runtime);
+        assert_eq!(message.verified_source_mode, deserialized.verified_source_mode);
+        assert_eq!(message.source_worktree, deserialized.source_worktree);
+        assert_eq!(message.source_session_id, deserialized.source_session_id);
+        assert_eq!(message.provenance_level, deserialized.provenance_level);
+        assert_eq!(message.provenance_issuer, deserialized.provenance_issuer);
+    }
+
+    #[test]
+    fn test_message_model_provenance_json_field_names() {
+        let message = Message {
+            id: "test-json-fields".to_string(),
+            thread_id: "thread-1".to_string(),
+            from: "luban".to_string(),
+            to: "aleph".to_string(),
+            subject: "JSON fields".to_string(),
+            content: "Check field names".to_string(),
+            priority: Priority::Normal,
+            intent: crate::events::MessageIntent::Inform,
+            expected_response: crate::events::ExpectedResponse::None,
+            require_ack: false,
+            created_at: Utc::now(),
+            read_by: vec![],
+            claimed_source_model: Some("test-model".to_string()),
+            claimed_source_runtime: Some("test-runtime".to_string()),
+            claimed_source_mode: Some("test-mode".to_string()),
+            verified_source_model: Some("verified-model".to_string()),
+            verified_source_runtime: None,
+            verified_source_mode: None,
+            source_worktree: None,
+            source_session_id: None,
+            provenance_level: crate::events::ProvenanceLevel::Claimed,
+            provenance_issuer: None,
+        };
+
+        let json = serde_json::to_string(&message).unwrap();
+
+        // All provenance field names must be snake_case in JSON
+        assert!(json.contains("claimed_source_model"));
+        assert!(json.contains("claimed_source_runtime"));
+        assert!(json.contains("claimed_source_mode"));
+        assert!(json.contains("verified_source_model"));
+        assert!(json.contains("provenance_level"));
+        assert!(json.contains("\"claimed\""), "ProvenanceLevel::Claimed should serialize as \"claimed\"");
+    }
+
+    #[test]
+    fn test_provenance_level_all_variants_in_message_model() {
+        let levels = vec![
+            (crate::events::ProvenanceLevel::Legacy, "legacy"),
+            (crate::events::ProvenanceLevel::Claimed, "claimed"),
+            (crate::events::ProvenanceLevel::Verified, "verified"),
+            (crate::events::ProvenanceLevel::Attested, "attested"),
+        ];
+
+        for (level, expected_str) in levels {
+            let message = Message {
+                id: format!("test-{}", expected_str),
+                thread_id: "thread-1".to_string(),
+                from: "luban".to_string(),
+                to: "aleph".to_string(),
+                subject: "Level test".to_string(),
+                content: "Testing level variant".to_string(),
+                priority: Priority::Normal,
+                intent: crate::events::MessageIntent::Inform,
+                expected_response: crate::events::ExpectedResponse::None,
+                require_ack: false,
+                created_at: Utc::now(),
+                read_by: vec![],
+                claimed_source_model: None,
+                claimed_source_runtime: None,
+                claimed_source_mode: None,
+                verified_source_model: None,
+                verified_source_runtime: None,
+                verified_source_mode: None,
+                source_worktree: None,
+                source_session_id: None,
+                provenance_level: level.clone(),
+                provenance_issuer: None,
+            };
+
+            let json = serde_json::to_string(&message).unwrap();
+            assert!(
+                json.contains(&format!("\"{}\"", expected_str)),
+                "ProvenanceLevel::{:?} should serialize as \"{}\" in Message model",
+                level,
+                expected_str
+            );
+
+            let deserialized: Message = serde_json::from_str(&json).unwrap();
+            assert_eq!(level, deserialized.provenance_level);
+        }
+    }
 }

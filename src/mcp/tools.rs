@@ -11,7 +11,7 @@ use uuid::Uuid;
 
 use crate::events::{
     EventEnvelope, EventPayload, EventType, ExpectedResponse, MessageEvent, MessageIntent,
-    Priority,
+    Priority, ProvenanceLevel,
 };
 use crate::mcp::protocol::{CallToolResult, McpError};
 use crate::nats::messages::MessageNotification;
@@ -606,6 +606,16 @@ impl ToolRegistry {
                 intent,
                 expected_response,
                 require_ack,
+                claimed_source_model: None,
+                claimed_source_runtime: None,
+                claimed_source_mode: None,
+                verified_source_model: None,
+                verified_source_runtime: None,
+                verified_source_mode: None,
+                source_worktree: None,
+                source_session_id: None,
+                provenance_level: ProvenanceLevel::default(),
+                provenance_issuer: None,
             }),
         };
 
@@ -800,6 +810,16 @@ impl ToolRegistry {
                 intent: MessageIntent::Request,
                 expected_response: ExpectedResponse::Reply,
                 require_ack: false,
+                claimed_source_model: None,
+                claimed_source_runtime: None,
+                claimed_source_mode: None,
+                verified_source_model: None,
+                verified_source_runtime: None,
+                verified_source_mode: None,
+                source_worktree: None,
+                source_session_id: None,
+                provenance_level: ProvenanceLevel::default(),
+                provenance_issuer: None,
             }),
         };
 
@@ -1090,6 +1110,16 @@ impl ToolRegistry {
                 intent,
                 expected_response: Self::parse_expected_response(args.get("expected_response").and_then(|v| v.as_str())),
                 require_ack: args.get("require_ack").and_then(|v| v.as_bool()).unwrap_or(false),
+                claimed_source_model: None,
+                claimed_source_runtime: None,
+                claimed_source_mode: None,
+                verified_source_model: None,
+                verified_source_runtime: None,
+                verified_source_mode: None,
+                source_worktree: None,
+                source_session_id: None,
+                provenance_level: ProvenanceLevel::default(),
+                provenance_issuer: None,
             }),
         };
 
@@ -1213,6 +1243,16 @@ impl ToolRegistry {
                 intent,
                 expected_response: Self::parse_expected_response(args.get("expected_response").and_then(|v| v.as_str())),
                 require_ack: args.get("require_ack").and_then(|v| v.as_bool()).unwrap_or(false),
+                claimed_source_model: None,
+                claimed_source_runtime: None,
+                claimed_source_mode: None,
+                verified_source_model: None,
+                verified_source_runtime: None,
+                verified_source_mode: None,
+                source_worktree: None,
+                source_session_id: None,
+                provenance_level: ProvenanceLevel::default(),
+                provenance_issuer: None,
             }),
         };
 
