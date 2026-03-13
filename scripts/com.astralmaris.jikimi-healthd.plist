@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.astralmaris.jikimi-healthd</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>/Users/proteus/astralmaris/ming-qiao/jikimi/scripts/jikimi-healthd.sh</string>
+    </array>
+    <key>WorkingDirectory</key>
+    <string>/Users/proteus/astralmaris/ming-qiao/jikimi</string>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>StandardOutPath</key>
+    <string>/Users/proteus/astralmaris/ming-qiao/jikimi/health/jikimi-healthd.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/proteus/astralmaris/ming-qiao/jikimi/health/jikimi-healthd.err</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+        <key>HOME</key>
+        <string>/Users/proteus</string>
+    </dict>
+    <key>ThrottleInterval</key>
+    <integer>10</integer>
+</dict>
+</plist>

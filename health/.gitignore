@@ -1,0 +1,7 @@
+# Runtime state — not tracked
+.heartbeat
+.jikimi-healthd.pid
+.state/
+*.jsonl
+*.log
+*.err
