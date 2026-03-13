@@ -9,7 +9,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 // Re-use types from events (re-exported from schema)
-use crate::events::{AgentStatus, DecisionOption, ExpectedResponse, MessageIntent, Priority};
+use crate::events::{AgentStatus, DecisionOption, ExpectedResponse, MessageIntent, Priority, ProvenanceLevel};
 
 // ============================================================================
 // NEW ENUMS
@@ -128,6 +128,18 @@ pub struct Message {
 
     /// Agent IDs who have marked this message as read
     pub read_by: Vec<String>,
+
+    // -- Provenance --
+    pub claimed_source_model: Option<String>,
+    pub claimed_source_runtime: Option<String>,
+    pub claimed_source_mode: Option<String>,
+    pub verified_source_model: Option<String>,
+    pub verified_source_runtime: Option<String>,
+    pub verified_source_mode: Option<String>,
+    pub source_worktree: Option<String>,
+    pub source_session_id: Option<String>,
+    pub provenance_level: ProvenanceLevel,
+    pub provenance_issuer: Option<String>,
 }
 
 /// A recorded decision

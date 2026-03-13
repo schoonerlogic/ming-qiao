@@ -538,7 +538,7 @@ mod tests {
     use chrono::Utc;
     use uuid::Uuid;
 
-    use crate::events::{EventPayload, EventType, ExpectedResponse, MessageEvent, MessageIntent, Priority};
+    use crate::events::{EventPayload, EventType, ExpectedResponse, MessageEvent, MessageIntent, Priority, ProvenanceLevel};
 
     fn make_test_event(agent: &str, subject: &str) -> EventEnvelope {
         EventEnvelope {
@@ -556,6 +556,16 @@ mod tests {
                 intent: MessageIntent::Inform,
                 expected_response: ExpectedResponse::None,
                 require_ack: false,
+                claimed_source_model: None,
+                claimed_source_runtime: None,
+                claimed_source_mode: None,
+                verified_source_model: None,
+                verified_source_runtime: None,
+                verified_source_mode: None,
+                source_worktree: None,
+                source_session_id: None,
+                provenance_level: ProvenanceLevel::default(),
+                provenance_issuer: None,
             }),
         }
     }

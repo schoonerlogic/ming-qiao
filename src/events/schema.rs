@@ -136,6 +136,29 @@ pub enum AgentStatus {
     Offline,
 }
 
+/// Trust level of message provenance
+///
+/// Indicates how much the system trusts the identity claims attached to a message.
+/// Server-owned — clients cannot set this directly.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProvenanceLevel {
+    /// Historical message with no structured provenance
+    Legacy,
+    /// Sender supplied provenance, system did not verify
+    Claimed,
+    /// Server verified provenance from authenticated runtime context
+    Verified,
+    /// Provenance bound to signed runtime/session attestation
+    Attested,
+}
+
+impl Default for ProvenanceLevel {
+    fn default() -> Self {
+        ProvenanceLevel::Legacy
+    }
+}
+
 // ============================================================================
 // Event Types
 // ============================================================================
@@ -271,6 +294,48 @@ pub struct MessageEvent {
     /// Whether the system should track receipt acknowledgment
     #[serde(default, skip_serializing_if = "is_false")]
     pub require_ack: bool,
+
+    // -- Provenance (v1) --
+
+    /// Model the sender claims to be running (e.g. "claude-opus-4-6", "qwen3:8b")
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub claimed_source_model: Option<String>,
+
+    /// Runtime the sender claims (e.g. "claude-cli", "kimi", "ollama")
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub claimed_source_runtime: Option<String>,
+
+    /// Mode the sender claims (e.g. "interactive", "headless", "daemon_spawned")
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub claimed_source_mode: Option<String>,
+
+    /// Server-verified model — populated by ming-qiao from auth context, NOT from client
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verified_source_model: Option<String>,
+
+    /// Server-verified runtime — populated by ming-qiao from auth context, NOT from client
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verified_source_runtime: Option<String>,
+
+    /// Server-verified mode — populated by ming-qiao from auth context, NOT from client
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verified_source_mode: Option<String>,
+
+    /// Worktree path the message originated from
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_worktree: Option<String>,
+
+    /// Session ID linking messages from the same agent session
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_session_id: Option<String>,
+
+    /// Trust level of provenance — server-owned, defaults to Legacy
+    #[serde(default)]
+    pub provenance_level: ProvenanceLevel,
+
+    /// Entity that issued/verified the provenance (e.g. "ming-qiao-auth")
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provenance_issuer: Option<String>,
 }
 
 /// Data for artifact sharing events

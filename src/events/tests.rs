@@ -32,6 +32,16 @@ mod tests {
                 intent: MessageIntent::default(),
                 expected_response: ExpectedResponse::default(),
                 require_ack: false,
+                claimed_source_model: None,
+                claimed_source_runtime: None,
+                claimed_source_mode: None,
+                verified_source_model: None,
+                verified_source_runtime: None,
+                verified_source_mode: None,
+                source_worktree: None,
+                source_session_id: None,
+                provenance_level: ProvenanceLevel::default(),
+                provenance_issuer: None,
             }),
         };
 
@@ -86,6 +96,16 @@ mod tests {
             intent: MessageIntent::Request,
             expected_response: ExpectedResponse::default(),
             require_ack: false,
+            claimed_source_model: None,
+            claimed_source_runtime: None,
+            claimed_source_mode: None,
+            verified_source_model: None,
+            verified_source_runtime: None,
+            verified_source_mode: None,
+            source_worktree: None,
+            source_session_id: None,
+            provenance_level: ProvenanceLevel::default(),
+            provenance_issuer: None,
         };
 
         // Act
@@ -371,6 +391,16 @@ mod tests {
             intent: MessageIntent::default(),
             expected_response: ExpectedResponse::default(),
             require_ack: false,
+            claimed_source_model: None,
+            claimed_source_runtime: None,
+            claimed_source_mode: None,
+            verified_source_model: None,
+            verified_source_runtime: None,
+            verified_source_mode: None,
+            source_worktree: None,
+            source_session_id: None,
+            provenance_level: ProvenanceLevel::default(),
+            provenance_issuer: None,
         });
 
         let json = serde_json::to_string(&payload).expect("Failed to serialize");
@@ -384,6 +414,131 @@ mod tests {
             }
             _ => panic!("Wrong variant"),
         }
+    }
+
+    // ========================================================================
+    // Provenance (v1) tests
+    // ========================================================================
+
+    #[test]
+    fn test_provenance_serde_round_trip() {
+        // Create a MessageEvent with all provenance fields populated
+        let event = MessageEvent {
+            from: "luban".to_string(),
+            to: "aleph".to_string(),
+            subject: "Provenance test".to_string(),
+            content: "Testing provenance fields".to_string(),
+            thread_id: None,
+            priority: Priority::Normal,
+            intent: MessageIntent::Inform,
+            expected_response: ExpectedResponse::default(),
+            require_ack: false,
+            claimed_source_model: Some("claude-opus-4-6".to_string()),
+            claimed_source_runtime: Some("claude-cli".to_string()),
+            claimed_source_mode: Some("interactive".to_string()),
+            verified_source_model: Some("claude-opus-4-6".to_string()),
+            verified_source_runtime: Some("claude-cli".to_string()),
+            verified_source_mode: Some("interactive".to_string()),
+            source_worktree: Some("/Users/proteus/astralmaris/ming-qiao/luban".to_string()),
+            source_session_id: Some("session-abc-123".to_string()),
+            provenance_level: ProvenanceLevel::Verified,
+            provenance_issuer: Some("ming-qiao-auth".to_string()),
+        };
+
+        let json = serde_json::to_string(&event).expect("Failed to serialize");
+        let deserialized: MessageEvent = serde_json::from_str(&json)
+            .expect("Failed to deserialize");
+
+        assert_eq!(event.claimed_source_model, deserialized.claimed_source_model);
+        assert_eq!(event.claimed_source_runtime, deserialized.claimed_source_runtime);
+        assert_eq!(event.claimed_source_mode, deserialized.claimed_source_mode);
+        assert_eq!(event.verified_source_model, deserialized.verified_source_model);
+        assert_eq!(event.verified_source_runtime, deserialized.verified_source_runtime);
+        assert_eq!(event.verified_source_mode, deserialized.verified_source_mode);
+        assert_eq!(event.source_worktree, deserialized.source_worktree);
+        assert_eq!(event.source_session_id, deserialized.source_session_id);
+        assert_eq!(event.provenance_level, deserialized.provenance_level);
+        assert_eq!(event.provenance_issuer, deserialized.provenance_issuer);
+    }
+
+    #[test]
+    fn test_provenance_defaults_when_absent() {
+        // Deserialize a JSON MessageEvent with NO provenance fields
+        let json = r#"{
+            "from": "aleph",
+            "to": "luban",
+            "subject": "No provenance",
+            "content": "Legacy message",
+            "thread_id": null,
+            "priority": "normal"
+        }"#;
+
+        let msg: MessageEvent = serde_json::from_str(json)
+            .expect("Failed to deserialize MessageEvent without provenance");
+
+        assert_eq!(msg.claimed_source_model, None);
+        assert_eq!(msg.claimed_source_runtime, None);
+        assert_eq!(msg.claimed_source_mode, None);
+        assert_eq!(msg.verified_source_model, None);
+        assert_eq!(msg.verified_source_runtime, None);
+        assert_eq!(msg.verified_source_mode, None);
+        assert_eq!(msg.source_worktree, None);
+        assert_eq!(msg.source_session_id, None);
+        assert_eq!(msg.provenance_level, ProvenanceLevel::Legacy);
+        assert_eq!(msg.provenance_issuer, None);
+    }
+
+    #[test]
+    fn test_provenance_level_serde_variants() {
+        // Each ProvenanceLevel variant serializes to its snake_case string
+        let cases = vec![
+            (ProvenanceLevel::Legacy, "legacy"),
+            (ProvenanceLevel::Claimed, "claimed"),
+            (ProvenanceLevel::Verified, "verified"),
+            (ProvenanceLevel::Attested, "attested"),
+        ];
+
+        for (level, expected_string) in cases {
+            let json = serde_json::to_string(&level).expect("Failed to serialize");
+            let deserialized: ProvenanceLevel = serde_json::from_str(&json)
+                .expect("Failed to deserialize");
+
+            assert_eq!(level, deserialized);
+            assert_eq!(json, format!("\"{}\"", expected_string));
+        }
+    }
+
+    #[test]
+    fn test_legacy_message_compat() {
+        // An existing message JSON (pre-provenance era) deserializes cleanly
+        let legacy_json = r#"{
+            "from": "thales",
+            "to": "council",
+            "subject": "Architecture review",
+            "content": "Please review the proposed changes.",
+            "thread_id": "019ce000-0000-7000-8000-000000000001",
+            "priority": "high",
+            "intent": "request",
+            "expected_response": "reply",
+            "require_ack": true
+        }"#;
+
+        let msg: MessageEvent = serde_json::from_str(legacy_json)
+            .expect("Legacy message JSON should deserialize with provenance defaults");
+
+        // Original fields preserved
+        assert_eq!(msg.from, "thales");
+        assert_eq!(msg.to, "council");
+        assert_eq!(msg.priority, Priority::High);
+        assert_eq!(msg.intent, MessageIntent::Request);
+        assert_eq!(msg.expected_response, ExpectedResponse::Reply);
+        assert!(msg.require_ack);
+
+        // Provenance fields defaulted
+        assert_eq!(msg.provenance_level, ProvenanceLevel::Legacy);
+        assert_eq!(msg.claimed_source_model, None);
+        assert_eq!(msg.verified_source_model, None);
+        assert_eq!(msg.provenance_issuer, None);
     }
 
     #[test]
