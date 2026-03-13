@@ -305,6 +305,10 @@ pub struct CreateThreadRequest {
     pub expected_response: String,
     #[serde(default)]
     pub require_ack: bool,
+    // Claimed provenance (informational, not trusted)
+    pub claimed_source_model: Option<String>,
+    pub claimed_source_runtime: Option<String>,
+    pub claimed_source_mode: Option<String>,
 }
 
 fn default_normal() -> String {
@@ -374,6 +378,15 @@ pub async fn create_thread(
     let priority = parse_priority(&req.priority);
     let intent = parse_intent(&req.intent);
 
+    let has_claimed = req.claimed_source_model.is_some()
+        || req.claimed_source_runtime.is_some()
+        || req.claimed_source_mode.is_some();
+    let provenance_level = if has_claimed {
+        crate::events::ProvenanceLevel::Claimed
+    } else {
+        crate::events::ProvenanceLevel::Legacy
+    };
+
     let event = EventEnvelope {
         id: event_id,
         timestamp: now,
@@ -389,6 +402,17 @@ pub async fn create_thread(
             intent,
             expected_response: parse_expected_response(&req.expected_response),
             require_ack: req.require_ack,
+            claimed_source_model: req.claimed_source_model,
+            claimed_source_runtime: req.claimed_source_runtime,
+            claimed_source_mode: req.claimed_source_mode,
+            // verified_* fields are server-owned — never from client input
+            verified_source_model: None,
+            verified_source_runtime: None,
+            verified_source_mode: None,
+            source_worktree: None,
+            source_session_id: None,
+            provenance_level,
+            provenance_issuer: None,
         }),
     };
 
@@ -499,6 +523,10 @@ pub struct ReplyRequest {
     pub expected_response: String,
     #[serde(default)]
     pub require_ack: bool,
+    // Claimed provenance (informational, not trusted)
+    pub claimed_source_model: Option<String>,
+    pub claimed_source_runtime: Option<String>,
+    pub claimed_source_mode: Option<String>,
 }
 
 /// Reply to a thread
@@ -558,6 +586,15 @@ pub async fn reply_to_thread(
     let priority = parse_priority(&req.priority);
     let intent = parse_intent(&req.intent);
 
+    let has_claimed = req.claimed_source_model.is_some()
+        || req.claimed_source_runtime.is_some()
+        || req.claimed_source_mode.is_some();
+    let provenance_level = if has_claimed {
+        crate::events::ProvenanceLevel::Claimed
+    } else {
+        crate::events::ProvenanceLevel::Legacy
+    };
+
     let event = EventEnvelope {
         id: event_id,
         timestamp: now,
@@ -573,6 +610,16 @@ pub async fn reply_to_thread(
             intent,
             expected_response: parse_expected_response(&req.expected_response),
             require_ack: req.require_ack,
+            claimed_source_model: req.claimed_source_model,
+            claimed_source_runtime: req.claimed_source_runtime,
+            claimed_source_mode: req.claimed_source_mode,
+            verified_source_model: None,
+            verified_source_runtime: None,
+            verified_source_mode: None,
+            source_worktree: None,
+            source_session_id: None,
+            provenance_level,
+            provenance_issuer: None,
         }),
     };
 
@@ -1071,6 +1118,16 @@ pub async fn submit_observation(
             intent: MessageIntent::Inform,
             expected_response: ExpectedResponse::None,
             require_ack: false,
+            claimed_source_model: None,
+            claimed_source_runtime: None,
+            claimed_source_mode: None,
+            verified_source_model: None,
+            verified_source_runtime: None,
+            verified_source_mode: None,
+            source_worktree: None,
+            source_session_id: None,
+            provenance_level: crate::events::ProvenanceLevel::Legacy,
+            provenance_issuer: None,
         }),
     };
 

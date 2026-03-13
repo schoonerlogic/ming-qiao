@@ -117,6 +117,48 @@ fn is_false(b: &bool) -> bool {
     !b
 }
 
+/// How provenance was established for a message
+///
+/// Determines the trust level readers should assign to the message's
+/// claimed source identity. Server-owned — clients cannot set this.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProvenanceLevel {
+    /// Historical message with no structured provenance
+    Legacy,
+    /// Sender supplied provenance, system did not verify it
+    Claimed,
+    /// ming-qiao verified provenance from authenticated runtime context
+    Verified,
+    /// Provenance bound to signed runtime/session attestation
+    Attested,
+}
+
+impl Default for ProvenanceLevel {
+    fn default() -> Self {
+        ProvenanceLevel::Legacy
+    }
+}
+
+impl std::fmt::Display for ProvenanceLevel {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Legacy => write!(f, "legacy"),
+            Self::Claimed => write!(f, "claimed"),
+            Self::Verified => write!(f, "verified"),
+            Self::Attested => write!(f, "attested"),
+        }
+    }
+}
+
+fn is_default_provenance(p: &ProvenanceLevel) -> bool {
+    *p == ProvenanceLevel::Legacy
+}
+
+fn is_none_option(o: &Option<String>) -> bool {
+    o.is_none()
+}
+
 /// Availability and working state of an agent
 ///
 /// Indicates whether an agent can accept new tasks.
@@ -271,6 +313,48 @@ pub struct MessageEvent {
     /// Whether the system should track receipt acknowledgment
     #[serde(default, skip_serializing_if = "is_false")]
     pub require_ack: bool,
+
+    // -- Provenance fields (per Ogma spec v1) --
+
+    /// Client-supplied model identity (informational, not trusted)
+    #[serde(default, skip_serializing_if = "is_none_option")]
+    pub claimed_source_model: Option<String>,
+
+    /// Client-supplied runtime identity (informational, not trusted)
+    #[serde(default, skip_serializing_if = "is_none_option")]
+    pub claimed_source_runtime: Option<String>,
+
+    /// Client-supplied execution mode (informational, not trusted)
+    #[serde(default, skip_serializing_if = "is_none_option")]
+    pub claimed_source_mode: Option<String>,
+
+    /// Server-verified model identity (server-owned, client values ignored)
+    #[serde(default, skip_serializing_if = "is_none_option")]
+    pub verified_source_model: Option<String>,
+
+    /// Server-verified runtime identity (server-owned, client values ignored)
+    #[serde(default, skip_serializing_if = "is_none_option")]
+    pub verified_source_runtime: Option<String>,
+
+    /// Server-verified execution mode (server-owned, client values ignored)
+    #[serde(default, skip_serializing_if = "is_none_option")]
+    pub verified_source_mode: Option<String>,
+
+    /// Agent's worktree path (contextual metadata)
+    #[serde(default, skip_serializing_if = "is_none_option")]
+    pub source_worktree: Option<String>,
+
+    /// Agent's session identifier (contextual metadata)
+    #[serde(default, skip_serializing_if = "is_none_option")]
+    pub source_session_id: Option<String>,
+
+    /// Trust level of this message's provenance (server-owned)
+    #[serde(default, skip_serializing_if = "is_default_provenance")]
+    pub provenance_level: ProvenanceLevel,
+
+    /// Entity that issued/verified the provenance (server-owned)
+    #[serde(default, skip_serializing_if = "is_none_option")]
+    pub provenance_issuer: Option<String>,
 }
 
 /// Data for artifact sharing events

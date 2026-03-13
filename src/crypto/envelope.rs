@@ -38,21 +38,60 @@ pub struct SignedEnvelope {
     pub signature: String,
     /// The actual event payload
     pub payload: serde_json::Value,
+    // -- Provenance fields in signing surface (v1) --
+    /// Server-verified model identity (signed)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verified_source_model: Option<String>,
+    /// Server-verified runtime identity (signed)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verified_source_runtime: Option<String>,
+    /// Server-verified execution mode (signed)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verified_source_mode: Option<String>,
+    /// Provenance trust level (signed)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provenance_level: Option<String>,
+}
+
+/// Provenance metadata for inclusion in the signing surface.
+#[derive(Debug, Clone, Default)]
+pub struct EnvelopeProvenance {
+    pub verified_source_model: Option<String>,
+    pub verified_source_runtime: Option<String>,
+    pub verified_source_mode: Option<String>,
+    pub provenance_level: Option<String>,
 }
 
 impl SignedEnvelope {
-    /// Create and sign a new envelope.
+    /// Create and sign a new envelope (legacy — no provenance in signing surface).
     pub fn create(
         event_id: &str,
         from_agent: &str,
         payload: &serde_json::Value,
         signing_key: &SigningKey,
     ) -> Self {
+        Self::create_with_provenance(event_id, from_agent, payload, signing_key, None)
+    }
+
+    /// Create and sign a new envelope with optional provenance in the signing surface.
+    pub fn create_with_provenance(
+        event_id: &str,
+        from_agent: &str,
+        payload: &serde_json::Value,
+        signing_key: &SigningKey,
+        provenance: Option<&EnvelopeProvenance>,
+    ) -> Self {
         let timestamp_utc = Utc::now().to_rfc3339();
         let nonce = generate_nonce();
         let payload_hash = hash_payload(payload);
 
-        let signing_message = build_signing_message(event_id, &timestamp_utc, &nonce, &payload_hash);
+        let signing_message = build_signing_message(
+            event_id,
+            &timestamp_utc,
+            &nonce,
+            &payload_hash,
+            provenance,
+        );
         let signature = signing::sign(signing_key, signing_message.as_bytes());
 
         Self {
@@ -63,6 +102,10 @@ impl SignedEnvelope {
             payload_hash,
             signature: hex::encode(signature.to_bytes()),
             payload: payload.clone(),
+            verified_source_model: provenance.and_then(|p| p.verified_source_model.clone()),
+            verified_source_runtime: provenance.and_then(|p| p.verified_source_runtime.clone()),
+            verified_source_mode: provenance.and_then(|p| p.verified_source_mode.clone()),
+            provenance_level: provenance.and_then(|p| p.provenance_level.clone()),
         }
     }
 
@@ -107,11 +150,27 @@ impl SignedEnvelope {
             .ok_or_else(|| EnvelopeError::UnknownAgent(self.from_agent.clone()))?;
 
         // 5. Verify Ed25519 signature
+        // Reconstruct provenance for signing surface verification
+        let provenance = if self.provenance_level.is_some()
+            || self.verified_source_model.is_some()
+            || self.verified_source_runtime.is_some()
+            || self.verified_source_mode.is_some()
+        {
+            Some(EnvelopeProvenance {
+                verified_source_model: self.verified_source_model.clone(),
+                verified_source_runtime: self.verified_source_runtime.clone(),
+                verified_source_mode: self.verified_source_mode.clone(),
+                provenance_level: self.provenance_level.clone(),
+            })
+        } else {
+            None
+        };
         let signing_message = build_signing_message(
             &self.event_id,
             &self.timestamp_utc,
             &self.nonce,
             &self.payload_hash,
+            provenance.as_ref(),
         );
 
         let sig_bytes =
@@ -130,14 +189,32 @@ impl SignedEnvelope {
     }
 }
 
-/// Build the message that gets signed: event_id\ntimestamp\nnonce\npayload_hash
+/// Build the message that gets signed.
+///
+/// v1 format (with provenance):
+///   event_id\ntimestamp\nnonce\npayload_hash\nverified_model\nverified_runtime\nverified_mode\nprovenance_level
+///
+/// Legacy format (no provenance):
+///   event_id\ntimestamp\nnonce\npayload_hash
 fn build_signing_message(
     event_id: &str,
     timestamp_utc: &str,
     nonce: &str,
     payload_hash: &str,
+    provenance: Option<&EnvelopeProvenance>,
 ) -> String {
-    format!("{}\n{}\n{}\n{}", event_id, timestamp_utc, nonce, payload_hash)
+    let base = format!("{}\n{}\n{}\n{}", event_id, timestamp_utc, nonce, payload_hash);
+    match provenance {
+        Some(p) => format!(
+            "{}\n{}\n{}\n{}\n{}",
+            base,
+            p.verified_source_model.as_deref().unwrap_or(""),
+            p.verified_source_runtime.as_deref().unwrap_or(""),
+            p.verified_source_mode.as_deref().unwrap_or(""),
+            p.provenance_level.as_deref().unwrap_or(""),
+        ),
+        None => base,
+    }
 }
 
 /// SHA-256 hash of canonical (sorted-keys) JSON payload, hex-encoded.

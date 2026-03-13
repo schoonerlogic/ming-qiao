@@ -135,6 +135,16 @@ impl Indexer {
             require_ack: msg.require_ack,
             created_at: event.timestamp,
             read_by: vec![],
+            claimed_source_model: msg.claimed_source_model.clone(),
+            claimed_source_runtime: msg.claimed_source_runtime.clone(),
+            claimed_source_mode: msg.claimed_source_mode.clone(),
+            verified_source_model: msg.verified_source_model.clone(),
+            verified_source_runtime: msg.verified_source_runtime.clone(),
+            verified_source_mode: msg.verified_source_mode.clone(),
+            source_worktree: msg.source_worktree.clone(),
+            source_session_id: msg.source_session_id.clone(),
+            provenance_level: msg.provenance_level.clone(),
+            provenance_issuer: msg.provenance_issuer.clone(),
         };
         self.messages.insert(event_id.to_string(), message);
 

@@ -32,6 +32,16 @@ mod tests {
                 intent: MessageIntent::default(),
                 expected_response: ExpectedResponse::default(),
                 require_ack: false,
+                claimed_source_model: None,
+                claimed_source_runtime: None,
+                claimed_source_mode: None,
+                verified_source_model: None,
+                verified_source_runtime: None,
+                verified_source_mode: None,
+                source_worktree: None,
+                source_session_id: None,
+                provenance_level: crate::events::ProvenanceLevel::Legacy,
+                provenance_issuer: None,
             }),
         };
 
@@ -86,6 +96,16 @@ mod tests {
             intent: MessageIntent::Request,
             expected_response: ExpectedResponse::default(),
             require_ack: false,
+            claimed_source_model: None,
+            claimed_source_runtime: None,
+            claimed_source_mode: None,
+            verified_source_model: None,
+            verified_source_runtime: None,
+            verified_source_mode: None,
+            source_worktree: None,
+            source_session_id: None,
+            provenance_level: crate::events::ProvenanceLevel::Legacy,
+            provenance_issuer: None,
         };
 
         // Act
@@ -371,6 +391,16 @@ mod tests {
             intent: MessageIntent::default(),
             expected_response: ExpectedResponse::default(),
             require_ack: false,
+            claimed_source_model: None,
+            claimed_source_runtime: None,
+            claimed_source_mode: None,
+            verified_source_model: None,
+            verified_source_runtime: None,
+            verified_source_mode: None,
+            source_worktree: None,
+            source_session_id: None,
+            provenance_level: crate::events::ProvenanceLevel::Legacy,
+            provenance_issuer: None,
         });
 
         let json = serde_json::to_string(&payload).expect("Failed to serialize");

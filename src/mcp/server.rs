@@ -30,7 +30,7 @@ pub const SERVER_NAME: &str = "ming-qiao";
 pub const SERVER_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// Tools that reset the inbox check timestamp (agent is already looking at messages)
-const INBOX_TOOLS: &[&str] = &["check_messages", "read_inbox", "read_message"];
+const INBOX_TOOLS: &[&str] = &["check_messages", "read_inbox", "read_message", "unread_count"];
 
 /// MCP server that handles stdio transport
 pub struct McpServer {
@@ -507,6 +507,16 @@ mod tests {
                 intent,
                 expected_response: crate::events::ExpectedResponse::None,
                 require_ack: false,
+                claimed_source_model: None,
+                claimed_source_runtime: None,
+                claimed_source_mode: None,
+                verified_source_model: None,
+                verified_source_runtime: None,
+                verified_source_mode: None,
+                source_worktree: None,
+                source_session_id: None,
+                provenance_level: crate::events::ProvenanceLevel::Legacy,
+                provenance_issuer: None,
             }),
         }
     }
@@ -698,6 +708,16 @@ mod tests {
                     intent,
                     expected_response: crate::events::ExpectedResponse::None,
                     require_ack: false,
+                    claimed_source_model: None,
+                    claimed_source_runtime: None,
+                    claimed_source_mode: None,
+                    verified_source_model: None,
+                    verified_source_runtime: None,
+                    verified_source_mode: None,
+                    source_worktree: None,
+                    source_session_id: None,
+                    provenance_level: crate::events::ProvenanceLevel::Legacy,
+                    provenance_issuer: None,
                 }),
             };
             let mut indexer = tools.state().indexer_mut().await;

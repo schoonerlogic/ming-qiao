@@ -9,7 +9,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 // Re-use types from events (re-exported from schema)
-use crate::events::{AgentStatus, DecisionOption, ExpectedResponse, MessageIntent, Priority};
+use crate::events::{AgentStatus, DecisionOption, ExpectedResponse, MessageIntent, Priority, ProvenanceLevel};
 
 // ============================================================================
 // NEW ENUMS
@@ -128,6 +128,48 @@ pub struct Message {
 
     /// Agent IDs who have marked this message as read
     pub read_by: Vec<String>,
+
+    // -- Provenance fields --
+
+    /// Client-supplied model identity (informational)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub claimed_source_model: Option<String>,
+
+    /// Client-supplied runtime identity (informational)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub claimed_source_runtime: Option<String>,
+
+    /// Client-supplied execution mode (informational)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub claimed_source_mode: Option<String>,
+
+    /// Server-verified model identity
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verified_source_model: Option<String>,
+
+    /// Server-verified runtime identity
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verified_source_runtime: Option<String>,
+
+    /// Server-verified execution mode
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verified_source_mode: Option<String>,
+
+    /// Agent's worktree path
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_worktree: Option<String>,
+
+    /// Agent's session identifier
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_session_id: Option<String>,
+
+    /// Trust level of this message's provenance
+    #[serde(default)]
+    pub provenance_level: ProvenanceLevel,
+
+    /// Entity that issued/verified the provenance
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provenance_issuer: Option<String>,
 }
 
 /// A recorded decision

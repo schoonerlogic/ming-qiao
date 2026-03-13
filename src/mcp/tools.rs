@@ -86,6 +86,7 @@ impl ToolRegistry {
             "read_inbox" => self.tool_read_inbox(arguments, agent_id).await,
             "reply_to_thread" => self.tool_reply_to_thread(arguments, agent_id).await,
             "read_thread" => self.tool_read_thread(arguments, agent_id).await,
+            "unread_count" => self.tool_unread_count(arguments, agent_id).await,
             _ => Err(McpError::NotFound(format!("Tool not found: {}", name))),
         }
     }
@@ -106,6 +107,7 @@ impl ToolRegistry {
             Self::def_read_inbox(),
             Self::def_reply_to_thread(),
             Self::def_read_thread(),
+            Self::def_unread_count(),
         ]
     }
 
@@ -158,6 +160,18 @@ impl ToolRegistry {
                         "type": "boolean",
                         "default": false,
                         "description": "Whether to track receipt acknowledgment for this message"
+                    },
+                    "claimed_source_model": {
+                        "type": "string",
+                        "description": "Self-reported model identity (e.g., 'claude-opus-4-6', 'qwen3:14b'). Informational only — not trusted by the server."
+                    },
+                    "claimed_source_runtime": {
+                        "type": "string",
+                        "description": "Self-reported runtime (e.g., 'claude-code', 'kimi-cli'). Informational only."
+                    },
+                    "claimed_source_mode": {
+                        "type": "string",
+                        "description": "Self-reported execution mode (e.g., 'interactive', 'headless', 'daemon_spawned'). Informational only."
                     }
                 },
                 "required": ["to", "subject", "content"]
@@ -472,6 +486,18 @@ impl ToolRegistry {
         }
     }
 
+    fn def_unread_count() -> ToolDefinition {
+        ToolDefinition {
+            name: "unread_count".to_string(),
+            description: "Lightweight inbox check — returns unread message count and a preview of the latest message. Use this for periodic polling between tasks to stay aware of incoming messages without reading the full inbox.".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {},
+                "additionalProperties": false
+            }),
+        }
+    }
+
     // ========================================================================
     // Tool Implementations
     // ========================================================================
@@ -596,6 +622,19 @@ impl ToolRegistry {
         let expected_response = Self::parse_expected_response(args.get("expected_response").and_then(|v| v.as_str()));
         let require_ack = args.get("require_ack").and_then(|v| v.as_bool()).unwrap_or(false);
 
+        // Parse claimed provenance (informational only — not trusted)
+        let claimed_source_model = args.get("claimed_source_model").and_then(|v| v.as_str()).map(String::from);
+        let claimed_source_runtime = args.get("claimed_source_runtime").and_then(|v| v.as_str()).map(String::from);
+        let claimed_source_mode = args.get("claimed_source_mode").and_then(|v| v.as_str()).map(String::from);
+
+        // Determine provenance level: if any claimed field is present, mark as Claimed; otherwise Legacy
+        let has_claimed = claimed_source_model.is_some() || claimed_source_runtime.is_some() || claimed_source_mode.is_some();
+        let provenance_level = if has_claimed {
+            crate::events::ProvenanceLevel::Claimed
+        } else {
+            crate::events::ProvenanceLevel::Legacy
+        };
+
         let event = EventEnvelope {
             id: Uuid::now_v7(),
             timestamp: Utc::now(),
@@ -611,6 +650,17 @@ impl ToolRegistry {
                 intent,
                 expected_response,
                 require_ack,
+                claimed_source_model,
+                claimed_source_runtime,
+                claimed_source_mode,
+                // verified_* fields are server-owned — not set from client input
+                verified_source_model: None,
+                verified_source_runtime: None,
+                verified_source_mode: None,
+                source_worktree: None,
+                source_session_id: None,
+                provenance_level,
+                provenance_issuer: None,
             }),
         };
 
@@ -781,6 +831,16 @@ impl ToolRegistry {
                 intent: MessageIntent::Request,
                 expected_response: ExpectedResponse::Reply,
                 require_ack: false,
+                claimed_source_model: None,
+                claimed_source_runtime: None,
+                claimed_source_mode: None,
+                verified_source_model: None,
+                verified_source_runtime: None,
+                verified_source_mode: None,
+                source_worktree: None,
+                source_session_id: None,
+                provenance_level: crate::events::ProvenanceLevel::Legacy,
+                provenance_issuer: None,
             }),
         };
 
@@ -1056,6 +1116,11 @@ impl ToolRegistry {
         let event_id = Uuid::now_v7();
         let now = Utc::now();
 
+        let claimed_source_model = args.get("claimed_source_model").and_then(|v| v.as_str()).map(String::from);
+        let claimed_source_runtime = args.get("claimed_source_runtime").and_then(|v| v.as_str()).map(String::from);
+        let claimed_source_mode = args.get("claimed_source_mode").and_then(|v| v.as_str()).map(String::from);
+        let has_claimed = claimed_source_model.is_some() || claimed_source_runtime.is_some() || claimed_source_mode.is_some();
+
         let event = EventEnvelope {
             id: event_id,
             timestamp: now,
@@ -1071,6 +1136,16 @@ impl ToolRegistry {
                 intent,
                 expected_response: Self::parse_expected_response(args.get("expected_response").and_then(|v| v.as_str())),
                 require_ack: args.get("require_ack").and_then(|v| v.as_bool()).unwrap_or(false),
+                claimed_source_model,
+                claimed_source_runtime,
+                claimed_source_mode,
+                verified_source_model: None,
+                verified_source_runtime: None,
+                verified_source_mode: None,
+                source_worktree: None,
+                source_session_id: None,
+                provenance_level: if has_claimed { crate::events::ProvenanceLevel::Claimed } else { crate::events::ProvenanceLevel::Legacy },
+                provenance_issuer: None,
             }),
         };
 
@@ -1182,6 +1257,11 @@ impl ToolRegistry {
         let event_id = Uuid::now_v7();
         let now = Utc::now();
 
+        let claimed_source_model = args.get("claimed_source_model").and_then(|v| v.as_str()).map(String::from);
+        let claimed_source_runtime = args.get("claimed_source_runtime").and_then(|v| v.as_str()).map(String::from);
+        let claimed_source_mode = args.get("claimed_source_mode").and_then(|v| v.as_str()).map(String::from);
+        let has_claimed = claimed_source_model.is_some() || claimed_source_runtime.is_some() || claimed_source_mode.is_some();
+
         let event = EventEnvelope {
             id: event_id,
             timestamp: now,
@@ -1197,6 +1277,16 @@ impl ToolRegistry {
                 intent,
                 expected_response: Self::parse_expected_response(args.get("expected_response").and_then(|v| v.as_str())),
                 require_ack: args.get("require_ack").and_then(|v| v.as_bool()).unwrap_or(false),
+                claimed_source_model,
+                claimed_source_runtime,
+                claimed_source_mode,
+                verified_source_model: None,
+                verified_source_runtime: None,
+                verified_source_mode: None,
+                source_worktree: None,
+                source_session_id: None,
+                provenance_level: if has_claimed { crate::events::ProvenanceLevel::Claimed } else { crate::events::ProvenanceLevel::Legacy },
+                provenance_issuer: None,
             }),
         };
 
@@ -1298,6 +1388,63 @@ impl ToolRegistry {
             .unwrap(),
         ))
     }
+
+    async fn tool_unread_count(
+        &self,
+        _args: Value,
+        agent_id: &str,
+    ) -> Result<CallToolResult, McpError> {
+        use crate::events::MessageIntent;
+
+        let mut messages: Vec<_> = {
+            let indexer = self.state.indexer().await;
+            indexer
+                .get_messages_to_agent(agent_id)
+                .into_iter()
+                .cloned()
+                .collect()
+        };
+
+        // Sort newest first
+        messages.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+
+        let total = messages.len();
+        let requests = messages.iter().filter(|m| matches!(m.intent, MessageIntent::Request)).count();
+        let discussions = messages.iter().filter(|m| matches!(m.intent, MessageIntent::Discuss)).count();
+        let informs = messages.iter().filter(|m| matches!(m.intent, MessageIntent::Inform)).count();
+
+        let latest = messages.first().map(|m| {
+            serde_json::json!({
+                "from": m.from,
+                "subject": m.subject,
+                "intent": m.intent,
+                "priority": m.priority,
+                "created_at": m.created_at.to_rfc3339()
+            })
+        });
+
+        Ok(CallToolResult::text(
+            serde_json::to_string_pretty(&serde_json::json!({
+                "count": total,
+                "by_intent": {
+                    "request": requests,
+                    "discuss": discussions,
+                    "inform": informs
+                },
+                "latest": latest,
+                "action": if requests > 0 {
+                    "You have request-intent messages. Use check_messages to read and respond."
+                } else if discussions > 0 {
+                    "You have discussion messages. Use check_messages when ready."
+                } else if total > 0 {
+                    "FYI messages only. No action required."
+                } else {
+                    "Inbox empty."
+                }
+            }))
+            .unwrap(),
+        ))
+    }
 }
 
 #[cfg(test)]
@@ -1310,7 +1457,7 @@ mod tests {
         let registry = ToolRegistry::with_state(state);
         let tools = registry.list();
 
-        assert_eq!(tools.len(), 12);
+        assert_eq!(tools.len(), 13);
 
         let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
         assert!(names.contains(&"send_message"));
@@ -1680,5 +1827,75 @@ mod tests {
         let threads = json["threads"].as_array().unwrap();
         assert_eq!(threads.len(), 1);
         assert_eq!(threads[0]["subject"], "am.agent.council.thales-aleph");
+    }
+
+    // ====================================================================
+    // unread_count tests
+    // ====================================================================
+
+    #[tokio::test]
+    async fn test_unread_count_empty() {
+        let state = AppState::new().await;
+        let registry = ToolRegistry::with_state(state);
+        let result = registry
+            .call("unread_count", serde_json::json!({}), "aleph")
+            .await
+            .unwrap();
+
+        let text = extract_text(&result);
+        let json: Value = serde_json::from_str(text).unwrap();
+        assert_eq!(json["count"], 0);
+        assert_eq!(json["action"], "Inbox empty.");
+        assert!(json["latest"].is_null());
+    }
+
+    #[tokio::test]
+    async fn test_unread_count_with_messages() {
+        let state = AppState::new().await;
+        let registry = ToolRegistry::with_state(state);
+
+        // Send messages with different intents
+        registry
+            .call(
+                "create_thread",
+                serde_json::json!({
+                    "from_agent": "thales",
+                    "to_agent": "aleph",
+                    "subject": "Review needed",
+                    "content": "Please review",
+                    "intent": "request"
+                }),
+                "thales",
+            )
+            .await
+            .unwrap();
+
+        registry
+            .call(
+                "create_thread",
+                serde_json::json!({
+                    "from_agent": "luban",
+                    "to_agent": "aleph",
+                    "subject": "FYI: build passed",
+                    "content": "Build green",
+                    "intent": "inform"
+                }),
+                "luban",
+            )
+            .await
+            .unwrap();
+
+        let result = registry
+            .call("unread_count", serde_json::json!({}), "aleph")
+            .await
+            .unwrap();
+
+        let text = extract_text(&result);
+        let json: Value = serde_json::from_str(text).unwrap();
+        assert_eq!(json["count"], 2);
+        assert_eq!(json["by_intent"]["request"], 1);
+        assert_eq!(json["by_intent"]["inform"], 1);
+        assert!(json["latest"].is_object());
+        assert_eq!(json["action"], "You have request-intent messages. Use check_messages to read and respond.");
     }
 }
