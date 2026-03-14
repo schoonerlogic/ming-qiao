@@ -205,6 +205,12 @@ pub struct Artifact {
 
     /// Optional ID of the thread providing context for this artifact
     pub thread_id: Option<String>,
+
+    // -- Content-origin provenance --
+    pub source_url: Option<String>,
+    pub fetch_timestamp: Option<DateTime<Utc>>,
+    pub content_hash_sha256: Option<String>,
+    pub processor_version: Option<String>,
 }
 
 /// Current state of an agent

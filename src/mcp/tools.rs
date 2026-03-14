@@ -859,6 +859,10 @@ impl ToolRegistry {
                 path: source_path.to_string(),
                 description: description.to_string(),
                 checksum,
+                source_url: None,
+                fetch_timestamp: None,
+                content_hash_sha256: None,
+                processor_version: None,
             }),
         };
 

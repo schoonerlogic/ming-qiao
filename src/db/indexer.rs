@@ -163,6 +163,10 @@ impl Indexer {
             shared_by: event.agent_id.clone(),
             shared_at: event.timestamp,
             thread_id: None,
+            source_url: artifact.source_url.clone(),
+            fetch_timestamp: artifact.fetch_timestamp,
+            content_hash_sha256: artifact.content_hash_sha256.clone(),
+            processor_version: artifact.processor_version.clone(),
         };
         self.artifacts.insert(event_id.to_string(), art);
         Ok(())

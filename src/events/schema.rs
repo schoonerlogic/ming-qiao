@@ -346,12 +346,30 @@ pub struct MessageEvent {
 pub struct ArtifactEvent {
     /// File path or URL to the artifact
     pub path: String,
-    
+
     /// Human-readable description of what this artifact is
     pub description: String,
-    
+
     /// Checksum for integrity verification (e.g., SHA-256)
     pub checksum: String,
+
+    // -- Content-origin provenance --
+
+    /// Original URL where the content was fetched from
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_url: Option<String>,
+
+    /// When the content was retrieved from its source
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fetch_timestamp: Option<DateTime<Utc>>,
+
+    /// SHA-256 hash of the raw content for integrity verification
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content_hash_sha256: Option<String>,
+
+    /// Version of the processor/pipeline that ingested this artifact
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub processor_version: Option<String>,
 }
 
 /// Data for decision recording events

@@ -138,6 +138,10 @@ mod tests {
             path: "/ming-qiao/docs/ARCHITECTURE.md".to_string(),
             description: "System architecture documentation".to_string(),
             checksum: "a1b2c3d4e5f6".to_string(),
+            source_url: None,
+            fetch_timestamp: None,
+            content_hash_sha256: None,
+            processor_version: None,
         };
 
         // Act
@@ -680,5 +684,92 @@ mod tests {
             }
             _ => panic!("Wrong variant"),
         }
+    }
+
+    // ========================================================================
+    // Content-Origin Provenance Tests (ArtifactEvent)
+    // ========================================================================
+
+    #[test]
+    fn test_artifact_content_provenance_round_trip() {
+        let fetch_ts = Utc::now();
+        let event = ArtifactEvent {
+            path: "/papers/attention-is-all-you-need.pdf".to_string(),
+            description: "Transformer paper".to_string(),
+            checksum: "sha256:abc123".to_string(),
+            source_url: Some("https://arxiv.org/abs/1706.03762".to_string()),
+            fetch_timestamp: Some(fetch_ts),
+            content_hash_sha256: Some("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855".to_string()),
+            processor_version: Some("arxiv-ingest-v0.3.0".to_string()),
+        };
+
+        let json = serde_json::to_string(&event).expect("Failed to serialize");
+        let deserialized: ArtifactEvent = serde_json::from_str(&json)
+            .expect("Failed to deserialize");
+
+        assert_eq!(deserialized.source_url.as_deref(), Some("https://arxiv.org/abs/1706.03762"));
+        assert_eq!(deserialized.fetch_timestamp, Some(fetch_ts));
+        assert_eq!(
+            deserialized.content_hash_sha256.as_deref(),
+            Some("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855")
+        );
+        assert_eq!(deserialized.processor_version.as_deref(), Some("arxiv-ingest-v0.3.0"));
+    }
+
+    #[test]
+    fn test_artifact_content_provenance_defaults_when_absent() {
+        // Legacy artifacts without content-origin fields should deserialize fine
+        let json = r#"{
+            "path": "/old/doc.txt",
+            "description": "Legacy document",
+            "checksum": "abc123"
+        }"#;
+
+        let event: ArtifactEvent = serde_json::from_str(json)
+            .expect("Failed to deserialize legacy artifact");
+
+        assert_eq!(event.path, "/old/doc.txt");
+        assert!(event.source_url.is_none());
+        assert!(event.fetch_timestamp.is_none());
+        assert!(event.content_hash_sha256.is_none());
+        assert!(event.processor_version.is_none());
+    }
+
+    #[test]
+    fn test_artifact_none_provenance_fields_omitted_from_json() {
+        let event = ArtifactEvent {
+            path: "/doc.txt".to_string(),
+            description: "A doc".to_string(),
+            checksum: "abc".to_string(),
+            source_url: None,
+            fetch_timestamp: None,
+            content_hash_sha256: None,
+            processor_version: None,
+        };
+
+        let json = serde_json::to_string(&event).unwrap();
+        assert!(!json.contains("source_url"));
+        assert!(!json.contains("fetch_timestamp"));
+        assert!(!json.contains("content_hash_sha256"));
+        assert!(!json.contains("processor_version"));
+    }
+
+    #[test]
+    fn test_artifact_present_provenance_fields_in_json() {
+        let event = ArtifactEvent {
+            path: "/doc.txt".to_string(),
+            description: "A doc".to_string(),
+            checksum: "abc".to_string(),
+            source_url: Some("https://example.com".to_string()),
+            fetch_timestamp: None,
+            content_hash_sha256: Some("deadbeef".to_string()),
+            processor_version: Some("v1.0".to_string()),
+        };
+
+        let json = serde_json::to_string(&event).unwrap();
+        assert!(json.contains("source_url"));
+        assert!(!json.contains("fetch_timestamp"));
+        assert!(json.contains("content_hash_sha256"));
+        assert!(json.contains("processor_version"));
     }
 }

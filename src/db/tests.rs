@@ -211,6 +211,10 @@ mod tests {
             shared_by: "thales".to_string(),
             shared_at: Utc::now(),
             thread_id: Some("thread-456".to_string()),
+            source_url: None,
+            fetch_timestamp: None,
+            content_hash_sha256: None,
+            processor_version: None,
         };
 
         let json = serde_json::to_string(&artifact).unwrap();
@@ -444,6 +448,10 @@ mod tests {
                 path: "/files/design.pdf".to_string(),
                 description: "Architecture diagram".to_string(),
                 checksum: "abc123".to_string(),
+                source_url: None,
+                fetch_timestamp: None,
+                content_hash_sha256: None,
+                processor_version: None,
             }),
         };
 
@@ -533,6 +541,10 @@ mod tests {
                     path: "/files/doc.txt".to_string(),
                     description: "A document".to_string(),
                     checksum: "xyz789".to_string(),
+                    source_url: None,
+                    fetch_timestamp: None,
+                    content_hash_sha256: None,
+                    processor_version: None,
                 }),
             },
         ];
@@ -855,6 +867,10 @@ mod tests {
                 path: "/doc.txt".to_string(),
                 description: "A document".to_string(),
                 checksum: "abc123".to_string(),
+                source_url: None,
+                fetch_timestamp: None,
+                content_hash_sha256: None,
+                processor_version: None,
             }),
         };
 
@@ -923,6 +939,10 @@ mod tests {
                     path: "/doc1.txt".to_string(),
                     description: "Document 1".to_string(),
                     checksum: "abc123".to_string(),
+                    source_url: None,
+                    fetch_timestamp: None,
+                    content_hash_sha256: None,
+                    processor_version: None,
                 }),
             },
             EventEnvelope {
@@ -934,6 +954,10 @@ mod tests {
                     path: "/doc2.txt".to_string(),
                     description: "Document 2".to_string(),
                     checksum: "def456".to_string(),
+                    source_url: None,
+                    fetch_timestamp: None,
+                    content_hash_sha256: None,
+                    processor_version: None,
                 }),
             },
         ];
@@ -1361,5 +1385,119 @@ mod tests {
             let deserialized: Message = serde_json::from_str(&json).unwrap();
             assert_eq!(level, deserialized.provenance_level);
         }
+    }
+
+    // ========================================================================
+    // Content-Origin Provenance Tests (Artifact)
+    // ========================================================================
+
+    #[test]
+    fn test_indexer_propagates_artifact_content_provenance() {
+        let fetch_ts = Utc::now();
+        let event = EventEnvelope {
+            id: Uuid::now_v7(),
+            timestamp: Utc::now(),
+            event_type: EventType::ArtifactShared,
+            agent_id: "luban".to_string(),
+            payload: EventPayload::Artifact(crate::events::ArtifactEvent {
+                path: "/papers/transformer.pdf".to_string(),
+                description: "Transformer paper".to_string(),
+                checksum: "sha256:abc".to_string(),
+                source_url: Some("https://arxiv.org/abs/1706.03762".to_string()),
+                fetch_timestamp: Some(fetch_ts),
+                content_hash_sha256: Some("deadbeef".to_string()),
+                processor_version: Some("arxiv-ingest-v0.3.0".to_string()),
+            }),
+        };
+
+        let mut indexer = Indexer::new();
+        indexer.process_event(&event).unwrap();
+
+        let artifacts = indexer.get_artifacts();
+        assert_eq!(artifacts.len(), 1);
+        let art = artifacts[0];
+        assert_eq!(art.source_url.as_deref(), Some("https://arxiv.org/abs/1706.03762"));
+        assert_eq!(art.fetch_timestamp, Some(fetch_ts));
+        assert_eq!(art.content_hash_sha256.as_deref(), Some("deadbeef"));
+        assert_eq!(art.processor_version.as_deref(), Some("arxiv-ingest-v0.3.0"));
+    }
+
+    #[test]
+    fn test_indexer_legacy_artifact_gets_none_provenance() {
+        let event = EventEnvelope {
+            id: Uuid::now_v7(),
+            timestamp: Utc::now(),
+            event_type: EventType::ArtifactShared,
+            agent_id: "aleph".to_string(),
+            payload: EventPayload::Artifact(crate::events::ArtifactEvent {
+                path: "/old/doc.txt".to_string(),
+                description: "Legacy doc".to_string(),
+                checksum: "abc".to_string(),
+                source_url: None,
+                fetch_timestamp: None,
+                content_hash_sha256: None,
+                processor_version: None,
+            }),
+        };
+
+        let mut indexer = Indexer::new();
+        indexer.process_event(&event).unwrap();
+
+        let artifacts = indexer.get_artifacts();
+        assert_eq!(artifacts.len(), 1);
+        let art = artifacts[0];
+        assert!(art.source_url.is_none());
+        assert!(art.fetch_timestamp.is_none());
+        assert!(art.content_hash_sha256.is_none());
+        assert!(art.processor_version.is_none());
+    }
+
+    #[test]
+    fn test_artifact_model_content_provenance_round_trip() {
+        let fetch_ts = Utc::now();
+        let artifact = Artifact {
+            id: "test-art-1".to_string(),
+            path: "/papers/test.pdf".to_string(),
+            description: "Test paper".to_string(),
+            checksum: "sha256:test".to_string(),
+            shared_by: "luban".to_string(),
+            shared_at: Utc::now(),
+            thread_id: None,
+            source_url: Some("https://arxiv.org/abs/2301.00001".to_string()),
+            fetch_timestamp: Some(fetch_ts),
+            content_hash_sha256: Some("a".repeat(64)),
+            processor_version: Some("v0.3.0".to_string()),
+        };
+
+        let json = serde_json::to_string(&artifact).unwrap();
+        let deserialized: Artifact = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(artifact.source_url, deserialized.source_url);
+        assert_eq!(artifact.fetch_timestamp, deserialized.fetch_timestamp);
+        assert_eq!(artifact.content_hash_sha256, deserialized.content_hash_sha256);
+        assert_eq!(artifact.processor_version, deserialized.processor_version);
+    }
+
+    #[test]
+    fn test_artifact_model_content_provenance_json_field_names() {
+        let artifact = Artifact {
+            id: "test-art-2".to_string(),
+            path: "/test.pdf".to_string(),
+            description: "Test".to_string(),
+            checksum: "abc".to_string(),
+            shared_by: "luban".to_string(),
+            shared_at: Utc::now(),
+            thread_id: None,
+            source_url: Some("https://example.com".to_string()),
+            fetch_timestamp: Some(Utc::now()),
+            content_hash_sha256: Some("deadbeef".to_string()),
+            processor_version: Some("v1.0".to_string()),
+        };
+
+        let json = serde_json::to_string(&artifact).unwrap();
+        assert!(json.contains("\"source_url\""));
+        assert!(json.contains("\"fetch_timestamp\""));
+        assert!(json.contains("\"content_hash_sha256\""));
+        assert!(json.contains("\"processor_version\""));
     }
 }
