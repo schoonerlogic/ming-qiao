@@ -307,7 +307,8 @@ SESSION SUMMARY:
 - <priority item>
 ```
 
-Post session summary to ming-qiao before ending.
+Post session summary to ming-qiao before ending **only if you completed substantive work**.
+Do NOT post a summary if you only checked inbox and found nothing to do.
 
 ---
 

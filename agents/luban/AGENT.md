@@ -107,7 +107,7 @@ curl -X POST http://localhost:7777/api/threads \
 - **Commit frequently** — Small, logical commits
 - **Test as you go** — Run `cargo check` and `cargo test` often
 - **Comment unclear code** — Future readers (including yourself) will thank you
-- **Post status updates to ming-qiao** — Keep others informed
+- **Do NOT broadcast status on session start** — Only message ming-qiao when completing tasks, responding to requests, or reporting blockers
 
 ### Completing a Task
 
@@ -314,9 +314,11 @@ This is within my scope / This needs Aleph approval (circle one)
 Awaiting response before proceeding.
 ```
 
-### Daily Status Update
+### Session Summary (only after substantive work)
 
-Post a session summary to ming-qiao at end of work:
+Post a session summary to ming-qiao **only when you completed actual work** (code written,
+tasks finished, blockers discovered). Do NOT post a summary if you only read inbox and
+found nothing to do — that creates broadcast spam.
 
 ```bash
 curl -X POST http://localhost:7777/api/threads \
