@@ -54,7 +54,36 @@ pub struct ArxivMetadata {
     pub published: String,
 }
 
-/// Fetch metadata for a single paper from the arXiv API.
+impl ArxivMetadata {
+    /// Format authors for display (with "et al." for long lists).
+    pub fn authors_display(&self) -> String {
+        format_authors(&self.authors)
+    }
+}
+
+/// Fetch metadata asynchronously via the arXiv API.
+pub async fn fetch_arxiv_metadata(
+    client: &reqwest::Client,
+    arxiv_id: &str,
+) -> Result<ArxivMetadata, ProcessorError> {
+    let url = format!("{ARXIV_API}?id_list={arxiv_id}&max_results=1");
+
+    let resp = client
+        .get(&url)
+        .timeout(std::time::Duration::from_secs(30))
+        .send()
+        .await
+        .map_err(|e| ProcessorError::NetworkError(e.to_string()))?;
+
+    let xml_data = resp
+        .text()
+        .await
+        .map_err(|e| ProcessorError::NetworkError(e.to_string()))?;
+
+    parse_arxiv_response(&xml_data, arxiv_id)
+}
+
+/// Fetch metadata synchronously via the arXiv API (blocking).
 pub fn fetch_arxiv_metadata_blocking(arxiv_id: &str) -> Result<ArxivMetadata, ProcessorError> {
     let url = format!("{ARXIV_API}?id_list={arxiv_id}&max_results=1");
 

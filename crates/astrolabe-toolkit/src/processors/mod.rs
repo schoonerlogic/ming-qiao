@@ -28,7 +28,10 @@ impl ProcessorRegistry {
     }
 
     /// Find the first processor that can handle this artifact.
-    pub fn find_processor(&self, artifact: &RawArtifact) -> Option<&dyn ArtifactProcessor> {
+    pub fn find_processor(
+        &self,
+        artifact: &RawArtifact,
+    ) -> Option<&(dyn ArtifactProcessor + Send + Sync)> {
         self.processors
             .iter()
             .find(|p| p.can_process(artifact))
@@ -37,9 +40,9 @@ impl ProcessorRegistry {
 
     /// Process an artifact using the appropriate processor.
     pub fn process(&self, artifact: &RawArtifact) -> Result<ProcessorResult, ProcessorError> {
-        let processor = self.find_processor(artifact).ok_or_else(|| {
-            ProcessorError::UnsupportedType(artifact.source_type.clone())
-        })?;
+        let processor = self
+            .find_processor(artifact)
+            .ok_or_else(|| ProcessorError::UnsupportedType(artifact.source_type.clone()))?;
         processor.process(artifact)
     }
 }
