@@ -9,6 +9,7 @@
 //! - [`processor`] — Core traits and types: `ArtifactProcessor`, `RawArtifact`, `ProcessorResult`
 //! - [`dedup`] — Hash-based deduplication engine (SHA256, arXiv ID, URL)
 //! - [`envelope`] — Envelope builder for quarantine and ASTROLABE ingestion
+
 pub mod dedup;
 pub mod envelope;
 pub mod processor;
