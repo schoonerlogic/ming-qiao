@@ -1,11 +1,10 @@
 //! ASTROLABE CLI — unified command-line tool for the ASTROLABE knowledge graph.
 //!
-//! Replaces: astrolabe-ingest.py, gmail-ingest.py (partially)
+//! Replaces: astrolabe-ingest.py, astrolabe-query.py
 //!
 //! Subcommands:
 //!   ingest  — Add content to the knowledge graph via MCP
-//!   search  — Search nodes in the knowledge graph
-//!   facts   — Search facts/relationships in the knowledge graph
+//!   query   — Search nodes and/or facts in the knowledge graph
 //!   process — Process a raw artifact through the processor pipeline
 //!
 //! Agent: luban
@@ -23,7 +22,7 @@ use astrolabe_toolkit::processors::ProcessorRegistry;
 struct Cli {
     /// MCP server URL
     #[arg(long, default_value = "http://localhost:8001/mcp")]
-    mcp_url: String,
+    url: String,
 
     /// Graph group ID
     #[arg(long, default_value = "astrolabe_main")]
@@ -45,29 +44,39 @@ enum Commands {
         #[arg(long, conflicts_with = "file")]
         body: Option<String>,
 
-        /// Read content from file
+        /// Read content from file (use - for stdin)
         #[arg(long, conflicts_with = "body")]
         file: Option<PathBuf>,
 
-        /// Source type (text, json, message)
+        /// Content format (text, json, message)
         #[arg(long, default_value = "text")]
-        source: String,
+        format: String,
 
         /// Source description
         #[arg(long, default_value = "")]
         source_description: String,
     },
 
-    /// Search nodes in the knowledge graph
-    Search {
-        /// Search query
+    /// Search nodes and/or facts in the knowledge graph
+    Query {
+        /// Natural language search query
         query: String,
-    },
 
-    /// Search facts/relationships in the knowledge graph
-    Facts {
-        /// Search query
-        query: String,
+        /// Search nodes only
+        #[arg(long)]
+        nodes: bool,
+
+        /// Search facts only
+        #[arg(long)]
+        facts: bool,
+
+        /// Maximum results to show
+        #[arg(long, default_value = "10")]
+        max: usize,
+
+        /// Output raw JSON (for scripting)
+        #[arg(long)]
+        json: bool,
     },
 
     /// Process a raw artifact through the pipeline
@@ -94,6 +103,137 @@ enum Commands {
     },
 }
 
+fn connect_client(url: &str) -> AstrolabeClient {
+    let mut client = AstrolabeClient::new(Some(url));
+    if let Err(e) = client.connect() {
+        eprintln!("Failed to connect to MCP at {url}: {e}");
+        std::process::exit(1);
+    }
+    client
+}
+
+fn format_nodes(data: &serde_json::Value, max: usize) {
+    let nodes = match data.as_array() {
+        Some(arr) => arr,
+        None => {
+            println!("No nodes found.");
+            return;
+        }
+    };
+
+    let total = nodes.len();
+    let showing = total.min(max);
+    println!("{}", "=".repeat(60));
+    println!("Found {total} nodes (showing {showing}):");
+    println!("{}", "=".repeat(60));
+
+    for node in nodes.iter().take(max) {
+        let name = node
+            .get("name")
+            .and_then(|v| v.as_str())
+            .unwrap_or("(unnamed)");
+        let labels = node
+            .get("labels")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|l| l.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            })
+            .unwrap_or_default();
+        let uuid = node
+            .get("uuid")
+            .and_then(|v| v.as_str())
+            .map(|u| &u[..8.min(u.len())])
+            .unwrap_or("");
+        let summary = node
+            .get("summary")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        let created = node
+            .get("created_at")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+
+        println!();
+        if labels.is_empty() {
+            println!("  {name} ({uuid})");
+        } else {
+            println!("  {name} [{labels}] ({uuid})");
+        }
+        if !summary.is_empty() {
+            println!("     {summary}");
+        }
+        if !created.is_empty() {
+            println!("     Created: {created}");
+        }
+    }
+
+    if total > max {
+        println!();
+        println!("... and {} more nodes", total - max);
+        println!("Use --max {total} to see all");
+    }
+}
+
+fn format_facts(data: &serde_json::Value, max: usize) {
+    let facts = match data.as_array() {
+        Some(arr) => arr,
+        None => {
+            println!("No facts found.");
+            return;
+        }
+    };
+
+    let total = facts.len();
+    let showing = total.min(max);
+    println!("{}", "=".repeat(60));
+    println!("Found {total} facts (showing {showing}):");
+    println!("{}", "=".repeat(60));
+
+    for fact in facts.iter().take(max) {
+        let name = fact
+            .get("name")
+            .and_then(|v| v.as_str())
+            .unwrap_or("(unnamed)");
+        let description = fact
+            .get("fact")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        let uuid = fact
+            .get("uuid")
+            .and_then(|v| v.as_str())
+            .map(|u| &u[..8.min(u.len())])
+            .unwrap_or("");
+        let created = fact
+            .get("created_at")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        let invalid = fact.get("invalid_at").and_then(|v| v.as_str());
+        let valid_mark = if invalid.is_some() {
+            " [invalid]"
+        } else {
+            ""
+        };
+
+        println!();
+        println!("  {name} ({uuid}){valid_mark}");
+        if !description.is_empty() {
+            println!("     {description}");
+        }
+        if !created.is_empty() {
+            println!("     Created: {created}");
+        }
+    }
+
+    if total > max {
+        println!();
+        println!("... and {} more facts", total - max);
+        println!("Use --max {total} to see all");
+    }
+}
+
 fn main() {
     tracing_subscriber::fmt()
         .with_env_filter(
@@ -109,43 +249,60 @@ fn main() {
             name,
             body,
             file,
-            source,
+            format,
             source_description,
         } => {
             let content = match (body, file) {
                 (Some(b), _) => b,
                 (_, Some(path)) => {
-                    std::fs::read_to_string(&path).unwrap_or_else(|e| {
-                        eprintln!("Error reading {}: {e}", path.display());
-                        std::process::exit(1);
-                    })
+                    if path.to_str() == Some("-") {
+                        use std::io::Read;
+                        let mut buf = String::new();
+                        std::io::stdin()
+                            .read_to_string(&mut buf)
+                            .unwrap_or_else(|e| {
+                                eprintln!("Error reading stdin: {e}");
+                                std::process::exit(1);
+                            });
+                        buf
+                    } else {
+                        std::fs::read_to_string(&path).unwrap_or_else(|e| {
+                            eprintln!("Error reading {}: {e}", path.display());
+                            std::process::exit(1);
+                        })
+                    }
                 }
                 (None, None) => {
-                    // Read from stdin
                     use std::io::Read;
                     let mut buf = String::new();
-                    std::io::stdin().read_to_string(&mut buf).unwrap_or_else(|e| {
-                        eprintln!("Error reading stdin: {e}");
-                        std::process::exit(1);
-                    });
+                    std::io::stdin()
+                        .read_to_string(&mut buf)
+                        .unwrap_or_else(|e| {
+                            eprintln!("Error reading stdin: {e}");
+                            std::process::exit(1);
+                        });
                     buf
                 }
             };
 
-            let mut client = AstrolabeClient::new(Some(&cli.mcp_url));
-            if let Err(e) = client.connect() {
-                eprintln!("Failed to connect to MCP: {e}");
-                std::process::exit(1);
-            }
-
-            match client.ingest(&name, &content, &source, &source_description, Some(&cli.group)) {
+            let client = connect_client(&cli.url);
+            match client.ingest(
+                &name,
+                &content,
+                &format,
+                &source_description,
+                Some(&cli.group),
+            ) {
                 Ok(result) => {
                     if result.is_error {
                         eprintln!("Ingest error: {}", result.data);
                         std::process::exit(1);
                     }
                     println!("Ingested: {name}");
-                    println!("{}", serde_json::to_string_pretty(&result.data).unwrap_or_default());
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(&result.data).unwrap_or_default()
+                    );
                 }
                 Err(e) => {
                     eprintln!("Ingest failed: {e}");
@@ -154,39 +311,58 @@ fn main() {
             }
         }
 
-        Commands::Search { query } => {
-            let mut client = AstrolabeClient::new(Some(&cli.mcp_url));
-            if let Err(e) = client.connect() {
-                eprintln!("Failed to connect to MCP: {e}");
-                std::process::exit(1);
+        Commands::Query {
+            query,
+            nodes,
+            facts,
+            max,
+            json,
+        } => {
+            // Default: search both unless one flag is specified
+            let search_nodes = !facts || nodes;
+            let search_facts = !nodes || facts;
+
+            let client = connect_client(&cli.url);
+
+            let mut json_output = serde_json::Map::new();
+
+            if search_nodes {
+                match client.search_nodes(&query, Some(&cli.group), Some(max)) {
+                    Ok(result) => {
+                        if json {
+                            json_output.insert("nodes".to_string(), result.data.clone());
+                        } else {
+                            format_nodes(&result.data, max);
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("Node search failed: {e}");
+                    }
+                }
             }
 
-            match client.search_nodes(&query, Some(&cli.group), None) {
-                Ok(result) => {
-                    println!("{}", serde_json::to_string_pretty(&result.data).unwrap_or_default());
-                }
-                Err(e) => {
-                    eprintln!("Search failed: {e}");
-                    std::process::exit(1);
+            if search_facts {
+                match client.search_facts(&query, Some(&cli.group), Some(max)) {
+                    Ok(result) => {
+                        if json {
+                            json_output.insert("facts".to_string(), result.data.clone());
+                        } else {
+                            println!();
+                            format_facts(&result.data, max);
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("Facts search failed: {e}");
+                    }
                 }
             }
-        }
 
-        Commands::Facts { query } => {
-            let mut client = AstrolabeClient::new(Some(&cli.mcp_url));
-            if let Err(e) = client.connect() {
-                eprintln!("Failed to connect to MCP: {e}");
-                std::process::exit(1);
-            }
-
-            match client.search_facts(&query, Some(&cli.group), None) {
-                Ok(result) => {
-                    println!("{}", serde_json::to_string_pretty(&result.data).unwrap_or_default());
-                }
-                Err(e) => {
-                    eprintln!("Facts search failed: {e}");
-                    std::process::exit(1);
-                }
+            if json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::Value::Object(json_output))
+                        .unwrap_or_default()
+                );
             }
         }
 
@@ -220,13 +396,11 @@ fn main() {
                 eprintln!("Warning: processor output failed validation");
             }
 
-            // Build envelope
             let env = envelope::build_envelope(&result);
             println!("Processed: {}", env.title);
             println!("Envelope ID: {}", env.envelope_id);
             println!("Hash: {}", env.post_sanitization_hash);
 
-            // Write to quarantine if dir specified
             if let Some(dir) = quarantine_dir {
                 match envelope::write_to_quarantine(&env, &dir) {
                     Ok(path) => println!("Quarantined: {}", path.display()),
@@ -234,15 +408,9 @@ fn main() {
                 }
             }
 
-            // Optionally ingest directly
             if ingest {
                 let args = EnvelopeBuilder::build_ingest_args(&env);
-                let mut client = AstrolabeClient::new(Some(&cli.mcp_url));
-                if let Err(e) = client.connect() {
-                    eprintln!("Failed to connect to MCP: {e}");
-                    std::process::exit(1);
-                }
-
+                let client = connect_client(&cli.url);
                 match client.ingest(
                     &args.name,
                     &args.episode_body,
@@ -264,8 +432,10 @@ fn main() {
                 }
             }
 
-            // Print envelope JSON
-            println!("\n{}", serde_json::to_string_pretty(&env).unwrap_or_default());
+            println!(
+                "\n{}",
+                serde_json::to_string_pretty(&env).unwrap_or_default()
+            );
         }
     }
 }
