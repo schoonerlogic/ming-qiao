@@ -23,7 +23,7 @@ static ENGAGEMENT_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"(?i)([\d,.]+[KkMm]?)\s+(likes?|replies?|reposts?|retweets?|bookmarks?)").unwrap()
 });
 static URL_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"https?://[^\s<>\"']+").unwrap());
+    LazyLock::new(|| Regex::new(r#"https?://[^\s<>"']+"#).unwrap());
 static ARXIV_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"(?i)arxiv\.org/abs/(\d{4}\.\d{4,5})").unwrap());
 static GITHUB_RE: LazyLock<Regex> =
