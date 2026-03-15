@@ -15,10 +15,16 @@ thiserror = "1"
 tracing = "0.1"
 regex = "1"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "blocking"] }
-tokio = { version = "1", features = ["fs", "io-util"] }
+tokio = { version = "1", features = ["fs", "io-util", "rt-multi-thread", "macros"] }
 quick-xml = "0.37"
 base64 = "0.22"
 url = "2"
+clap = { version = "4", features = ["derive"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[[bin]]
+name = "astrolabe"
+path = "src/bin/astrolabe.rs"
 
 [dev-dependencies]
 tempfile = "3"
