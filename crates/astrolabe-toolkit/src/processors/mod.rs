@@ -1,15 +1,12 @@
 //! Concrete processor implementations for different artifact types.
-//!
-//! Each processor handles a specific source type and transforms
-//! [`RawArtifact`]s into structured [`ProcessorResult`]s.
 
-pub mod arxiv_url;
 pub mod arxiv_pdf;
+pub mod arxiv_url;
 pub mod pdf_generic;
 pub mod web_article;
 pub mod x_post;
 
-use crate::processor::{ArtifactProcessor, ProcessorResult, ProcessorError, RawArtifact};
+use crate::processor::{ArtifactProcessor, ProcessorError, ProcessorResult, RawArtifact};
 
 /// Registry of all available processors.
 pub struct ProcessorRegistry {
@@ -31,7 +28,7 @@ impl ProcessorRegistry {
     }
 
     /// Find the first processor that can handle this artifact.
-    pub fn find_processor(&self, artifact: &RawArtifact) -> Option<&(dyn ArtifactProcessor + Send + Sync)> {
+    pub fn find_processor(&self, artifact: &RawArtifact) -> Option<&dyn ArtifactProcessor> {
         self.processors
             .iter()
             .find(|p| p.can_process(artifact))
