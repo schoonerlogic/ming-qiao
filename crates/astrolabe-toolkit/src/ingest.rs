@@ -177,14 +177,16 @@ impl AstrolabeClient {
         &self,
         query: &str,
         group_id: Option<&str>,
+        max_nodes: Option<usize>,
     ) -> Result<McpToolResult, IngestError> {
-        self.call_tool(
-            "search_nodes",
-            serde_json::json!({
-                "query": query,
-                "group_ids": [group_id.unwrap_or(DEFAULT_GROUP)],
-            }),
-        )
+        let mut args = serde_json::json!({
+            "query": query,
+            "group_ids": [group_id.unwrap_or(DEFAULT_GROUP)],
+        });
+        if let Some(max) = max_nodes {
+            args["max_nodes"] = serde_json::json!(max);
+        }
+        self.call_tool("search_nodes", args)
     }
 
     /// Search facts in the knowledge graph.
@@ -192,14 +194,16 @@ impl AstrolabeClient {
         &self,
         query: &str,
         group_id: Option<&str>,
+        max_facts: Option<usize>,
     ) -> Result<McpToolResult, IngestError> {
-        self.call_tool(
-            "search_memory_facts",
-            serde_json::json!({
-                "query": query,
-                "group_ids": [group_id.unwrap_or(DEFAULT_GROUP)],
-            }),
-        )
+        let mut args = serde_json::json!({
+            "query": query,
+            "group_ids": [group_id.unwrap_or(DEFAULT_GROUP)],
+        });
+        if let Some(max) = max_facts {
+            args["max_facts"] = serde_json::json!(max);
+        }
+        self.call_tool("search_memory_facts", args)
     }
 }
 

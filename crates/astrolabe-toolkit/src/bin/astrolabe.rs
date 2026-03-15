@@ -161,7 +161,7 @@ fn main() {
                 std::process::exit(1);
             }
 
-            match client.search_nodes(&query, Some(&cli.group)) {
+            match client.search_nodes(&query, Some(&cli.group), None) {
                 Ok(result) => {
                     println!("{}", serde_json::to_string_pretty(&result.data).unwrap_or_default());
                 }
@@ -179,7 +179,7 @@ fn main() {
                 std::process::exit(1);
             }
 
-            match client.search_facts(&query, Some(&cli.group)) {
+            match client.search_facts(&query, Some(&cli.group), None) {
                 Ok(result) => {
                     println!("{}", serde_json::to_string_pretty(&result.data).unwrap_or_default());
                 }
