@@ -1,3 +1,7 @@
+[workspace]
+members = [".", "crates/astrolabe-toolkit"]
+resolver = "2"
+
 [package]
 name = "ming-qiao"
 version = "0.1.0"

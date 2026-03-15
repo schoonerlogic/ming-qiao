@@ -38,9 +38,16 @@ Every agent MUST:
 2. Read active threads     — GET /api/threads
 3. Read .agent-locks.json  — Check for file locks
 4. Verify no conflicts     — If conflict exists, STOP and coordinate
-5. Announce your intent    — POST /api/threads (message to council)
-6. Proceed with task
+5. Proceed with task
 ```
+
+**IMPORTANT — No automatic broadcasts:** Do NOT send a status message to ming-qiao
+on session start. Status broadcasts create feedback loops when multiple agents wake
+and broadcast simultaneously. Only send messages when you have:
+- A response to a `request`-intent message
+- A substantive question, blocker, or decision to communicate
+- Completion of assigned work that another agent is waiting on
+- An end-of-session summary after doing **substantive work** (not just reading inbox)
 
 ---
 
@@ -225,7 +232,7 @@ Refs: ming-qiao#12
 1. **Never force push** to any shared branch
 2. **Never edit** another agent's active work without coordination
 3. **Always check** your ming-qiao inbox before starting
-4. **Always post** a status update to ming-qiao when finishing
+4. **Post a summary** to ming-qiao when finishing **substantive work** (not empty status)
 5. **When uncertain**, escalate rather than guess
 
 <!-- Content merged from CLAUDE.md on 2026-02-17 -->

@@ -1,0 +1,25 @@
+[package]
+name = "astrolabe-toolkit"
+version = "0.1.0"
+edition = "2021"
+description = "ASTROLABE artifact processing toolkit — ingest pipeline and processors"
+license = "MIT"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+chrono = { version = "0.4", features = ["serde"] }
+sha2 = "0.10"
+hex = "0.4"
+thiserror = "1"
+tracing = "0.1"
+regex = "1"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+tokio = { version = "1", features = ["fs", "io-util"] }
+quick-xml = "0.37"
+base64 = "0.22"
+url = "2"
+
+[dev-dependencies]
+tempfile = "3"
+tokio = { version = "1", features = ["full", "test-util"] }
