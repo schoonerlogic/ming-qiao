@@ -13,3 +13,4 @@
 pub mod dedup;
 pub mod envelope;
 pub mod processor;
+pub mod processors;
