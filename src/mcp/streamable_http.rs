@@ -1,24 +1,128 @@
 //! MCP Streamable HTTP transport via rmcp crate
 //!
-//! Replaces the hand-rolled transport with rmcp's `StreamableHttpService`.
 //! Tools are defined using rmcp's `#[tool]` macro and `ServerHandler` trait.
+//! Push delivery: JetStream → PushBroker → Peer.notify_logging_message() → SSE.
 
 use std::future::Future;
 use std::sync::Arc;
+use std::collections::HashMap;
 
 use rmcp::{
-    ServerHandler,
+    RoleServer, ServerHandler,
     handler::server::{router::tool::ToolRouter, tool::{Parameters, Extension}},
-    model::{ServerCapabilities, ServerInfo},
+    model::{ServerCapabilities, ServerInfo, LoggingLevel, LoggingMessageNotificationParam},
     schemars, tool, tool_router,
     transport::streamable_http_server::{
         StreamableHttpServerConfig,
         tower::StreamableHttpService,
     },
+    Peer,
 };
 use serde::Deserialize;
+use tokio::sync::{broadcast, RwLock};
+use tracing::{info, warn, debug};
 
 use crate::state::AppState;
+
+// ============================================================================
+// PushBroker — bridges JetStream messages to MCP SSE push
+// ============================================================================
+
+/// Event published to agents via broadcast channels.
+#[derive(Clone, Debug)]
+pub struct PushEvent {
+    pub from: String,
+    pub subject: String,
+    pub intent: String,
+    pub message_id: String,
+}
+
+/// Manages per-agent broadcast channels and peer handles for push delivery.
+pub struct PushBroker {
+    /// Per-agent broadcast senders (JetStream ingester writes here)
+    senders: RwLock<HashMap<String, broadcast::Sender<PushEvent>>>,
+    /// Per-agent Peer handles (captured on first tool call, used for push)
+    peers: RwLock<HashMap<String, Peer<RoleServer>>>,
+}
+
+impl PushBroker {
+    pub fn new() -> Self {
+        Self {
+            senders: RwLock::new(HashMap::new()),
+            peers: RwLock::new(HashMap::new()),
+        }
+    }
+
+    /// Subscribe to push events for an agent. Creates channel if needed.
+    pub async fn subscribe(&self, agent_id: &str) -> broadcast::Receiver<PushEvent> {
+        let mut senders = self.senders.write().await;
+        let tx = senders.entry(agent_id.to_string())
+            .or_insert_with(|| broadcast::channel(64).0);
+        tx.subscribe()
+    }
+
+    /// Publish a push event to an agent's channel.
+    pub async fn publish(&self, agent_id: &str, event: PushEvent) {
+        let senders = self.senders.read().await;
+        if let Some(tx) = senders.get(agent_id) {
+            match tx.send(event) {
+                Ok(n) => debug!("PushBroker: delivered to {} ({} receivers)", agent_id, n),
+                Err(_) => debug!("PushBroker: no receivers for {}", agent_id),
+            }
+        }
+    }
+
+    /// Register a peer handle for an agent. Starts the push listener task.
+    pub async fn register_peer(&self, agent_id: &str, peer: Peer<RoleServer>) {
+        // Store the peer
+        self.peers.write().await.insert(agent_id.to_string(), peer.clone());
+
+        // Subscribe to push events for this agent
+        let mut rx = self.subscribe(agent_id).await;
+        let agent = agent_id.to_string();
+
+        // Spawn background task that forwards push events → peer notifications
+        tokio::spawn(async move {
+            info!("Push listener started for agent={}", agent);
+            loop {
+                match rx.recv().await {
+                    Ok(event) => {
+                        let data = serde_json::json!({
+                            "type": "new_message",
+                            "from": event.from,
+                            "subject": event.subject,
+                            "intent": event.intent,
+                            "message_id": event.message_id,
+                        });
+                        let param = LoggingMessageNotificationParam {
+                            level: LoggingLevel::Info,
+                            logger: Some("ming-qiao".into()),
+                            data,
+                        };
+                        if let Err(e) = peer.notify_logging_message(param).await {
+                            warn!("Push notification failed for {}: {}", agent, e);
+                            break; // Peer disconnected
+                        }
+                        info!("Push delivered to {}: {} re: {}", agent, event.from, event.subject);
+                    }
+                    Err(broadcast::error::RecvError::Lagged(n)) => {
+                        warn!("Push listener lagged {} events for {}", n, agent);
+                    }
+                    Err(broadcast::error::RecvError::Closed) => {
+                        info!("Push channel closed for {}", agent);
+                        break;
+                    }
+                }
+            }
+            info!("Push listener ended for agent={}", agent);
+        });
+    }
+
+    /// Check if a peer is registered for an agent.
+    pub async fn has_peer(&self, agent_id: &str) -> bool {
+        self.peers.read().await.contains_key(agent_id)
+    }
+}
 
 // ============================================================================
 // Tool parameter types
@@ -86,16 +190,14 @@ fn default_true() -> bool { true }
 fn default_limit() -> usize { 10 }
 
 // ============================================================================
-// Helper: call existing tool registry and extract text result
+// Helpers
 // ============================================================================
 
-/// Resolve agent ID from HTTP request parts injected by rmcp into extensions.
-fn resolve_agent_from_parts(parts: &http::request::Parts, state: &AppState) -> Option<String> {
+fn resolve_agent_from_parts(parts: &http::request::Parts) -> Option<String> {
     let auth = parts.headers.get("authorization")?.to_str().ok()?;
     let token = auth.strip_prefix("Bearer ")?;
-    // Parse agent name from token format: mq-{agent}-{hash}
     if token.starts_with("mq-") {
-        let rest = &token[3..]; // Skip "mq-"
+        let rest = &token[3..];
         if let Some(dash_pos) = rest.find('-') {
             return Some(rest[..dash_pos].to_string());
         }
@@ -125,6 +227,8 @@ async fn call_tool(state: &AppState, tool_name: &str, args: serde_json::Value, a
 pub struct MingQiaoMcpHandler {
     state: AppState,
     agent_id: String,
+    /// Whether we've captured the peer for push delivery
+    peer_registered: Arc<tokio::sync::Mutex<bool>>,
     tool_router: ToolRouter<Self>,
 }
 
@@ -137,30 +241,49 @@ impl std::fmt::Debug for MingQiaoMcpHandler {
 }
 
 impl MingQiaoMcpHandler {
-    pub fn new(state: AppState, agent_id: String) -> Self {
+    pub fn new(state: AppState) -> Self {
         Self {
             state,
-            agent_id,
+            agent_id: "unknown".to_string(),
+            peer_registered: Arc::new(tokio::sync::Mutex::new(false)),
             tool_router: Self::tool_router(),
         }
     }
 
-    /// Resolve agent ID from HTTP request parts or fall back to stored agent_id.
     fn resolve_agent(&self, parts: Option<&http::request::Parts>) -> String {
         if let Some(parts) = parts {
-            if let Some(agent) = resolve_agent_from_parts(parts, &self.state) {
+            if let Some(agent) = resolve_agent_from_parts(parts) {
                 return agent;
             }
         }
         self.agent_id.clone()
+    }
+
+    /// Capture the Peer handle on first tool call for push delivery.
+    async fn maybe_register_peer(&self, agent_id: &str, peer: &Peer<RoleServer>) {
+        let mut registered = self.peer_registered.lock().await;
+        if !*registered {
+            let broker = self.state.push_broker();
+            if !broker.has_peer(agent_id).await {
+                broker.register_peer(agent_id, peer.clone()).await;
+                info!("Captured peer for agent={} — push delivery active", agent_id);
+            }
+            *registered = true;
+        }
     }
 }
 
 #[tool_router]
 impl MingQiaoMcpHandler {
     #[tool(description = "Send a message to another agent")]
-    async fn send_message(&self, Extension(parts): Extension<http::request::Parts>, Parameters(p): Parameters<SendMessageParams>) -> String {
+    async fn send_message(
+        &self,
+        peer: Peer<RoleServer>,
+        Extension(parts): Extension<http::request::Parts>,
+        Parameters(p): Parameters<SendMessageParams>,
+    ) -> String {
         let agent = self.resolve_agent(Some(&parts));
+        self.maybe_register_peer(&agent, &peer).await;
         call_tool(&self.state, "send_message", serde_json::json!({
             "to": p.to, "subject": p.subject, "content": p.content,
             "intent": p.intent, "priority": p.priority, "thread_id": p.thread_id,
@@ -168,32 +291,56 @@ impl MingQiaoMcpHandler {
     }
 
     #[tool(description = "Check inbox for new messages")]
-    async fn check_messages(&self, Extension(parts): Extension<http::request::Parts>, Parameters(p): Parameters<CheckMessagesParams>) -> String {
+    async fn check_messages(
+        &self,
+        peer: Peer<RoleServer>,
+        Extension(parts): Extension<http::request::Parts>,
+        Parameters(p): Parameters<CheckMessagesParams>,
+    ) -> String {
         let agent = self.resolve_agent(Some(&parts));
+        self.maybe_register_peer(&agent, &peer).await;
         call_tool(&self.state, "check_messages", serde_json::json!({
             "unread_only": p.unread_only, "from_agent": p.from_agent, "limit": p.limit,
         }), &agent).await
     }
 
     #[tool(description = "Mark messages as read/acknowledged. Call after processing messages.")]
-    async fn acknowledge_messages(&self, Extension(parts): Extension<http::request::Parts>, Parameters(p): Parameters<AcknowledgeMessagesParams>) -> String {
+    async fn acknowledge_messages(
+        &self,
+        peer: Peer<RoleServer>,
+        Extension(parts): Extension<http::request::Parts>,
+        Parameters(p): Parameters<AcknowledgeMessagesParams>,
+    ) -> String {
         let agent = self.resolve_agent(Some(&parts));
+        self.maybe_register_peer(&agent, &peer).await;
         call_tool(&self.state, "acknowledge_messages", serde_json::json!({
             "message_id": p.message_id,
         }), &agent).await
     }
 
     #[tool(description = "Read all messages in a thread")]
-    async fn read_thread(&self, Extension(parts): Extension<http::request::Parts>, Parameters(p): Parameters<ReadThreadParams>) -> String {
+    async fn read_thread(
+        &self,
+        peer: Peer<RoleServer>,
+        Extension(parts): Extension<http::request::Parts>,
+        Parameters(p): Parameters<ReadThreadParams>,
+    ) -> String {
         let agent = self.resolve_agent(Some(&parts));
+        self.maybe_register_peer(&agent, &peer).await;
         call_tool(&self.state, "read_thread", serde_json::json!({
             "thread_id": p.thread_id,
         }), &agent).await
     }
 
     #[tool(description = "Reply to an existing thread")]
-    async fn reply_to_thread(&self, Extension(parts): Extension<http::request::Parts>, Parameters(p): Parameters<ReplyToThreadParams>) -> String {
+    async fn reply_to_thread(
+        &self,
+        peer: Peer<RoleServer>,
+        Extension(parts): Extension<http::request::Parts>,
+        Parameters(p): Parameters<ReplyToThreadParams>,
+    ) -> String {
         let agent = self.resolve_agent(Some(&parts));
+        self.maybe_register_peer(&agent, &peer).await;
         call_tool(&self.state, "reply_to_thread", serde_json::json!({
             "thread_id": p.thread_id, "content": p.content,
             "intent": p.intent, "priority": p.priority,
@@ -201,8 +348,13 @@ impl MingQiaoMcpHandler {
     }
 
     #[tool(description = "List all threads")]
-    async fn list_threads(&self, Extension(parts): Extension<http::request::Parts>) -> String {
+    async fn list_threads(
+        &self,
+        peer: Peer<RoleServer>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> String {
         let agent = self.resolve_agent(Some(&parts));
+        self.maybe_register_peer(&agent, &peer).await;
         call_tool(&self.state, "list_threads", serde_json::json!({}), &agent).await
     }
 }
@@ -221,10 +373,9 @@ impl ServerHandler for MingQiaoMcpHandler {
 // Axum integration
 // ============================================================================
 
-/// Create the StreamableHttpService for nesting under `/mcp` in Axum.
 pub fn create_mcp_service(state: AppState) -> StreamableHttpService<MingQiaoMcpHandler> {
     StreamableHttpService::new(
-        move || Ok(MingQiaoMcpHandler::new(state.clone(), "unknown".to_string())),
+        move || Ok(MingQiaoMcpHandler::new(state.clone())),
         Default::default(),
         StreamableHttpServerConfig {
             stateful_mode: true,
@@ -234,17 +385,26 @@ pub fn create_mcp_service(state: AppState) -> StreamableHttpService<MingQiaoMcpH
 }
 
 // ============================================================================
-// Backward compat stubs (for AppState and handlers.rs references)
+// Backward compat stubs (for AppState references)
 // ============================================================================
-
-use std::collections::HashMap;
-use tokio::sync::RwLock;
 
 pub type SessionStore = Arc<RwLock<HashMap<String, ()>>>;
 pub fn new_session_store() -> SessionStore { Arc::new(RwLock::new(HashMap::new())) }
 pub struct McpSession;
 pub struct SseEvent;
 
+/// Push a message notification via the PushBroker.
+/// Called from HTTP handlers when a message is created.
 pub async fn push_message_notification(
-    _sessions: &SessionStore, _to: &str, _eid: &str, _from: &str, _subj: &str, _intent: &str,
-) {}
+    _sessions: &SessionStore,
+    to_agent: &str,
+    message_id: &str,
+    from: &str,
+    subject: &str,
+    intent: &str,
+) {
+    // This stub is called from handlers.rs — the real push goes through PushBroker.
+    // We can't access AppState here (it's not passed), so we'll wire PushBroker
+    // directly in the handler. For now, log that the old path was called.
+    debug!("push_message_notification stub called for {} (use PushBroker instead)", to_agent);
+}

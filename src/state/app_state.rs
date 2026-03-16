@@ -75,6 +75,9 @@ struct AppStateInner {
 
     /// MCP Streamable HTTP session store (Phase 2)
     mcp_sessions: crate::mcp::streamable_http::SessionStore,
+
+    /// Push broker for JetStream → MCP SSE delivery
+    push_broker: Arc<crate::mcp::streamable_http::PushBroker>,
 }
 
 impl AppState {
@@ -227,6 +230,7 @@ impl AppState {
                 keyring,
                 nonce_registry,
                 mcp_sessions: crate::mcp::streamable_http::new_session_store(),
+                push_broker: Arc::new(crate::mcp::streamable_http::PushBroker::new()),
             }),
         }
     }
@@ -375,6 +379,11 @@ impl AppState {
     /// Get the MCP Streamable HTTP session store.
     pub fn mcp_sessions(&self) -> &crate::mcp::streamable_http::SessionStore {
         &self.inner.mcp_sessions
+    }
+
+    /// Get the push broker for JetStream → MCP SSE delivery.
+    pub fn push_broker(&self) -> &crate::mcp::streamable_http::PushBroker {
+        &self.inner.push_broker
     }
 }
 

@@ -657,14 +657,15 @@ pub async fn create_thread(
         }
     }
 
-    // Push to connected Streamable HTTP agents (SSE — metadata only, Ogma finding #3)
-    crate::mcp::streamable_http::push_message_notification(
-        state.mcp_sessions(),
+    // Push to connected Streamable HTTP agents via PushBroker → Peer notification
+    state.push_broker().publish(
         &sse_to,
-        &event_id.to_string(),
-        &sse_from,
-        &sse_subject,
-        &sse_intent,
+        crate::mcp::streamable_http::PushEvent {
+            from: sse_from,
+            subject: sse_subject,
+            intent: sse_intent,
+            message_id: event_id.to_string(),
+        },
     ).await;
 
     // Thread ID = provided thread_id or event ID (indexer convention when thread_id is None)
