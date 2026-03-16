@@ -132,9 +132,9 @@ async fn poll_agent_state(
     agent: &str,
     manifest_agent: &ManifestAgent,
     http_client: &reqwest::Client,
-) -> AgentState {
+) -> (AgentState, Option<chrono::DateTime<Utc>>) {
     if manifest_agent.skip_session_launch.unwrap_or(false) {
-        return AgentState::Skip;
+        return (AgentState::Skip, None);
     }
 
     let runtime = manifest_agent.runtime.as_deref().unwrap_or("claude");
@@ -165,7 +165,7 @@ async fn poll_agent_state(
     };
 
     if !alive {
-        return AgentState::Dead;
+        return (AgentState::Dead, None);
     }
 
     // Check last message timestamp from ming-qiao
@@ -220,16 +220,17 @@ async fn poll_agent_state(
     };
 
     if waiting_for_human {
-        return AgentState::Waiting;
+        return (AgentState::Waiting, last_activity);
     }
 
-    if age < IDLE_THRESHOLD {
+    let state = if age < IDLE_THRESHOLD {
         AgentState::Working
     } else if age < STUCK_THRESHOLD {
         AgentState::Idle
     } else {
         AgentState::Stuck
-    }
+    };
+    (state, last_activity)
 }
 
 // ============================================================================
@@ -384,9 +385,10 @@ async fn main() {
                 continue;
             }
 
-            let state = poll_agent_state(agent_name, manifest_agent, &http_client).await;
+            let (state, last_activity) = poll_agent_state(agent_name, manifest_agent, &http_client).await;
             let info = agent_infos.entry(agent_name.clone()).or_insert_with(AgentInfo::new);
             info.state = state;
+            info.last_activity = last_activity;
 
             match state {
                 AgentState::Skip => continue,
