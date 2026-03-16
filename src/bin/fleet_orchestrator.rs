@@ -142,19 +142,23 @@ async fn poll_agent_state(
     // Check if agent is alive via process table
     let alive = match runtime {
         "claude-desktop" | "manual" => true, // Can't check
-        _ => {
-            // Check cmux for workspace
-            let cmux_check = Command::new("cmux")
-                .args(["--json", "list-workspaces"])
-                .output();
-
-            match cmux_check {
-                Ok(output) if output.status.success() => {
-                    let stdout = String::from_utf8_lossy(&output.stdout);
-                    stdout.contains(&format!("\"title\" : \"{}\"", agent))
-                        || stdout.contains(&format!("\"title\":\"{}\"", agent))
-                }
-                _ => false,
+        rt => {
+            // Detect agent process via pgrep (cmux returns SIGPIPE from non-cmux contexts)
+            let pgrep_pattern = match rt {
+                "claude-code" | "claude" => "claude",
+                "kimi" => "kimi",
+                "opencode" => "opencode",
+                "codex" => "codex",
+                _ => "",
+            };
+            if pgrep_pattern.is_empty() {
+                false
+            } else {
+                Command::new("pgrep")
+                    .args(["-x", pgrep_pattern])
+                    .output()
+                    .map(|o| o.status.success())
+                    .unwrap_or(false)
             }
         }
     };
@@ -302,6 +306,7 @@ fn write_dashboard_state(
         timestamp: Utc::now().to_rfc3339(),
         agents: agents
             .iter()
+            .filter(|(name, _)| name.as_str() != "_server" && name.as_str() != "council-chamber")
             .map(|(name, info)| {
                 (
                     name.clone(),
