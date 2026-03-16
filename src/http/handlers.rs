@@ -296,9 +296,10 @@ pub async fn get_inbox(
     let total_count = filtered.len();
     filtered.truncate(query.limit as usize);
 
-    // Auto-advance read cursor to the highest event ID returned
-    // Skip if peek=true (hooks use peek to check without advancing)
-    if !query.peek && !filtered.is_empty() {
+    // Auto-advance read cursor — only when safe to do so.
+    // Skip if: peek=true, unread_only=false (browse shouldn't mark read),
+    // or more unread messages exist than were returned (would silently skip them).
+    if !query.peek && query.unread_only && !filtered.is_empty() && total_count <= query.limit as usize {
         if let Some(newest) = filtered.iter().max_by_key(|m| &m.id) {
             let newest_id = newest.id.clone();
             if let Err(e) = state.persistence().update_read_cursor(&agent, &newest_id).await {

@@ -159,6 +159,7 @@ subjects = ["am.events.mingqiao"]
 
 [watchers.filter]
 event_types = ["message_sent"]
+recipients = ["merlin"]
 
 [watchers.action]
 type = "system_notify"
