@@ -60,6 +60,7 @@ pub fn api_routes(state: AppState) -> Router<AppState> {
         )
         // Inbox (transitional: open reads, P1 adds per-agent auth)
         .route("/api/inbox/:agent", get(handlers::get_inbox))
+        .route("/api/inbox/:agent/ack", post(handlers::acknowledge_inbox))
         // Threads (read)
         .route("/api/threads", get(handlers::list_threads))
         .route("/api/thread/:id", get(handlers::get_thread))

@@ -87,6 +87,7 @@ impl ToolRegistry {
             "read_inbox" => self.tool_read_inbox(arguments, agent_id).await,
             "reply_to_thread" => self.tool_reply_to_thread(arguments, agent_id).await,
             "read_thread" => self.tool_read_thread(arguments, agent_id).await,
+            "acknowledge_messages" => self.tool_acknowledge_messages(arguments, agent_id).await,
             _ => Err(McpError::NotFound(format!("Tool not found: {}", name))),
         }
     }
@@ -107,6 +108,7 @@ impl ToolRegistry {
             Self::def_read_inbox(),
             Self::def_reply_to_thread(),
             Self::def_read_thread(),
+            Self::def_acknowledge_messages(),
         ]
     }
 
@@ -473,6 +475,23 @@ impl ToolRegistry {
         }
     }
 
+    fn def_acknowledge_messages() -> ToolDefinition {
+        ToolDefinition {
+            name: "acknowledge_messages".to_string(),
+            description: "Mark messages as read/acknowledged. Advances the read cursor to the specified message ID. Call this AFTER you have processed messages from check_messages.".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "message_id": {
+                        "type": "string",
+                        "description": "ID of the newest message to acknowledge (all messages up to and including this ID are marked read)"
+                    }
+                },
+                "required": ["message_id"]
+            }),
+        }
+    }
+
     // ========================================================================
     // Tool Implementations
     // ========================================================================
@@ -666,16 +685,10 @@ impl ToolRegistry {
         let total_count = messages.len();
         messages.truncate(limit);
 
-        // Auto-advance read cursor — only when safe to do so.
-        // Skip if: unread_only=false (browse shouldn't mark read),
-        // or more unread messages exist than were returned (would silently skip them).
-        if unread_only && !messages.is_empty() && total_count <= limit {
-            if let Some(newest) = messages.iter().max_by_key(|m| &m.id) {
-                if let Err(e) = self.state.persistence().update_read_cursor(agent_id, &newest.id).await {
-                    tracing::warn!("Failed to update read cursor for {}: {}", agent_id, e);
-                }
-            }
-        }
+        // Read cursor is NOT auto-advanced by check_messages.
+        // Agents must explicitly call acknowledge_messages after processing.
+        // This prevents the cursor race condition where reading advances past
+        // unprocessed messages.
 
         if messages.is_empty() {
             return Ok(CallToolResult::text(format!(
@@ -1409,6 +1422,28 @@ impl ToolRegistry {
             .unwrap(),
         ))
     }
+
+    async fn tool_acknowledge_messages(
+        &self,
+        args: Value,
+        agent_id: &str,
+    ) -> Result<CallToolResult, McpError> {
+        let message_id = args
+            .get("message_id")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| McpError::InvalidInput("'message_id' is required".to_string()))?;
+
+        self.state
+            .persistence()
+            .update_read_cursor(agent_id, message_id)
+            .await
+            .map_err(|e| McpError::Internal(format!("Failed to acknowledge: {}", e)))?;
+
+        Ok(CallToolResult::text(format!(
+            "Acknowledged messages up to {}. Cursor advanced for agent '{}'.",
+            message_id, agent_id
+        )))
+    }
 }
 
 #[cfg(test)]
@@ -1421,7 +1456,7 @@ mod tests {
         let registry = ToolRegistry::with_state(state);
         let tools = registry.list();
 
-        assert_eq!(tools.len(), 12);
+        assert_eq!(tools.len(), 13); // Was 12, now includes acknowledge_messages
 
         let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
         assert!(names.contains(&"send_message"));

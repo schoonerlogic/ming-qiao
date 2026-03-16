@@ -296,17 +296,11 @@ pub async fn get_inbox(
     let total_count = filtered.len();
     filtered.truncate(query.limit as usize);
 
-    // Auto-advance read cursor — only when safe to do so.
-    // Skip if: peek=true, unread_only=false (browse shouldn't mark read),
-    // or more unread messages exist than were returned (would silently skip them).
-    if !query.peek && query.unread_only && !filtered.is_empty() && total_count <= query.limit as usize {
-        if let Some(newest) = filtered.iter().max_by_key(|m| &m.id) {
-            let newest_id = newest.id.clone();
-            if let Err(e) = state.persistence().update_read_cursor(&agent, &newest_id).await {
-                warn!("Failed to update read cursor for {}: {}", agent, e);
-            }
-        }
-    }
+    // Read cursor is NOT auto-advanced by inbox reads.
+    // Agents must explicitly call POST /api/inbox/{agent}/ack or the
+    // acknowledge_messages MCP tool after processing messages.
+    // This prevents the cursor race condition where non-agent readers
+    // (orchestrator, comms-check, hooks) silently advance the cursor.
 
     let messages: Vec<_> = filtered
         .into_iter()
@@ -330,6 +324,51 @@ pub async fn get_inbox(
         "unread_count": total_count,
         "total_count": total_count
     }))
+}
+
+// ============================================================================
+// Inbox Acknowledgment
+// ============================================================================
+
+#[derive(Debug, Deserialize)]
+pub struct AckRequest {
+    /// ID of the newest message to acknowledge. All messages up to and
+    /// including this ID are marked as read.
+    pub message_id: String,
+}
+
+/// Explicitly acknowledge messages up to a given ID.
+///
+/// This is the recommended way to advance the read cursor — agents call
+/// this after processing messages rather than relying on auto-advance.
+pub async fn acknowledge_inbox(
+    State(state): State<AppState>,
+    Path(agent): Path<String>,
+    Json(req): Json<AckRequest>,
+) -> impl IntoResponse {
+    match state
+        .persistence()
+        .update_read_cursor(&agent, &req.message_id)
+        .await
+    {
+        Ok(()) => (
+            StatusCode::OK,
+            Json(serde_json::json!({
+                "agent": agent,
+                "acknowledged_up_to": req.message_id,
+                "status": "ok"
+            })),
+        ),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({
+                "error": {
+                    "code": "ACK_FAILED",
+                    "message": format!("Failed to acknowledge: {}", e)
+                }
+            })),
+        ),
+    }
 }
 
 // ============================================================================
