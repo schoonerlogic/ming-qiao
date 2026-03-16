@@ -287,10 +287,18 @@ impl SystemNotifyAction {
         let title_escaped = self.title.replace('\\', "\\\\").replace('"', "\\\"");
         let subtitle_escaped = subtitle.replace('\\', "\\\\").replace('"', "\\\"");
 
+        // Use display alert (modal dialog, stays on screen) instead of
+        // display notification (banner that slides away and gets buried).
+        // giving up after 120 = auto-dismiss after 2 minutes if not clicked.
         let script = format!(
-            "display notification \"{}\" with title \"{}\" subtitle \"{}\"",
-            body_escaped, title_escaped, subtitle_escaped
+            "display alert \"{}\" message \"{}\" giving up after 120",
+            title_escaped, body_escaped
         );
+
+        // Also play a sound to get attention
+        let _ = tokio::process::Command::new("afplay")
+            .arg("/System/Library/Sounds/Submarine.aiff")
+            .spawn();
 
         match tokio::process::Command::new("osascript")
             .arg("-e")
