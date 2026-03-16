@@ -54,6 +54,7 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "rus
 # MCP protocol SDK (Streamable HTTP server transport)
 rmcp = { version = "0.2", features = ["server", "transport-streamable-http-server", "transport-worker", "macros"] }
 schemars = "0.8"
+http = "1"
 
 # SSE stream generation (Streamable HTTP MCP transport)
 async-stream = "0.3"

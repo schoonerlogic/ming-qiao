@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use rmcp::{
     ServerHandler,
-    handler::server::{router::tool::ToolRouter, tool::Parameters},
+    handler::server::{router::tool::ToolRouter, tool::{Parameters, Extension}},
     model::{ServerCapabilities, ServerInfo},
     schemars, tool, tool_router,
     transport::streamable_http_server::{
@@ -89,6 +89,20 @@ fn default_limit() -> usize { 10 }
 // Helper: call existing tool registry and extract text result
 // ============================================================================
 
+/// Resolve agent ID from HTTP request parts injected by rmcp into extensions.
+fn resolve_agent_from_parts(parts: &http::request::Parts, state: &AppState) -> Option<String> {
+    let auth = parts.headers.get("authorization")?.to_str().ok()?;
+    let token = auth.strip_prefix("Bearer ")?;
+    // Parse agent name from token format: mq-{agent}-{hash}
+    if token.starts_with("mq-") {
+        let rest = &token[3..]; // Skip "mq-"
+        if let Some(dash_pos) = rest.find('-') {
+            return Some(rest[..dash_pos].to_string());
+        }
+    }
+    None
+}
+
 async fn call_tool(state: &AppState, tool_name: &str, args: serde_json::Value, agent_id: &str) -> String {
     let registry = crate::mcp::tools::ToolRegistry::with_state(state.clone());
     match registry.call(tool_name, args, agent_id).await {
@@ -130,50 +144,66 @@ impl MingQiaoMcpHandler {
             tool_router: Self::tool_router(),
         }
     }
+
+    /// Resolve agent ID from HTTP request parts or fall back to stored agent_id.
+    fn resolve_agent(&self, parts: Option<&http::request::Parts>) -> String {
+        if let Some(parts) = parts {
+            if let Some(agent) = resolve_agent_from_parts(parts, &self.state) {
+                return agent;
+            }
+        }
+        self.agent_id.clone()
+    }
 }
 
 #[tool_router]
 impl MingQiaoMcpHandler {
     #[tool(description = "Send a message to another agent")]
-    async fn send_message(&self, Parameters(p): Parameters<SendMessageParams>) -> String {
+    async fn send_message(&self, Extension(parts): Extension<http::request::Parts>, Parameters(p): Parameters<SendMessageParams>) -> String {
+        let agent = self.resolve_agent(Some(&parts));
         call_tool(&self.state, "send_message", serde_json::json!({
             "to": p.to, "subject": p.subject, "content": p.content,
             "intent": p.intent, "priority": p.priority, "thread_id": p.thread_id,
-        }), &self.agent_id).await
+        }), &agent).await
     }
 
     #[tool(description = "Check inbox for new messages")]
-    async fn check_messages(&self, Parameters(p): Parameters<CheckMessagesParams>) -> String {
+    async fn check_messages(&self, Extension(parts): Extension<http::request::Parts>, Parameters(p): Parameters<CheckMessagesParams>) -> String {
+        let agent = self.resolve_agent(Some(&parts));
         call_tool(&self.state, "check_messages", serde_json::json!({
             "unread_only": p.unread_only, "from_agent": p.from_agent, "limit": p.limit,
-        }), &self.agent_id).await
+        }), &agent).await
     }
 
     #[tool(description = "Mark messages as read/acknowledged. Call after processing messages.")]
-    async fn acknowledge_messages(&self, Parameters(p): Parameters<AcknowledgeMessagesParams>) -> String {
+    async fn acknowledge_messages(&self, Extension(parts): Extension<http::request::Parts>, Parameters(p): Parameters<AcknowledgeMessagesParams>) -> String {
+        let agent = self.resolve_agent(Some(&parts));
         call_tool(&self.state, "acknowledge_messages", serde_json::json!({
             "message_id": p.message_id,
-        }), &self.agent_id).await
+        }), &agent).await
     }
 
     #[tool(description = "Read all messages in a thread")]
-    async fn read_thread(&self, Parameters(p): Parameters<ReadThreadParams>) -> String {
+    async fn read_thread(&self, Extension(parts): Extension<http::request::Parts>, Parameters(p): Parameters<ReadThreadParams>) -> String {
+        let agent = self.resolve_agent(Some(&parts));
         call_tool(&self.state, "read_thread", serde_json::json!({
             "thread_id": p.thread_id,
-        }), &self.agent_id).await
+        }), &agent).await
     }
 
     #[tool(description = "Reply to an existing thread")]
-    async fn reply_to_thread(&self, Parameters(p): Parameters<ReplyToThreadParams>) -> String {
+    async fn reply_to_thread(&self, Extension(parts): Extension<http::request::Parts>, Parameters(p): Parameters<ReplyToThreadParams>) -> String {
+        let agent = self.resolve_agent(Some(&parts));
         call_tool(&self.state, "reply_to_thread", serde_json::json!({
             "thread_id": p.thread_id, "content": p.content,
             "intent": p.intent, "priority": p.priority,
-        }), &self.agent_id).await
+        }), &agent).await
     }
 
     #[tool(description = "List all threads")]
-    async fn list_threads(&self) -> String {
-        call_tool(&self.state, "list_threads", serde_json::json!({}), &self.agent_id).await
+    async fn list_threads(&self, Extension(parts): Extension<http::request::Parts>) -> String {
+        let agent = self.resolve_agent(Some(&parts));
+        call_tool(&self.state, "list_threads", serde_json::json!({}), &agent).await
     }
 }
 
