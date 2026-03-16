@@ -5,11 +5,12 @@
 
 use axum::{
     middleware,
-    routing::{get, patch, post},
+    routing::{delete, get, patch, post},
     Router,
 };
 
 use crate::http::{auth, handlers, merlin, ws};
+use crate::mcp::streamable_http;
 use crate::state::AppState;
 
 /// Create the API router with all routes.
@@ -77,7 +78,11 @@ pub fn api_routes(state: AppState) -> Router<AppState> {
         // Search
         .route("/api/search", get(handlers::search))
         // Read cursors (for am-fleet comms)
-        .route("/api/cursors", get(handlers::get_cursors));
+        .route("/api/cursors", get(handlers::get_cursors))
+        // MCP Streamable HTTP transport (Phase 2)
+        .route("/mcp", post(streamable_http::handle_post)
+            .get(streamable_http::handle_get)
+            .delete(streamable_http::handle_delete));
 
     read_routes.merge(write_routes).merge(signed_routes)
 }

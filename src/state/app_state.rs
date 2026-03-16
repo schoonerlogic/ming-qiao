@@ -72,6 +72,9 @@ struct AppStateInner {
 
     /// Nonce registry for replay defense (120s TTL per Thales spec)
     nonce_registry: NonceRegistry,
+
+    /// MCP Streamable HTTP session store (Phase 2)
+    mcp_sessions: crate::mcp::streamable_http::SessionStore,
 }
 
 impl AppState {
@@ -223,6 +226,7 @@ impl AppState {
                 auth_config: RwLock::new(auth_config),
                 keyring,
                 nonce_registry,
+                mcp_sessions: crate::mcp::streamable_http::new_session_store(),
             }),
         }
     }
@@ -366,6 +370,11 @@ impl AppState {
     /// Get a reference to the nonce registry (RA-004).
     pub fn nonce_registry(&self) -> &NonceRegistry {
         &self.inner.nonce_registry
+    }
+
+    /// Get the MCP Streamable HTTP session store.
+    pub fn mcp_sessions(&self) -> &crate::mcp::streamable_http::SessionStore {
+        &self.inner.mcp_sessions
     }
 }
 

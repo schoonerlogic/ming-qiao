@@ -58,6 +58,19 @@ impl ToolRegistry {
         self.definitions.values().collect()
     }
 
+    /// List tool definitions as JSON (no state needed — for Streamable HTTP tools/list)
+    pub fn list_definitions() -> Value {
+        let tools: Vec<_> = Self::all_tools()
+            .into_iter()
+            .map(|t| serde_json::json!({
+                "name": t.name,
+                "description": t.description,
+                "inputSchema": t.input_schema,
+            }))
+            .collect();
+        serde_json::json!(tools)
+    }
+
     /// Get a reference to the shared application state
     pub fn state(&self) -> &AppState {
         &self.state

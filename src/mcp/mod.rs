@@ -8,6 +8,7 @@
 
 pub mod protocol;
 pub mod server;
+pub mod streamable_http;
 pub mod tools;
 
 pub use protocol::{JsonRpcRequest, JsonRpcResponse, McpError, McpErrorCode};

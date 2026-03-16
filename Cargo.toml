@@ -13,6 +13,10 @@ path = "src/main.rs"
 name = "fleet-orchestrator"
 path = "src/bin/fleet_orchestrator.rs"
 
+[[bin]]
+name = "mcp-test-harness"
+path = "src/bin/mcp_test_harness.rs"
+
 [lib]
 name = "ming_qiao"
 path = "src/lib.rs"
@@ -46,6 +50,13 @@ surrealdb = { version = "3", default-features = false, features = ["kv-mem", "pr
 
 # HTTP client (watcher webhooks)
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+
+# SSE stream generation (Streamable HTTP MCP transport)
+async-stream = "0.3"
+
+# CLI + error handling (mcp-test-harness, fleet-orchestrator)
+clap = { version = "4", features = ["derive"] }
+anyhow = "1"
 
 # Cryptographic signing — Security P0 (Ed25519 signed-event envelopes)
 ed25519-dalek = { version = "2", features = ["rand_core"] }
