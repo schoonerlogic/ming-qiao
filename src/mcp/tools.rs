@@ -559,6 +559,17 @@ impl ToolRegistry {
                 } else {
                     eprintln!("[ming-qiao] No NATS client — notification to '{}' skipped", msg.to);
                 }
+
+                // 5. Push to connected Streamable HTTP agents via PushBroker
+                self.state.push_broker().publish(
+                    &msg.to,
+                    crate::mcp::streamable_http::PushEvent {
+                        from: msg.from.clone(),
+                        subject: msg.subject.clone(),
+                        intent: format!("{:?}", msg.intent),
+                        message_id: event_id.clone(),
+                    },
+                ).await;
             }
         }
 
