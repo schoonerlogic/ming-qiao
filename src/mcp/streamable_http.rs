@@ -367,6 +367,36 @@ impl ServerHandler for MingQiaoMcpHandler {
             ..Default::default()
         }
     }
+
+    fn list_tools(
+        &self,
+        _request: Option<rmcp::model::PaginatedRequestParam>,
+        _context: rmcp::service::RequestContext<RoleServer>,
+    ) -> impl Future<Output = Result<rmcp::model::ListToolsResult, rmcp::Error>> + Send + '_ {
+        let tools = self.tool_router.list_all();
+        std::future::ready(Ok(rmcp::model::ListToolsResult {
+            tools,
+            next_cursor: None,
+        }))
+    }
+
+    fn call_tool(
+        &self,
+        request: rmcp::model::CallToolRequestParam,
+        context: rmcp::service::RequestContext<RoleServer>,
+    ) -> impl Future<Output = Result<rmcp::model::CallToolResult, rmcp::Error>> + Send + '_ {
+        let tool_context = rmcp::handler::server::tool::ToolCallContext {
+            request_context: context,
+            service: self,
+            name: request.name,
+            arguments: request.arguments,
+        };
+        async move {
+            self.tool_router.call(tool_context).await.map_err(|e| {
+                rmcp::Error::internal_error(e.to_string(), None)
+            })
+        }
+    }
 }
 
 // ============================================================================
