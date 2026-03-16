@@ -663,10 +663,13 @@ impl ToolRegistry {
 
         // Sort by timestamp (most recent first), then apply limit
         messages.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+        let total_count = messages.len();
         messages.truncate(limit);
 
-        // Auto-advance read cursor to the highest event ID returned
-        if !messages.is_empty() {
+        // Auto-advance read cursor — only when safe to do so.
+        // Skip if: unread_only=false (browse shouldn't mark read),
+        // or more unread messages exist than were returned (would silently skip them).
+        if unread_only && !messages.is_empty() && total_count <= limit {
             if let Some(newest) = messages.iter().max_by_key(|m| &m.id) {
                 if let Err(e) = self.state.persistence().update_read_cursor(agent_id, &newest.id).await {
                     tracing::warn!("Failed to update read cursor for {}: {}", agent_id, e);
