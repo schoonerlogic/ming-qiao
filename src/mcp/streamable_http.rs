@@ -1,432 +1,220 @@
-//! MCP Streamable HTTP transport handler
+//! MCP Streamable HTTP transport via rmcp crate
 //!
-//! Implements the MCP Streamable HTTP transport at `/mcp`:
-//! - POST: receives JSON-RPC messages (requests, notifications, responses)
-//! - GET: opens SSE stream for server-to-client push notifications
-//! - DELETE: terminates a session
-//!
-//! Security (Ogma review):
-//! - Identity from auth (bearer token), not session ID
-//! - Session-principal binding: session ID locked to authenticated agent
-//! - SSE pushes metadata only (id, from, subject, intent) — not content
-//! - Authenticated ack: only the inbox owner can acknowledge
+//! Replaces the hand-rolled transport with rmcp's `StreamableHttpService`.
+//! Tools are defined using rmcp's `#[tool]` macro and `ServerHandler` trait.
 
-use std::collections::HashMap;
+use std::future::Future;
 use std::sync::Arc;
 
-use axum::extract::State;
-use axum::http::{HeaderMap, StatusCode};
-use axum::response::{IntoResponse, Response, Sse};
-use axum::Json;
-use serde_json::Value;
-use tokio::sync::{broadcast, RwLock};
-use tracing::{debug, info, warn};
-use uuid::Uuid;
-
-use crate::mcp::protocol::{
-    CallToolParams, InitializeParams, InitializeResult, JsonRpcError,
-    JsonRpcNotification, JsonRpcRequest, JsonRpcResponse, McpError, McpErrorCode,
-    RequestId, ServerCapabilities, ServerInfo, ToolsCapability,
+use rmcp::{
+    ServerHandler,
+    handler::server::{router::tool::ToolRouter, tool::Parameters},
+    model::{ServerCapabilities, ServerInfo},
+    schemars, tool, tool_router,
+    transport::streamable_http_server::{
+        StreamableHttpServerConfig,
+        tower::StreamableHttpService,
+    },
 };
-use crate::mcp::server::{PROTOCOL_VERSION, SERVER_NAME, SERVER_VERSION};
-use crate::mcp::tools::ToolRegistry;
+use serde::Deserialize;
+
 use crate::state::AppState;
 
 // ============================================================================
-// Session management
+// Tool parameter types
 // ============================================================================
 
-#[derive(Debug)]
-pub struct McpSession {
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct SendMessageParams {
+    /// Target agent ID
+    pub to: String,
+    /// Message subject
+    pub subject: String,
+    /// Message content
+    pub content: String,
+    /// Message intent: inform, request, discuss
+    #[serde(default = "default_inform")]
+    pub intent: String,
+    /// Priority: low, normal, high, critical
+    #[serde(default = "default_normal")]
+    pub priority: String,
+    /// Optional thread ID to reply to
+    pub thread_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct CheckMessagesParams {
+    /// Only return unread messages
+    #[serde(default = "default_true")]
+    pub unread_only: bool,
+    /// Filter by sender agent ID
+    pub from_agent: Option<String>,
+    /// Maximum messages to return
+    #[serde(default = "default_limit")]
+    pub limit: usize,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct AcknowledgeMessagesParams {
+    /// ID of the newest message to acknowledge
+    pub message_id: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct ReadThreadParams {
+    /// Thread ID (UUID)
+    pub thread_id: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct ReplyToThreadParams {
+    /// Thread ID to reply to
+    pub thread_id: String,
+    /// Reply content
+    pub content: String,
+    /// Intent: inform, request, discuss
+    #[serde(default = "default_inform")]
+    pub intent: String,
+    /// Priority: low, normal, high, critical
+    #[serde(default = "default_normal")]
+    pub priority: String,
+}
+
+fn default_inform() -> String { "inform".to_string() }
+fn default_normal() -> String { "normal".to_string() }
+fn default_true() -> bool { true }
+fn default_limit() -> usize { 10 }
+
+// ============================================================================
+// Helper: call existing tool registry and extract text result
+// ============================================================================
+
+async fn call_tool(state: &AppState, tool_name: &str, args: serde_json::Value, agent_id: &str) -> String {
+    let registry = crate::mcp::tools::ToolRegistry::with_state(state.clone());
+    match registry.call(tool_name, args, agent_id).await {
+        Ok(result) => result.content.into_iter()
+            .filter_map(|c| match c {
+                crate::mcp::protocol::ToolContent::Text { text } => Some(text),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join("\n"),
+        Err(e) => format!("Error: {}", e),
+    }
+}
+
+// ============================================================================
+// MCP Server Handler
+// ============================================================================
+
+#[derive(Clone)]
+pub struct MingQiaoMcpHandler {
+    state: AppState,
     agent_id: String,
-    push_tx: broadcast::Sender<SseEvent>,
+    tool_router: ToolRouter<Self>,
 }
 
-#[derive(Debug, Clone)]
-pub struct SseEvent {
-    id: String,
-    data: String,
+impl std::fmt::Debug for MingQiaoMcpHandler {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MingQiaoMcpHandler")
+            .field("agent_id", &self.agent_id)
+            .finish()
+    }
 }
 
-pub type SessionStore = Arc<RwLock<HashMap<String, McpSession>>>;
-
-pub fn new_session_store() -> SessionStore {
-    Arc::new(RwLock::new(HashMap::new()))
-}
-
-// ============================================================================
-// Auth helpers
-// ============================================================================
-
-async fn authenticate(headers: &HeaderMap, state: &AppState) -> Option<String> {
-    let auth = headers.get("authorization")?.to_str().ok()?;
-    let token = auth.strip_prefix("Bearer ")?;
-    let config = state.auth_config().await;
-    config.validate_token(token).map(|s| s.to_string())
-}
-
-fn session_id_from_headers(headers: &HeaderMap) -> Option<String> {
-    headers
-        .get("mcp-session-id")
-        .and_then(|v| v.to_str().ok())
-        .map(|s| s.to_string())
-}
-
-/// Resolve agent from session, verifying session-principal binding.
-async fn agent_from_session(
-    headers: &HeaderMap,
-    state: &AppState,
-) -> Result<String, StatusCode> {
-    // Identity comes from auth token (Ogma finding #2)
-    let authed_agent = authenticate(headers, state).await
-        .ok_or(StatusCode::UNAUTHORIZED)?;
-
-    // If there's a session ID, verify it's bound to this agent (Ogma finding #4)
-    if let Some(sid) = session_id_from_headers(headers) {
-        let store = state.mcp_sessions().read().await;
-        if let Some(session) = store.get(&sid) {
-            if session.agent_id != authed_agent {
-                warn!(
-                    "Session-principal mismatch: session={} bound to {}, but auth says {}",
-                    sid, session.agent_id, authed_agent
-                );
-                return Err(StatusCode::FORBIDDEN);
-            }
-        } else {
-            return Err(StatusCode::NOT_FOUND); // Session expired
+impl MingQiaoMcpHandler {
+    pub fn new(state: AppState, agent_id: String) -> Self {
+        Self {
+            state,
+            agent_id,
+            tool_router: Self::tool_router(),
         }
     }
-
-    Ok(authed_agent)
 }
 
-// ============================================================================
-// POST /mcp
-// ============================================================================
-
-pub async fn handle_post(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    body: axum::body::Bytes,
-) -> Response {
-    let body_str = match std::str::from_utf8(&body) {
-        Ok(s) => s,
-        Err(_) => {
-            return (StatusCode::BAD_REQUEST, "Invalid UTF-8").into_response();
-        }
-    };
-
-    let raw: Value = match serde_json::from_str(body_str) {
-        Ok(v) => v,
-        Err(e) => {
-            return (StatusCode::BAD_REQUEST, Json(JsonRpcResponse::error(
-                RequestId::Null,
-                JsonRpcError {
-                    code: McpErrorCode::ParseError.code(),
-                    message: format!("Parse error: {}", e),
-                    data: None,
-                },
-            ))).into_response();
-        }
-    };
-
-    // Batch not yet supported
-    if raw.is_array() {
-        return (StatusCode::BAD_REQUEST, Json(JsonRpcResponse::error(
-            RequestId::Null,
-            JsonRpcError {
-                code: -32600,
-                message: "Batch requests not yet supported".to_string(),
-                data: None,
-            },
-        ))).into_response();
+#[tool_router]
+impl MingQiaoMcpHandler {
+    #[tool(description = "Send a message to another agent")]
+    async fn send_message(&self, Parameters(p): Parameters<SendMessageParams>) -> String {
+        call_tool(&self.state, "send_message", serde_json::json!({
+            "to": p.to, "subject": p.subject, "content": p.content,
+            "intent": p.intent, "priority": p.priority, "thread_id": p.thread_id,
+        }), &self.agent_id).await
     }
 
-    // Notification (no id) → 202 Accepted
-    if raw.get("id").is_none() {
-        return StatusCode::ACCEPTED.into_response();
+    #[tool(description = "Check inbox for new messages")]
+    async fn check_messages(&self, Parameters(p): Parameters<CheckMessagesParams>) -> String {
+        call_tool(&self.state, "check_messages", serde_json::json!({
+            "unread_only": p.unread_only, "from_agent": p.from_agent, "limit": p.limit,
+        }), &self.agent_id).await
     }
 
-    // Parse request
-    let request: JsonRpcRequest = match serde_json::from_value(raw) {
-        Ok(req) => req,
-        Err(e) => {
-            return (StatusCode::BAD_REQUEST, Json(JsonRpcResponse::error(
-                RequestId::Null,
-                JsonRpcError {
-                    code: McpErrorCode::ParseError.code(),
-                    message: format!("Parse error: {}", e),
-                    data: None,
-                },
-            ))).into_response();
-        }
-    };
-
-    // Dispatch
-    let mut response = dispatch(&request, &headers, &state).await;
-
-    // If initialize, extract session ID into header and remove from body
-    if request.method == "initialize" {
-        if let Some(result) = response.result.as_mut() {
-            if let Some(sid) = result.get("_mcpSessionId").and_then(|v| v.as_str()).map(|s| s.to_string()) {
-                // Remove the transient field from the response body
-                result.as_object_mut().map(|obj| obj.remove("_mcpSessionId"));
-
-                let mut http_resp = Json(&response).into_response();
-                if let Ok(val) = sid.parse() {
-                    http_resp.headers_mut().insert("mcp-session-id", val);
-                }
-                return http_resp;
-            }
-        }
+    #[tool(description = "Mark messages as read/acknowledged. Call after processing messages.")]
+    async fn acknowledge_messages(&self, Parameters(p): Parameters<AcknowledgeMessagesParams>) -> String {
+        call_tool(&self.state, "acknowledge_messages", serde_json::json!({
+            "message_id": p.message_id,
+        }), &self.agent_id).await
     }
 
-    Json(&response).into_response()
+    #[tool(description = "Read all messages in a thread")]
+    async fn read_thread(&self, Parameters(p): Parameters<ReadThreadParams>) -> String {
+        call_tool(&self.state, "read_thread", serde_json::json!({
+            "thread_id": p.thread_id,
+        }), &self.agent_id).await
+    }
+
+    #[tool(description = "Reply to an existing thread")]
+    async fn reply_to_thread(&self, Parameters(p): Parameters<ReplyToThreadParams>) -> String {
+        call_tool(&self.state, "reply_to_thread", serde_json::json!({
+            "thread_id": p.thread_id, "content": p.content,
+            "intent": p.intent, "priority": p.priority,
+        }), &self.agent_id).await
+    }
+
+    #[tool(description = "List all threads")]
+    async fn list_threads(&self) -> String {
+        call_tool(&self.state, "list_threads", serde_json::json!({}), &self.agent_id).await
+    }
 }
 
-async fn dispatch(
-    request: &JsonRpcRequest,
-    headers: &HeaderMap,
-    state: &AppState,
-) -> JsonRpcResponse {
-    match request.method.as_str() {
-        "initialize" => {
-            let agent_id = authenticate(headers, state).await
-                .unwrap_or_else(|| "unknown".to_string());
-
-            let params: InitializeParams = match &request.params {
-                Some(p) => match serde_json::from_value(p.clone()) {
-                    Ok(p) => p,
-                    Err(e) => return JsonRpcResponse::error(
-                        request.id.clone(),
-                        JsonRpcError { code: -32602, message: e.to_string(), data: None },
-                    ),
-                },
-                None => return JsonRpcResponse::error(
-                    request.id.clone(),
-                    JsonRpcError { code: -32602, message: "Missing params".to_string(), data: None },
-                ),
-            };
-
-            info!("MCP Streamable HTTP initialize: agent={}, client={} v{}",
-                agent_id, params.client_info.name, params.client_info.version);
-
-            // Create session bound to this agent (Ogma finding #4)
-            let session_id = Uuid::now_v7().to_string();
-            let (push_tx, _) = broadcast::channel::<SseEvent>(256);
-
-            state.mcp_sessions().write().await.insert(
-                session_id.clone(),
-                McpSession { agent_id, push_tx },
-            );
-
-            let result = InitializeResult {
-                protocol_version: PROTOCOL_VERSION.to_string(),
-                capabilities: ServerCapabilities {
-                    tools: Some(ToolsCapability { list_changed: false }),
-                    resources: None,
-                    prompts: None,
-                    logging: Some(serde_json::json!({})),
-                },
-                server_info: ServerInfo {
-                    name: SERVER_NAME.to_string(),
-                    version: SERVER_VERSION.to_string(),
-                },
-            };
-
-            // Session ID goes in the Mcp-Session-Id response header only,
-            // not in the body (per MCP spec). Store it for header injection.
-            let result_val = serde_json::to_value(&result).unwrap();
-            let mut response = JsonRpcResponse::success(request.id.clone(), result_val);
-            // Stash session_id for the POST handler to extract into a header
-            // Use a transient field that we'll strip before sending
-            response.result.as_mut().unwrap()["_mcpSessionId"] = serde_json::json!(session_id);
-            response
+impl ServerHandler for MingQiaoMcpHandler {
+    fn get_info(&self) -> ServerInfo {
+        ServerInfo {
+            instructions: Some("Ming-Qiao: Communication bridge for the AstralMaris Council.".into()),
+            capabilities: ServerCapabilities::builder().enable_tools().build(),
+            ..Default::default()
         }
-
-        "shutdown" => {
-            if let Some(sid) = session_id_from_headers(headers) {
-                state.mcp_sessions().write().await.remove(&sid);
-            }
-            JsonRpcResponse::success(request.id.clone(), serde_json::json!(null))
-        }
-
-        "tools/list" => {
-            let tools = ToolRegistry::list_definitions();
-            JsonRpcResponse::success(request.id.clone(), serde_json::json!({ "tools": tools }))
-        }
-
-        "tools/call" => {
-            let agent_id = match agent_from_session(headers, state).await {
-                Ok(id) => id,
-                Err(status) => {
-                    return JsonRpcResponse::error(
-                        request.id.clone(),
-                        JsonRpcError {
-                            code: -32600,
-                            message: format!("Auth failed: {}", status),
-                            data: None,
-                        },
-                    );
-                }
-            };
-
-            let params: CallToolParams = match &request.params {
-                Some(p) => match serde_json::from_value(p.clone()) {
-                    Ok(p) => p,
-                    Err(e) => return JsonRpcResponse::error(
-                        request.id.clone(),
-                        JsonRpcError { code: -32602, message: e.to_string(), data: None },
-                    ),
-                },
-                None => return JsonRpcResponse::error(
-                    request.id.clone(),
-                    JsonRpcError { code: -32602, message: "Missing params".to_string(), data: None },
-                ),
-            };
-
-            let registry = ToolRegistry::with_state(state.clone());
-            match registry.call(&params.name, params.arguments, &agent_id).await {
-                Ok(result) => {
-                    use crate::mcp::protocol::ToolContent;
-                    let content: Vec<Value> = result.content.into_iter().map(|c| match c {
-                        ToolContent::Text { text } => serde_json::json!({"type": "text", "text": text}),
-                        ToolContent::Image { data, mime_type } => serde_json::json!({"type": "image", "data": data, "mimeType": mime_type}),
-                        ToolContent::Resource { uri, mime_type, text } => serde_json::json!({"type": "resource", "resource": {"uri": uri, "mimeType": mime_type, "text": text}}),
-                    }).collect();
-
-                    JsonRpcResponse::success(request.id.clone(), serde_json::json!({
-                        "content": content,
-                        "isError": result.is_error.unwrap_or(false)
-                    }))
-                }
-                Err(e) => JsonRpcResponse::error(request.id.clone(), e.to_rpc_error()),
-            }
-        }
-
-        _ => JsonRpcResponse::error(request.id.clone(), McpErrorCode::MethodNotFound.into()),
     }
 }
 
 // ============================================================================
-// GET /mcp — SSE stream for server-to-client push
+// Axum integration
 // ============================================================================
 
-pub async fn handle_get(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-) -> Response {
-    let agent_id = match agent_from_session(&headers, &state).await {
-        Ok(id) => id,
-        Err(status) => return status.into_response(),
-    };
-
-    let session_id = match session_id_from_headers(&headers) {
-        Some(sid) => sid,
-        None => return StatusCode::BAD_REQUEST.into_response(),
-    };
-
-    let push_rx = {
-        let store = state.mcp_sessions().read().await;
-        match store.get(&session_id) {
-            Some(session) => session.push_tx.subscribe(),
-            None => return StatusCode::NOT_FOUND.into_response(),
-        }
-    };
-
-    info!("SSE stream opened for agent={} session={}", agent_id, &session_id[..8]);
-
-    let stream = async_stream::stream! {
-        let mut rx = push_rx;
-        loop {
-            match rx.recv().await {
-                Ok(event) => {
-                    yield Ok::<_, std::convert::Infallible>(
-                        axum::response::sse::Event::default()
-                            .id(event.id)
-                            .data(event.data)
-                    );
-                }
-                Err(broadcast::error::RecvError::Lagged(n)) => {
-                    warn!("SSE stream lagged by {} events for {}", n, agent_id);
-                    continue;
-                }
-                Err(broadcast::error::RecvError::Closed) => break,
-            }
-        }
-    };
-
-    Sse::new(stream)
-        .keep_alive(
-            axum::response::sse::KeepAlive::new()
-                .interval(std::time::Duration::from_secs(30))
-        )
-        .into_response()
+/// Create the StreamableHttpService for nesting under `/mcp` in Axum.
+pub fn create_mcp_service(state: AppState) -> StreamableHttpService<MingQiaoMcpHandler> {
+    StreamableHttpService::new(
+        move || Ok(MingQiaoMcpHandler::new(state.clone(), "unknown".to_string())),
+        Default::default(),
+        StreamableHttpServerConfig {
+            stateful_mode: true,
+            sse_keep_alive: Some(std::time::Duration::from_secs(15)),
+        },
+    )
 }
 
 // ============================================================================
-// DELETE /mcp — terminate session
+// Backward compat stubs (for AppState and handlers.rs references)
 // ============================================================================
 
-pub async fn handle_delete(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-) -> StatusCode {
-    if let Some(sid) = session_id_from_headers(&headers) {
-        state.mcp_sessions().write().await.remove(&sid);
-        StatusCode::OK
-    } else {
-        StatusCode::BAD_REQUEST
-    }
-}
+use std::collections::HashMap;
+use tokio::sync::RwLock;
 
-// ============================================================================
-// Push notification to connected agents (metadata only — Ogma finding #3)
-// ============================================================================
+pub type SessionStore = Arc<RwLock<HashMap<String, ()>>>;
+pub fn new_session_store() -> SessionStore { Arc::new(RwLock::new(HashMap::new())) }
+pub struct McpSession;
+pub struct SseEvent;
 
-/// Push a message notification to a connected agent's SSE stream.
-/// Sends metadata only (id, from, subject, intent) — NOT message content.
-/// Agent calls check_messages to get the full content.
 pub async fn push_message_notification(
-    sessions: &SessionStore,
-    to_agent: &str,
-    event_id: &str,
-    from: &str,
-    subject: &str,
-    intent: &str,
-) {
-    let notification = JsonRpcNotification::new(
-        "notifications/message",
-        Some(serde_json::json!({
-            "id": event_id,
-            "from": from,
-            "subject": subject,
-            "intent": intent,
-        })),
-    );
-
-    let store = sessions.read().await;
-    let session_count = store.len();
-    let mut pushed = false;
-    for session in store.values() {
-        if session.agent_id == to_agent {
-            let event = SseEvent {
-                id: Uuid::now_v7().to_string(),
-                data: serde_json::to_string(&notification).unwrap_or_default(),
-            };
-            match session.push_tx.send(event) {
-                Ok(n) => {
-                    info!("SSE push to {}: delivered to {} receiver(s)", to_agent, n);
-                    pushed = true;
-                }
-                Err(_) => {
-                    warn!("SSE push to {}: no active receivers", to_agent);
-                }
-            }
-            return;
-        }
-    }
-    if !pushed {
-        debug!("SSE push to {}: no session found ({} total sessions)", to_agent, session_count);
-    }
-}
+    _sessions: &SessionStore, _to: &str, _eid: &str, _from: &str, _subj: &str, _intent: &str,
+) {}

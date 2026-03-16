@@ -36,11 +36,9 @@ def parse_toml_simple(path: Path) -> dict[str, dict[str, Any]]:
     for line in content.split("\n"):
         line = line.strip()
 
-        if line.startswith("[") and line.endswith("]"):
-            section = line[1:-1]
-            if "." not in section:
-                current_agent = section
-                agents[current_agent] = {}
+        if line.startswith("[agents.") and line.endswith("]"):
+            current_agent = line[8:-1]
+            agents[current_agent] = {}
         elif "=" in line and current_agent:
             key, _, value = line.partition("=")
             key = key.strip()

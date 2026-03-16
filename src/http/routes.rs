@@ -19,6 +19,10 @@ use crate::state::AppState;
 /// Read paths remain open during the transitional period, with optional auth
 /// via `require_inbox_auth` for inbox endpoints.
 pub fn api_routes(state: AppState) -> Router<AppState> {
+    // MCP Streamable HTTP transport via rmcp (Phase 2)
+    // Must clone state before it's consumed by middleware
+    let mcp_service = streamable_http::create_mcp_service(state.clone());
+
     // Write routes — require bearer token auth
     let write_routes = Router::new()
         // Thread creation and replies
@@ -78,13 +82,12 @@ pub fn api_routes(state: AppState) -> Router<AppState> {
         // Search
         .route("/api/search", get(handlers::search))
         // Read cursors (for am-fleet comms)
-        .route("/api/cursors", get(handlers::get_cursors))
-        // MCP Streamable HTTP transport (Phase 2)
-        .route("/mcp", post(streamable_http::handle_post)
-            .get(streamable_http::handle_get)
-            .delete(streamable_http::handle_delete));
+        .route("/api/cursors", get(handlers::get_cursors));
 
-    read_routes.merge(write_routes).merge(signed_routes)
+    read_routes
+        .merge(write_routes)
+        .merge(signed_routes)
+        .nest_service("/mcp", mcp_service)
 }
 
 #[cfg(test)]
