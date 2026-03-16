@@ -301,6 +301,23 @@ fn spawn_jetstream_message_consumer(state: &AppState, js: async_nats::jetstream:
                         }
                     }
 
+                    // Push to connected Streamable HTTP agents via PushBroker
+                    // This is the universal delivery path — fires for ALL messages
+                    // regardless of origin (HTTP, MCP stdio, MCP Streamable HTTP).
+                    if event.event_type == ming_qiao::events::EventType::MessageSent {
+                        if let ming_qiao::events::EventPayload::Message(ref m) = event.payload {
+                            state.push_broker().publish(
+                                &m.to,
+                                ming_qiao::mcp::streamable_http::PushEvent {
+                                    from: m.from.clone(),
+                                    subject: m.subject.clone(),
+                                    intent: format!("{:?}", m.intent),
+                                    message_id: event.id.to_string(),
+                                },
+                            ).await;
+                        }
+                    }
+
                     // Broadcast to WebSocket listeners
                     state.broadcast_event(event);
 
