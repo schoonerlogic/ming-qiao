@@ -363,8 +363,84 @@ impl ServerHandler for MingQiaoMcpHandler {
     fn get_info(&self) -> ServerInfo {
         ServerInfo {
             instructions: Some("Ming-Qiao: Communication bridge for the AstralMaris Council.".into()),
-            capabilities: ServerCapabilities::builder().enable_tools().build(),
+            capabilities: ServerCapabilities::builder()
+                .enable_tools()
+                .enable_prompts()
+                .build(),
             ..Default::default()
+        }
+    }
+
+    fn list_prompts(
+        &self,
+        _request: Option<rmcp::model::PaginatedRequestParam>,
+        _context: rmcp::service::RequestContext<RoleServer>,
+    ) -> impl Future<Output = Result<rmcp::model::ListPromptsResult, rmcp::Error>> + Send + '_ {
+        use rmcp::model::{Prompt, ListPromptsResult};
+        std::future::ready(Ok(ListPromptsResult {
+            prompts: vec![
+                Prompt::new("inbox_status", Some("Check for new messages — returns pending message notifications for this agent"), None::<Vec<rmcp::model::PromptArgument>>),
+            ],
+            next_cursor: None,
+        }))
+    }
+
+    fn get_prompt(
+        &self,
+        request: rmcp::model::GetPromptRequestParam,
+        _context: rmcp::service::RequestContext<RoleServer>,
+    ) -> impl Future<Output = Result<rmcp::model::GetPromptResult, rmcp::Error>> + Send + '_ {
+        use rmcp::model::{GetPromptResult, PromptMessage, PromptMessageRole};
+        let state = self.state.clone();
+        let agent_id = self.agent_id.clone();
+        async move {
+            if request.name != "inbox_status" {
+                return Err(rmcp::Error::invalid_params("Unknown prompt", None));
+            }
+
+            // Check for unread messages
+            let agent = if agent_id != "unknown" { agent_id } else { "aleph".to_string() };
+            let inbox_url = format!("http://localhost:7777/api/inbox/{}?unread_only=true&peek=true&limit=5", agent);
+            let messages = match reqwest::Client::new()
+                .get(&inbox_url)
+                .timeout(std::time::Duration::from_secs(3))
+                .send()
+                .await
+            {
+                Ok(resp) => {
+                    if let Ok(body) = resp.json::<serde_json::Value>().await {
+                        body["messages"].as_array().cloned().unwrap_or_default()
+                    } else {
+                        vec![]
+                    }
+                }
+                Err(_) => vec![],
+            };
+
+            if messages.is_empty() {
+                return Ok(GetPromptResult {
+                    description: Some("No pending messages".into()),
+                    messages: vec![
+                        PromptMessage::new_text(PromptMessageRole::User, "No new messages in inbox."),
+                    ],
+                });
+            }
+
+            let mut text = format!("You have {} unread message(s):\n\n", messages.len());
+            for m in &messages {
+                let from = m["from"].as_str().unwrap_or("?");
+                let subject = m["subject"].as_str().unwrap_or("?");
+                let intent = m["intent"].as_str().unwrap_or("inform");
+                text.push_str(&format!("- From: {} | Subject: {} | Intent: {}\n", from, subject, intent));
+            }
+            text.push_str("\nCall check_messages to read the full content and respond.");
+
+            Ok(GetPromptResult {
+                description: Some(format!("{} unread message(s)", messages.len())),
+                messages: vec![
+                    PromptMessage::new_text(PromptMessageRole::User, text),
+                ],
+            })
         }
     }
 
