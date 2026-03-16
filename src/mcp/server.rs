@@ -21,7 +21,7 @@ use crate::mcp::tools::ToolRegistry;
 use crate::state::AppState;
 
 /// MCP protocol version we support
-pub const PROTOCOL_VERSION: &str = "2024-11-05";
+pub const PROTOCOL_VERSION: &str = "2025-03-26";
 
 /// Server name
 pub const SERVER_NAME: &str = "ming-qiao";

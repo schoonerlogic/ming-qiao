@@ -163,22 +163,25 @@ pub async fn handle_post(
     };
 
     // Dispatch
-    let response = dispatch(&request, &headers, &state).await;
+    let mut response = dispatch(&request, &headers, &state).await;
 
-    // If initialize, add Mcp-Session-Id header
-    let mut http_resp = Json(&response).into_response();
+    // If initialize, extract session ID into header and remove from body
     if request.method == "initialize" {
-        if let Some(sid) = response.result.as_ref()
-            .and_then(|r| r.get("_sessionId"))
-            .and_then(|v| v.as_str())
-        {
-            if let Ok(val) = sid.parse() {
-                http_resp.headers_mut().insert("mcp-session-id", val);
+        if let Some(result) = response.result.as_mut() {
+            if let Some(sid) = result.get("_mcpSessionId").and_then(|v| v.as_str()).map(|s| s.to_string()) {
+                // Remove the transient field from the response body
+                result.as_object_mut().map(|obj| obj.remove("_mcpSessionId"));
+
+                let mut http_resp = Json(&response).into_response();
+                if let Ok(val) = sid.parse() {
+                    http_resp.headers_mut().insert("mcp-session-id", val);
+                }
+                return http_resp;
             }
         }
     }
 
-    http_resp
+    Json(&response).into_response()
 }
 
 async fn dispatch(
@@ -231,9 +234,14 @@ async fn dispatch(
                 },
             };
 
-            let mut result_val = serde_json::to_value(&result).unwrap();
-            result_val["_sessionId"] = serde_json::json!(session_id);
-            JsonRpcResponse::success(request.id.clone(), result_val)
+            // Session ID goes in the Mcp-Session-Id response header only,
+            // not in the body (per MCP spec). Store it for header injection.
+            let result_val = serde_json::to_value(&result).unwrap();
+            let mut response = JsonRpcResponse::success(request.id.clone(), result_val);
+            // Stash session_id for the POST handler to extract into a header
+            // Use a transient field that we'll strip before sending
+            response.result.as_mut().unwrap()["_mcpSessionId"] = serde_json::json!(session_id);
+            response
         }
 
         "shutdown" => {
