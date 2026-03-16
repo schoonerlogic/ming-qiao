@@ -289,7 +289,7 @@ async fn dispatch(
 
                     JsonRpcResponse::success(request.id.clone(), serde_json::json!({
                         "content": content,
-                        "isError": result.is_error
+                        "isError": result.is_error.unwrap_or(false)
                     }))
                 }
                 Err(e) => JsonRpcResponse::error(request.id.clone(), e.to_rpc_error()),
