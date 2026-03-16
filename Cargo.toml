@@ -9,6 +9,10 @@ license = "MIT"
 name = "ming-qiao"
 path = "src/main.rs"
 
+[[bin]]
+name = "fleet-orchestrator"
+path = "src/bin/fleet_orchestrator.rs"
+
 [lib]
 name = "ming_qiao"
 path = "src/lib.rs"
