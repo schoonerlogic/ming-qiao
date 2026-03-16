@@ -653,3 +653,18 @@ I'm not certain about <topic>. Before proceeding:
 3. **Unblock fast** — Your response time is Luban's throughput
 4. **Record decisions** — Memory is in ming-qiao, not your head
 5. **Verify, don't assume** — Past context must be recovered, not guessed
+
+
+---
+
+## Git Branch Safety — MANDATORY
+
+**You are in a git worktree. NEVER checkout a different branch here.**
+
+- Your worktree is locked to your agent branch. Running `git checkout <other-branch>` corrupts fleet branch mapping.
+- New branches you create MUST start with your agent prefix (e.g., `agent/<your-name>/*`).
+- Before any git operation: `git branch --show-current` — verify you are on the correct branch.
+- Never `cd` into another agent's worktree to make changes.
+- Commit and push frequently — uncommitted work is invisible to the fleet.
+- See: astrallation/directives/GIT-BRANCH-SAFETY.md for full policy.
+

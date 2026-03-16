@@ -326,10 +326,14 @@ impl Persistence {
         &self,
         thread_id: &str,
     ) -> Result<Vec<EventEnvelope>, PersistenceError> {
+        // Match both explicit thread_id references AND root messages where the
+        // event_id itself IS the thread_id (root messages store thread_id: null
+        // but the Indexer treats event_id as the thread_id).
         let mut result = self.db
             .query(
                 "SELECT * OMIT id FROM event \
                  WHERE payload.data.thread_id = $tid \
+                    OR (event_id = $tid AND (payload.data.thread_id IS NULL OR payload.data.thread_id IS NONE)) \
                  ORDER BY timestamp ASC",
             )
             .bind(("tid", thread_id.to_string()))

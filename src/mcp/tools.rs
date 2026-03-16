@@ -7,6 +7,7 @@ use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
+use std::time::Duration;
 use uuid::Uuid;
 
 use crate::events::{
@@ -684,14 +685,15 @@ impl ToolRegistry {
         let mut output = format!("## Inbox for {} ({} unread)\n\n", agent_id, messages.len());
         for msg in messages {
             output.push_str(&format!(
-                "### {} [{}]\n**From:** {} | **Priority:** {:?} | **Intent:** {:?} | **Expected:** {:?}\n**ID:** {}\n\n---\n\n",
+                "### {} [{}]\n**From:** {} | **Priority:** {:?} | **Intent:** {:?} | **Expected:** {:?}\n**ID:** {} | **Thread:** {}\n\n---\n\n",
                 msg.subject,
                 msg.created_at.format("%Y-%m-%d %H:%M"),
                 msg.from,
                 msg.priority,
                 msg.intent,
                 msg.expected_response,
-                msg.id
+                msg.id,
+                msg.thread_id
             ));
         }
 
@@ -1169,11 +1171,101 @@ impl ToolRegistry {
         let priority = Self::parse_priority(args.get("priority").and_then(|v| v.as_str()));
         let intent = Self::parse_intent(args.get("intent").and_then(|v| v.as_str()));
 
-        // Look up thread for recipient and subject
+        // Look up thread for recipient and subject (with SurrealDB + HTTP fallback)
+        // Also resolves message_id → thread_id when agents pass the wrong ID
+        let mut resolved_thread_id = thread_id.to_string();
+
+        let found_in_indexer = {
+            let indexer = self.state.indexer().await;
+            if indexer.get_thread(thread_id).is_some() {
+                true
+            } else if let Some(msg) = indexer.get_message(thread_id) {
+                resolved_thread_id = msg.thread_id.clone();
+                indexer.get_thread(&resolved_thread_id).is_some()
+            } else {
+                false
+            }
+        };
+
+        if !found_in_indexer {
+            // Fallback 1: query SurrealDB for thread events and feed into Indexer
+            let events = self
+                .state
+                .persistence()
+                .get_events_by_thread_id(&resolved_thread_id)
+                .await
+                .unwrap_or_default();
+
+            if !events.is_empty() {
+                let mut indexer = self.state.indexer_mut().await;
+                for event in &events {
+                    let _ = indexer.process_event(event);
+                }
+            } else {
+                // Fallback 2: query the HTTP server (authoritative SurrealDB connection)
+                let http_port = {
+                    let cfg = self.state.config().await;
+                    cfg.port
+                };
+                let http_url = format!("http://localhost:{}/api/thread/{}", http_port, thread_id);
+                if let Ok(resp) = reqwest::Client::new()
+                    .get(&http_url)
+                    .timeout(Duration::from_secs(3))
+                    .send()
+                    .await
+                {
+                    if resp.status().is_success() {
+                        if let Ok(body) = resp.json::<serde_json::Value>().await {
+                            if let Some(messages) = body.get("messages").and_then(|v| v.as_array()) {
+                                let subject = body.get("subject").and_then(|v| v.as_str()).unwrap_or("(unknown)").to_string();
+                                let mut indexer = self.state.indexer_mut().await;
+                                for msg_val in messages {
+                                    let msg_id = msg_val.get("id").and_then(|v| v.as_str()).unwrap_or_default();
+                                    let msg_from = msg_val.get("from").and_then(|v| v.as_str()).unwrap_or("unknown");
+                                    let msg_to = msg_val.get("to").and_then(|v| v.as_str()).unwrap_or("unknown");
+                                    let msg_subject = msg_val.get("subject").and_then(|v| v.as_str()).unwrap_or(&subject);
+                                    let msg_content = msg_val.get("content").and_then(|v| v.as_str()).unwrap_or("");
+                                    let msg_tid = msg_val.get("thread_id").and_then(|v| v.as_str()).map(String::from)
+                                        .or_else(|| if msg_id != thread_id { Some(thread_id.to_string()) } else { None });
+                                    let ts = msg_val.get("created_at").and_then(|v| v.as_str())
+                                        .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+                                        .map(|dt| dt.with_timezone(&Utc))
+                                        .unwrap_or_else(Utc::now);
+                                    let synth = EventEnvelope {
+                                        id: msg_id.parse().unwrap_or_else(|_| Uuid::now_v7()),
+                                        timestamp: ts,
+                                        event_type: EventType::MessageSent,
+                                        agent_id: msg_from.to_string(),
+                                        payload: EventPayload::Message(MessageEvent {
+                                            from: msg_from.to_string(),
+                                            to: msg_to.to_string(),
+                                            subject: msg_subject.to_string(),
+                                            content: msg_content.to_string(),
+                                            thread_id: msg_tid,
+                                            priority: Priority::Normal,
+                                            intent: MessageIntent::Inform,
+                                            expected_response: ExpectedResponse::None,
+                                            require_ack: false,
+                                        }),
+                                    };
+                                    let _ = indexer.process_event(&synth);
+                                }
+                                eprintln!("[ming-qiao] reply_to_thread: resolved thread {} via HTTP API fallback", thread_id);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         let (to_agent, subject) = {
             let indexer = self.state.indexer().await;
-            match indexer.get_thread(thread_id) {
+            // Try resolved_thread_id first, then original thread_id
+            let thread_opt = indexer.get_thread(&resolved_thread_id)
+                .or_else(|| indexer.get_thread(thread_id));
+            match thread_opt {
                 Some(thread) => {
+                    resolved_thread_id = thread.id.clone();
                     let to = if thread.participants.len() > 2 {
                         "council".to_string()
                     } else {
@@ -1188,7 +1280,7 @@ impl ToolRegistry {
                 }
                 None => {
                     return Err(McpError::NotFound(format!(
-                        "Thread not found: {}",
+                        "Thread not found (checked Indexer, local DB, and HTTP API): {}",
                         thread_id
                     )));
                 }
@@ -1208,7 +1300,7 @@ impl ToolRegistry {
                 to: to_agent,
                 subject,
                 content: content.to_string(),
-                thread_id: Some(thread_id.to_string()),
+                thread_id: Some(resolved_thread_id.clone()),
                 priority,
                 intent,
                 expected_response: Self::parse_expected_response(args.get("expected_response").and_then(|v| v.as_str())),
@@ -1221,7 +1313,7 @@ impl ToolRegistry {
         Ok(CallToolResult::text(
             serde_json::to_string_pretty(&serde_json::json!({
                 "message_id": event_id.to_string(),
-                "thread_id": thread_id,
+                "thread_id": resolved_thread_id,
                 "created_at": now.to_rfc3339()
             }))
             .unwrap(),

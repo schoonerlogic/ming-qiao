@@ -39,14 +39,20 @@ webhook_url = ""
 worktree = "/Users/proteus/astralmaris/latent-winds/mataya"
 all_worktrees = "/Users/proteus/astralmaris/latent-winds/mataya"
 runtime = "kimi"
-headless_capable = false
+cli_path = "/Users/proteus/astralmaris/astrallation/fleet/launch-mataya.sh"
+mcp_config_file = "/Users/proteus/astralmaris/ming-qiao/mataya/kimi-mcp.json"
+agent_yaml_file = "/Users/proteus/astralmaris/astrallation/agents/mataya-agent.yaml"
+headless_capable = true
 pending_file = true
 webhook_url = ""
 
 [agents.laozi-jung]
 worktree = "/Users/proteus/astralmaris/echoessence/main"
 all_worktrees = "/Users/proteus/astralmaris/echoessence/main"
-runtime = "claude"
+runtime = "kimi"
+cli_path = "/Users/proteus/astralmaris/astrallation/fleet/launch-laozi-jung.sh"
+mcp_config_file = "/Users/proteus/astralmaris/ming-qiao/laozi-jung/kimi-mcp.json"
+agent_yaml_file = "/Users/proteus/astralmaris/astrallation/agents/laozi-jung-agent.yaml"
 headless_capable = true
 pending_file = true
 webhook_url = ""
@@ -58,6 +64,15 @@ runtime = "claude-desktop"
 headless_capable = false
 pending_file = true
 webhook_url = ""
+
+[agents.jikimi]
+worktree = "/Users/proteus/astralmaris/ming-qiao/jikimi"
+all_worktrees = "/Users/proteus/astralmaris/ming-qiao/jikimi"
+runtime = "opencode"
+cli_path = "/Users/proteus/.local/bin/opencode"
+headless_capable = true
+pending_file = true
+allowed_intents = ["inform", "discuss"]
 
 [agents.merlin]
 worktree = "/Users/proteus/astralmaris/ming-qiao/merlin"

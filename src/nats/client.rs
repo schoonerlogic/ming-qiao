@@ -95,13 +95,15 @@ impl NatsAgentClient {
 
         let jetstream = jetstream::new(client.clone());
 
-        // Ensure JetStream streams exist (AGENT_TASKS + AGENT_NOTES)
+        // Ensure JetStream streams exist — best-effort for non-admin agents.
+        // Only the HTTP server (aleph NKey, Tier 1) has $JS.API.> permissions to
+        // create streams. MCP subprocesses (Tier 2) lack stream admin rights but
+        // CAN publish to existing streams. Don't abort NATS connection on failure.
         if let Err(e) = streams::ensure_streams(&jetstream).await {
             warn!(
-                "Failed to set up JetStream streams: {}. Running local-only.",
+                "JetStream stream setup failed: {} (continuing — streams may already exist from HTTP server)",
                 e
             );
-            return None;
         }
 
         let subjects = AgentSubjects::new(agent_id, project);

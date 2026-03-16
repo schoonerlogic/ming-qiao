@@ -690,7 +690,45 @@ pub async fn reply_to_thread(
     let event_id = Uuid::now_v7();
     let now = Utc::now();
 
-    // Look up thread to find the recipient and subject
+    // Look up thread to find the recipient and subject (with SurrealDB fallback — RC1 fix)
+    let found_in_indexer = {
+        let indexer = state.indexer().await;
+        indexer.get_thread(&thread_id).is_some()
+    };
+
+    if !found_in_indexer {
+        // Fallback: query SurrealDB for thread events and feed into Indexer
+        match state.persistence().get_events_by_thread_id(&thread_id).await {
+            Ok(events) if !events.is_empty() => {
+                let mut indexer = state.indexer_mut().await;
+                for event in &events {
+                    if let Err(e) = indexer.process_event(event) {
+                        tracing::warn!(
+                            "Indexer self-heal failed for event {}: {}",
+                            event.id, e
+                        );
+                    }
+                }
+            }
+            Ok(_) => {
+                return (
+                    StatusCode::NOT_FOUND,
+                    Json(serde_json::json!({
+                        "error": { "code": "NOT_FOUND", "message": format!("Thread not found: {}", thread_id) }
+                    })),
+                );
+            }
+            Err(e) => {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({
+                        "error": { "code": "DB_ERROR", "message": format!("DB thread lookup failed: {}", e) }
+                    })),
+                );
+            }
+        }
+    }
+
     let (to_agent, subject) = {
         let indexer = state.indexer().await;
         match indexer.get_thread(&thread_id) {
@@ -711,7 +749,7 @@ pub async fn reply_to_thread(
                 return (
                     StatusCode::NOT_FOUND,
                     Json(serde_json::json!({
-                        "error": { "code": "NOT_FOUND", "message": format!("Thread not found: {}", thread_id) }
+                        "error": { "code": "NOT_FOUND", "message": format!("Thread not found after DB fallback: {}", thread_id) }
                     })),
                 );
             }
