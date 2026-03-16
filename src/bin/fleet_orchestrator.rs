@@ -29,7 +29,7 @@ const POLL_INTERVAL: Duration = Duration::from_secs(15);
 const IDLE_THRESHOLD: Duration = Duration::from_secs(300);    // 5 min
 const STUCK_THRESHOLD: Duration = Duration::from_secs(900);   // 15 min
 const WAITING_ESCALATE: Duration = Duration::from_secs(1800); // 30 min
-const ESCALATION_COOLDOWN: Duration = Duration::from_secs(600); // 10 min
+const ESCALATION_COOLDOWN: Duration = Duration::from_secs(3600); // 1 hour between escalations per agent
 
 const MINGQIAO_API: &str = "http://localhost:7777/api";
 
@@ -143,11 +143,12 @@ async fn poll_agent_state(
     let alive = match runtime {
         "claude-desktop" | "manual" => true, // Can't check
         rt => {
-            // Detect agent process via pgrep (cmux returns SIGPIPE from non-cmux contexts)
+            // Detect agent process via pgrep -f (pattern match on full command)
+            // Process names vary: "claude", "Kimi Code" (with space), node paths for opencode
             let pgrep_pattern = match rt {
-                "claude-code" | "claude" => "claude",
-                "kimi" => "kimi",
-                "opencode" => "opencode",
+                "claude-code" | "claude" => "/opt/homebrew/bin/claude",
+                "kimi" => "Kimi Code",
+                "opencode" => "opencode-ai",
                 "codex" => "codex",
                 _ => "",
             };
@@ -155,7 +156,7 @@ async fn poll_agent_state(
                 false
             } else {
                 Command::new("pgrep")
-                    .args(["-x", pgrep_pattern])
+                    .args(["-f", pgrep_pattern])
                     .output()
                     .map(|o| o.status.success())
                     .unwrap_or(false)
@@ -282,10 +283,11 @@ async fn get_pending_tasks(
 
 fn escalate(agent: &str, reason: &str) {
     let msg = reason.replace('\\', "\\\\").replace('"', "\\\"");
+    // Use display notification (non-blocking banner) instead of display alert (modal dialog)
     let _ = Command::new("osascript")
         .arg("-e")
         .arg(format!(
-            "display alert \"Fleet: {}\" message \"{}\" giving up after 120",
+            "display notification \"{}\" with title \"Fleet: {}\"",
             agent, msg
         ))
         .spawn();
