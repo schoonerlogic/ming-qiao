@@ -398,14 +398,27 @@ pub async fn push_message_notification(
     );
 
     let store = sessions.read().await;
+    let session_count = store.len();
+    let mut pushed = false;
     for session in store.values() {
         if session.agent_id == to_agent {
             let event = SseEvent {
                 id: Uuid::now_v7().to_string(),
                 data: serde_json::to_string(&notification).unwrap_or_default(),
             };
-            let _ = session.push_tx.send(event);
+            match session.push_tx.send(event) {
+                Ok(n) => {
+                    info!("SSE push to {}: delivered to {} receiver(s)", to_agent, n);
+                    pushed = true;
+                }
+                Err(_) => {
+                    warn!("SSE push to {}: no active receivers", to_agent);
+                }
+            }
             return;
         }
+    }
+    if !pushed {
+        debug!("SSE push to {}: no session found ({} total sessions)", to_agent, session_count);
     }
 }

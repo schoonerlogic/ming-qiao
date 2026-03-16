@@ -617,11 +617,14 @@ pub async fn create_thread(
         }
     }
 
-    // Extract message fields and clone event for NATS before broadcast consumes it
+    // Extract message fields — clone for NATS and SSE push
     let (msg_to, msg_from, msg_subject, msg_intent) = match &event.payload {
         EventPayload::Message(m) => (m.to.clone(), m.from.clone(), m.subject.clone(), m.intent.clone()),
         _ => unreachable!(),
     };
+    let (sse_to, sse_from, sse_subject, sse_intent) = (
+        msg_to.clone(), msg_from.clone(), msg_subject.clone(), format!("{:?}", msg_intent),
+    );
     let event_for_js = event.clone();
 
     // Broadcast to WebSocket listeners
@@ -653,6 +656,16 @@ pub async fn create_thread(
             }
         }
     }
+
+    // Push to connected Streamable HTTP agents (SSE — metadata only, Ogma finding #3)
+    crate::mcp::streamable_http::push_message_notification(
+        state.mcp_sessions(),
+        &sse_to,
+        &event_id.to_string(),
+        &sse_from,
+        &sse_subject,
+        &sse_intent,
+    ).await;
 
     // Thread ID = provided thread_id or event ID (indexer convention when thread_id is None)
     let thread_id = req.thread_id.unwrap_or_else(|| event_id.to_string());
