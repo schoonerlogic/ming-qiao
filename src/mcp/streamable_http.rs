@@ -579,25 +579,18 @@ impl ServerHandler for MingQiaoMcpHandler {
 
             info!("Resource subscription from {}: {} (resolved: {})", agent_id, uri, resolved_agent);
 
-            // Register peer with PushBroker — starts the push listener task
-            let broker = state.push_broker();
-            if !broker.has_peer(&resolved_agent).await {
-                broker.register_peer(&resolved_agent, context.peer.clone()).await;
-                info!("Peer registered via subscribe for agent={}", resolved_agent);
-            }
-
-            // Confirm subscription to agent via logging notification
-            let _ = context.peer.notify_logging_message(
-                rmcp::model::LoggingMessageNotificationParam {
-                    level: rmcp::model::LoggingLevel::Info,
-                    logger: Some("ming-qiao-push".into()),
-                    data: serde_json::json!({
-                        "status": "subscribed",
-                        "watching": uri,
-                        "agent": resolved_agent
-                    }),
+            // Spawn peer registration in background — return Ok immediately
+            // so the subscribe response reaches the client before any async work
+            let peer = context.peer.clone();
+            let broker_state = state.clone();
+            let agent_for_task = resolved_agent.clone();
+            tokio::spawn(async move {
+                let broker = broker_state.push_broker();
+                if !broker.has_peer(&agent_for_task).await {
+                    broker.register_peer(&agent_for_task, peer).await;
+                    info!("Peer registered via subscribe for agent={}", agent_for_task);
                 }
-            ).await;
+            });
 
             Ok(())
         }
