@@ -486,9 +486,17 @@ impl ServerHandler for MingQiaoMcpHandler {
             mime_type: Some("application/json".into()),
             size: None,
         };
+        let self_resource = rmcp::model::RawResource {
+            uri: "agent://self/messages".to_string(),
+            name: "My Inbox (alias)".to_string(),
+            description: Some("Alias for agent://{self}/messages — subscribe to this for push notifications.".into()),
+            mime_type: Some("application/json".into()),
+            size: None,
+        };
         std::future::ready(Ok(ListResourcesResult {
             resources: vec![
                 rmcp::model::Annotated { raw: resource, annotations: None },
+                rmcp::model::Annotated { raw: self_resource, annotations: None },
             ],
             next_cursor: None,
         }))
@@ -504,7 +512,8 @@ impl ServerHandler for MingQiaoMcpHandler {
         let agent = if self.agent_id != "unknown" { self.agent_id.clone() } else { "aleph".to_string() };
         async move {
             let expected_uri = format!("agent://{}/messages", agent);
-            if request.uri != expected_uri {
+            let self_uri = "agent://self/messages";
+            if request.uri != expected_uri && request.uri != self_uri {
                 return Err(rmcp::Error::invalid_params("Unknown resource URI", None));
             }
 
@@ -550,11 +559,48 @@ impl ServerHandler for MingQiaoMcpHandler {
     fn subscribe(
         &self,
         request: rmcp::model::SubscribeRequestParam,
-        _context: rmcp::service::RequestContext<RoleServer>,
+        context: rmcp::service::RequestContext<RoleServer>,
     ) -> impl Future<Output = Result<(), rmcp::Error>> + Send + '_ {
-        let agent = if self.agent_id != "unknown" { self.agent_id.clone() } else { "aleph".to_string() };
-        info!("Resource subscription from {}: {}", agent, request.uri);
-        std::future::ready(Ok(()))
+        let state = self.state.clone();
+        let agent_id = self.agent_id.clone();
+
+        async move {
+            let uri = request.uri.to_string();
+
+            // Resolve "self" in agent://self/messages to actual agent ID
+            let resolved_agent = if uri.contains("self") {
+                if agent_id != "unknown" { agent_id.clone() } else { "aleph".to_string() }
+            } else {
+                uri.strip_prefix("agent://")
+                    .and_then(|s| s.split('/').next())
+                    .unwrap_or(&agent_id)
+                    .to_string()
+            };
+
+            info!("Resource subscription from {}: {} (resolved: {})", agent_id, uri, resolved_agent);
+
+            // Register peer with PushBroker — starts the push listener task
+            let broker = state.push_broker();
+            if !broker.has_peer(&resolved_agent).await {
+                broker.register_peer(&resolved_agent, context.peer.clone()).await;
+                info!("Peer registered via subscribe for agent={}", resolved_agent);
+            }
+
+            // Confirm subscription to agent via logging notification
+            let _ = context.peer.notify_logging_message(
+                rmcp::model::LoggingMessageNotificationParam {
+                    level: rmcp::model::LoggingLevel::Info,
+                    logger: Some("ming-qiao-push".into()),
+                    data: serde_json::json!({
+                        "status": "subscribed",
+                        "watching": uri,
+                        "agent": resolved_agent
+                    }),
+                }
+            ).await;
+
+            Ok(())
+        }
     }
 }
 
