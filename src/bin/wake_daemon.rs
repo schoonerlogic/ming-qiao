@@ -12,6 +12,7 @@
 //!   wake-daemon --manifest /path   # Custom manifest path
 
 use std::collections::HashMap;
+use std::process::Command;
 use std::time::{Duration, Instant};
 
 use clap::Parser;
@@ -95,27 +96,31 @@ impl WakeTracker {
 }
 
 // ============================================================================
-// AgentAPI wake
+// Agent info
 // ============================================================================
 
-async fn wake_agent(
+#[derive(Debug, Clone)]
+struct AgentWakeInfo {
+    port: u16,
+    runtime: String,
+}
+
+// ============================================================================
+// AgentAPI wake (for claude, opencode, codex)
+// ============================================================================
+
+async fn wake_agent_agentapi(
     http_client: &reqwest::Client,
     agent: &str,
     port: u16,
     from: &str,
     subject: &str,
-    dry_run: bool,
 ) -> bool {
     let url = format!("http://localhost:{}/message", port);
     let message = format!(
         "You have a new message from {}: {}. Call check_messages to read and respond.",
         from, subject
     );
-
-    if dry_run {
-        info!("DRY-RUN: would POST to {} for {}: {}", url, agent, message);
-        return true;
-    }
 
     match http_client
         .post(&url)
@@ -125,18 +130,76 @@ async fn wake_agent(
         .await
     {
         Ok(resp) if resp.status().is_success() => {
-            info!("WAKE: {} (port {}) ← {} re: {}", agent, port, from, subject);
+            info!("WAKE (agentapi): {} (port {}) ← {} re: {}", agent, port, from, subject);
             true
         }
         Ok(resp) => {
-            warn!("WAKE FAILED: {} returned {}", agent, resp.status());
+            warn!("WAKE FAILED (agentapi): {} returned {}", agent, resp.status());
             false
         }
         Err(e) => {
-            // Agent not running or AgentAPI not available — expected for offline agents
-            info!("WAKE SKIP: {} (port {}) — {}", agent, port, e);
+            info!("WAKE SKIP (agentapi): {} (port {}) — {}", agent, port, e);
             false
         }
+    }
+}
+
+// ============================================================================
+// cmux wake (for kimi agents — AgentAPI can't drive kimi)
+// ============================================================================
+
+fn wake_agent_cmux(agent: &str, from: &str, subject: &str) -> bool {
+    let message = format!(
+        "You have a new message from {}: {}. Call check_messages to read and respond.",
+        from, subject
+    );
+
+    // Send text to the agent's cmux workspace
+    let send_result = Command::new("cmux")
+        .args(["send", "--workspace", agent, &message])
+        .output();
+
+    match send_result {
+        Ok(output) if output.status.success() => {
+            // Send enter key to submit
+            let _ = Command::new("cmux")
+                .args(["send-key", "--workspace", agent, "enter"])
+                .output();
+            info!("WAKE (cmux): {} ← {} re: {}", agent, from, subject);
+            true
+        }
+        Ok(output) => {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            warn!("WAKE FAILED (cmux): {} — {}", agent, stderr.trim());
+            false
+        }
+        Err(e) => {
+            info!("WAKE SKIP (cmux): {} — {}", agent, e);
+            false
+        }
+    }
+}
+
+// ============================================================================
+// Dispatch wake by runtime
+// ============================================================================
+
+async fn wake_agent(
+    http_client: &reqwest::Client,
+    agent: &str,
+    info: &AgentWakeInfo,
+    from: &str,
+    subject: &str,
+    dry_run: bool,
+) -> bool {
+    if dry_run {
+        info!("DRY-RUN: would wake {} (runtime={}, port={})", agent, info.runtime, info.port);
+        return true;
+    }
+
+    match info.runtime.as_str() {
+        "kimi" => wake_agent_cmux(agent, from, subject),
+        _ => wake_agent_agentapi(http_client, agent, info.port, from, subject).await,
     }
 }
 
@@ -158,14 +221,18 @@ async fn main() -> anyhow::Result<()> {
     let manifest = load_manifest(&args.manifest)
         .ok_or_else(|| anyhow::anyhow!("Failed to load manifest from {}", args.manifest))?;
 
-    // Build agent → port mapping
-    let agent_ports: HashMap<String, u16> = manifest
+    // Build agent → wake info mapping
+    let agent_info: HashMap<String, AgentWakeInfo> = manifest
         .agents
         .iter()
-        .filter(|(_, a)| {
-            a.wake_port.is_some() && !a.skip_session_launch.unwrap_or(false)
+        .filter(|(_, a)| !a.skip_session_launch.unwrap_or(false))
+        .filter(|(_, a)| a.wake_port.is_some() || a.runtime.as_deref() == Some("kimi"))
+        .map(|(name, a)| {
+            (name.clone(), AgentWakeInfo {
+                port: a.wake_port.unwrap_or(0),
+                runtime: a.runtime.clone().unwrap_or_default(),
+            })
         })
-        .map(|(name, a)| (name.clone(), a.wake_port.unwrap()))
         .collect();
 
     info!("════════════════════════════════════════");
@@ -173,7 +240,7 @@ async fn main() -> anyhow::Result<()> {
     info!("  Manifest: {}", args.manifest);
     info!("  NATS: {}", args.nats_url);
     info!("  Dry run: {}", args.dry_run);
-    info!("  Agents: {:?}", agent_ports);
+    info!("  Agents: {:?}", agent_info);
     info!("════════════════════════════════════════");
 
     // Connect to NATS with NKey auth
@@ -271,9 +338,9 @@ async fn main() -> anyhow::Result<()> {
             continue;
         }
 
-        if let Some(&port) = agent_ports.get(&to_agent) {
+        if let Some(info) = agent_info.get(&to_agent) {
             if tracker.should_wake(&to_agent) {
-                wake_agent(&http_client, &to_agent, port, &from_agent, &subject, args.dry_run).await;
+                wake_agent(&http_client, &to_agent, info, &from_agent, &subject, args.dry_run).await;
                 tracker.mark_woken(&to_agent);
             } else {
                 info!("COOLDOWN: {} — skipping wake", to_agent);
