@@ -14,6 +14,10 @@ name = "fleet-orchestrator"
 path = "src/bin/fleet_orchestrator.rs"
 
 [[bin]]
+name = "wake-daemon"
+path = "src/bin/wake_daemon.rs"
+
+[[bin]]
 name = "mcp-test-harness"
 path = "src/bin/mcp_test_harness.rs"
 
