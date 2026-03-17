@@ -87,19 +87,33 @@ impl PushBroker {
             loop {
                 match rx.recv().await {
                     Ok(event) => {
-                        // Send resource_updated notification — tells Claude Code
-                        // that the inbox resource changed and should be re-read.
-                        // This is the MCP-spec mechanism for proactive data push.
+                        // Send resource_updated notification (MCP-spec for data changes)
                         let resource_uri = format!("agent://{}/messages", agent);
                         if let Err(e) = peer.notify_resource_updated(
                             rmcp::model::ResourceUpdatedNotificationParam {
-                                uri: resource_uri,
+                                uri: resource_uri.clone(),
                             }
                         ).await {
                             warn!("Resource update notification failed for {}: {}", agent, e);
                             break; // Peer disconnected
                         }
-                        info!("Push (resource_updated) delivered to {}: {} re: {}", agent, event.from, event.subject);
+
+                        // Also send logging notification with summary for kimi's
+                        // MoE routing — gives enough context to decide priority
+                        let _ = peer.notify_logging_message(
+                            rmcp::model::LoggingMessageNotificationParam {
+                                level: rmcp::model::LoggingLevel::Info,
+                                logger: Some("ming-qiao-push".into()),
+                                data: serde_json::json!({
+                                    "type": "new_message",
+                                    "priority": event.intent,
+                                    "uri": resource_uri,
+                                    "summary": format!("New message from {} regarding {}", event.from, event.subject),
+                                }),
+                            }
+                        ).await;
+
+                        info!("Push delivered to {}: {} re: {}", agent, event.from, event.subject);
                     }
                     Err(broadcast::error::RecvError::Lagged(n)) => {
                         warn!("Push listener lagged {} events for {}", n, agent);
@@ -363,7 +377,6 @@ impl ServerHandler for MingQiaoMcpHandler {
                 .enable_tools()
                 .enable_prompts()
                 .enable_resources()
-                .enable_resources_subscribe()
                 .build(),
             ..Default::default()
         }
@@ -528,26 +541,28 @@ impl ServerHandler for MingQiaoMcpHandler {
                     if let Ok(body) = resp.json::<serde_json::Value>().await {
                         let msgs = body["messages"].as_array().cloned().unwrap_or_default();
                         if msgs.is_empty() {
-                            "No unread messages.".to_string()
+                            "[]".to_string()
                         } else {
-                            let mut out = format!("{} unread message(s):\n", msgs.len());
-                            for m in &msgs {
-                                out.push_str(&format!(
-                                    "- From: {} | Subject: {} | Intent: {} | ID: {}\n",
-                                    m["from"].as_str().unwrap_or("?"),
-                                    m["subject"].as_str().unwrap_or("?"),
-                                    m["intent"].as_str().unwrap_or("?"),
-                                    m["id"].as_str().unwrap_or("?"),
-                                ));
-                            }
-                            out.push_str("\nCall check_messages to read full content.");
-                            out
+                            // Return structured JSON for kimi's MoE routing
+                            let structured: Vec<serde_json::Value> = msgs.iter().map(|m| {
+                                serde_json::json!({
+                                    "message_id": m["id"].as_str().unwrap_or(""),
+                                    "from": m["from"].as_str().unwrap_or(""),
+                                    "subject": m["subject"].as_str().unwrap_or(""),
+                                    "body": m["content"].as_str().unwrap_or(""),
+                                    "urgency": m["priority"].as_str().unwrap_or("normal"),
+                                    "intent": m["intent"].as_str().unwrap_or("inform"),
+                                    "timestamp": m["timestamp"].as_str().unwrap_or(""),
+                                    "metadata": {}
+                                })
+                            }).collect();
+                            serde_json::to_string_pretty(&structured).unwrap_or_else(|_| "[]".to_string())
                         }
                     } else {
-                        "Error reading inbox.".to_string()
+                        "[]".to_string()
                     }
                 }
-                Err(e) => format!("Inbox unavailable: {}", e),
+                Err(e) => format!("[]"),
             };
 
             Ok(ReadResourceResult {
