@@ -87,23 +87,19 @@ impl PushBroker {
             loop {
                 match rx.recv().await {
                     Ok(event) => {
-                        let data = serde_json::json!({
-                            "type": "new_message",
-                            "from": event.from,
-                            "subject": event.subject,
-                            "intent": event.intent,
-                            "message_id": event.message_id,
-                        });
-                        let param = LoggingMessageNotificationParam {
-                            level: LoggingLevel::Info,
-                            logger: Some("ming-qiao".into()),
-                            data,
-                        };
-                        if let Err(e) = peer.notify_logging_message(param).await {
-                            warn!("Push notification failed for {}: {}", agent, e);
+                        // Send resource_updated notification — tells Claude Code
+                        // that the inbox resource changed and should be re-read.
+                        // This is the MCP-spec mechanism for proactive data push.
+                        let resource_uri = format!("agent://{}/messages", agent);
+                        if let Err(e) = peer.notify_resource_updated(
+                            rmcp::model::ResourceUpdatedNotificationParam {
+                                uri: resource_uri,
+                            }
+                        ).await {
+                            warn!("Resource update notification failed for {}: {}", agent, e);
                             break; // Peer disconnected
                         }
-                        info!("Push delivered to {}: {} re: {}", agent, event.from, event.subject);
+                        info!("Push (resource_updated) delivered to {}: {} re: {}", agent, event.from, event.subject);
                     }
                     Err(broadcast::error::RecvError::Lagged(n)) => {
                         warn!("Push listener lagged {} events for {}", n, agent);
@@ -366,6 +362,8 @@ impl ServerHandler for MingQiaoMcpHandler {
             capabilities: ServerCapabilities::builder()
                 .enable_tools()
                 .enable_prompts()
+                .enable_resources()
+                .enable_resources_subscribe()
                 .build(),
             ..Default::default()
         }
@@ -472,6 +470,91 @@ impl ServerHandler for MingQiaoMcpHandler {
                 rmcp::Error::internal_error(e.to_string(), None)
             })
         }
+    }
+
+    fn list_resources(
+        &self,
+        _request: Option<rmcp::model::PaginatedRequestParam>,
+        _context: rmcp::service::RequestContext<RoleServer>,
+    ) -> impl Future<Output = Result<rmcp::model::ListResourcesResult, rmcp::Error>> + Send + '_ {
+        use rmcp::model::ListResourcesResult;
+        let agent = if self.agent_id != "unknown" { self.agent_id.clone() } else { "aleph".to_string() };
+        let resource = rmcp::model::RawResource {
+            uri: format!("agent://{}/messages", agent),
+            name: "Inbox Messages".to_string(),
+            description: Some("Unread messages for this agent. Subscribe for real-time notifications.".into()),
+            mime_type: Some("application/json".into()),
+            size: None,
+        };
+        std::future::ready(Ok(ListResourcesResult {
+            resources: vec![
+                rmcp::model::Annotated { raw: resource, annotations: None },
+            ],
+            next_cursor: None,
+        }))
+    }
+
+    fn read_resource(
+        &self,
+        request: rmcp::model::ReadResourceRequestParam,
+        _context: rmcp::service::RequestContext<RoleServer>,
+    ) -> impl Future<Output = Result<rmcp::model::ReadResourceResult, rmcp::Error>> + Send + '_ {
+        use rmcp::model::{ReadResourceResult, ResourceContents};
+        let state = self.state.clone();
+        let agent = if self.agent_id != "unknown" { self.agent_id.clone() } else { "aleph".to_string() };
+        async move {
+            let expected_uri = format!("agent://{}/messages", agent);
+            if request.uri != expected_uri {
+                return Err(rmcp::Error::invalid_params("Unknown resource URI", None));
+            }
+
+            let inbox_url = format!("http://localhost:7777/api/inbox/{}?unread_only=true&peek=true&limit=10", agent);
+            let text = match reqwest::Client::new()
+                .get(&inbox_url)
+                .timeout(std::time::Duration::from_secs(3))
+                .send()
+                .await
+            {
+                Ok(resp) => {
+                    if let Ok(body) = resp.json::<serde_json::Value>().await {
+                        let msgs = body["messages"].as_array().cloned().unwrap_or_default();
+                        if msgs.is_empty() {
+                            "No unread messages.".to_string()
+                        } else {
+                            let mut out = format!("{} unread message(s):\n", msgs.len());
+                            for m in &msgs {
+                                out.push_str(&format!(
+                                    "- From: {} | Subject: {} | Intent: {} | ID: {}\n",
+                                    m["from"].as_str().unwrap_or("?"),
+                                    m["subject"].as_str().unwrap_or("?"),
+                                    m["intent"].as_str().unwrap_or("?"),
+                                    m["id"].as_str().unwrap_or("?"),
+                                ));
+                            }
+                            out.push_str("\nCall check_messages to read full content.");
+                            out
+                        }
+                    } else {
+                        "Error reading inbox.".to_string()
+                    }
+                }
+                Err(e) => format!("Inbox unavailable: {}", e),
+            };
+
+            Ok(ReadResourceResult {
+                contents: vec![ResourceContents::text(text, request.uri)],
+            })
+        }
+    }
+
+    fn subscribe(
+        &self,
+        request: rmcp::model::SubscribeRequestParam,
+        _context: rmcp::service::RequestContext<RoleServer>,
+    ) -> impl Future<Output = Result<(), rmcp::Error>> + Send + '_ {
+        let agent = if self.agent_id != "unknown" { self.agent_id.clone() } else { "aleph".to_string() };
+        info!("Resource subscription from {}: {}", agent, request.uri);
+        std::future::ready(Ok(()))
     }
 }
 
