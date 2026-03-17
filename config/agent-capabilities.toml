@@ -18,22 +18,25 @@ runtime = "claude"
 headless_capable = true
 pending_file = true
 webhook_url = ""
+agentapi_port = 3284
 
 [agents.luban]
 worktree = "/Users/proteus/astralmaris/ming-qiao/luban"
 all_worktrees = "/Users/proteus/astralmaris/ming-qiao/luban /Users/proteus/astralmaris/inference-kitchen/luban"
-runtime = "claude"
+runtime = "opencode"
 headless_capable = true
 pending_file = true
 webhook_url = ""
+agentapi_port = 3285
 
 [agents.ogma]
 worktree = "/Users/proteus/astralmaris/everwatch-spire/ogma"
 all_worktrees = "/Users/proteus/astralmaris/everwatch-spire/ogma"
-runtime = "claude"
+runtime = "codex"
 headless_capable = true
 pending_file = true
 webhook_url = ""
+agentapi_port = 3288
 
 [agents.mataya]
 worktree = "/Users/proteus/astralmaris/latent-winds/mataya"
@@ -45,6 +48,7 @@ agent_yaml_file = "/Users/proteus/astralmaris/astrallation/agents/mataya-agent.y
 headless_capable = true
 pending_file = true
 webhook_url = ""
+agentapi_port = 3286
 
 [agents.laozi-jung]
 worktree = "/Users/proteus/astralmaris/echoessence/main"
@@ -56,6 +60,7 @@ agent_yaml_file = "/Users/proteus/astralmaris/astrallation/agents/laozi-jung-age
 headless_capable = true
 pending_file = true
 webhook_url = ""
+agentapi_port = 3287
 
 [agents.thales]
 worktree = "/Users/proteus/astralmaris/astral-forge/main"
