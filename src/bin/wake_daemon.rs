@@ -119,7 +119,7 @@ async fn wake_agent(
 
     match http_client
         .post(&url)
-        .json(&serde_json::json!({ "content": message }))
+        .json(&serde_json::json!({ "content": message, "type": "user" }))
         .timeout(AGENTAPI_TIMEOUT)
         .send()
         .await
@@ -237,10 +237,11 @@ async fn main() -> anyhow::Result<()> {
         // Parse the event envelope to extract recipient and sender
         let (to_agent, from_agent, subject) = match serde_json::from_slice::<serde_json::Value>(&msg.payload) {
             Ok(event) => {
-                let payload = &event["payload"];
-                let to = payload["to"].as_str().unwrap_or("").to_string();
-                let from = payload["from"].as_str().unwrap_or("").to_string();
-                let subj = payload["subject"].as_str().unwrap_or("").to_string();
+                // Event structure: {"payload":{"type":"message","data":{"from":...,"to":...}}}
+                let data = &event["payload"]["data"];
+                let to = data["to"].as_str().unwrap_or("").to_string();
+                let from = data["from"].as_str().unwrap_or("").to_string();
+                let subj = data["subject"].as_str().unwrap_or("").to_string();
                 (to, from, subj)
             }
             Err(e) => {
@@ -255,7 +256,7 @@ async fn main() -> anyhow::Result<()> {
         // Only wake for request/discuss intents
         let intent = serde_json::from_slice::<serde_json::Value>(&msg.payload)
             .ok()
-            .and_then(|e| e["payload"]["intent"].as_str().map(|s| s.to_string()))
+            .and_then(|e| e["payload"]["data"]["intent"].as_str().map(|s| s.to_string()))
             .unwrap_or_default();
 
         let is_wakeable = matches!(intent.as_str(), "Request" | "Discuss" | "request" | "discuss");
