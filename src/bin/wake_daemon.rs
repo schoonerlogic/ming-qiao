@@ -148,24 +148,52 @@ async fn wake_agent_agentapi(
 // cmux wake (for kimi agents — AgentAPI can't drive kimi)
 // ============================================================================
 
+/// Resolve a cmux workspace title to its ref (e.g. "mataya" → "workspace:36")
+fn resolve_cmux_workspace(title: &str) -> Option<String> {
+    let output = Command::new("cmux")
+        .args(["--json", "list-workspaces"])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let data: serde_json::Value = serde_json::from_str(&stdout).ok()?;
+    for ws in data["workspaces"].as_array()? {
+        if ws["title"].as_str() == Some(title) {
+            return ws["ref"].as_str().map(|s| s.to_string());
+        }
+    }
+    None
+}
+
 fn wake_agent_cmux(agent: &str, from: &str, subject: &str) -> bool {
     let message = format!(
         "You have a new message from {}: {}. Call check_messages to read and respond.",
         from, subject
     );
 
+    // Resolve workspace title to ref
+    let ws_ref = match resolve_cmux_workspace(agent) {
+        Some(r) => r,
+        None => {
+            info!("WAKE SKIP (cmux): {} — no workspace found", agent);
+            return false;
+        }
+    };
+
     // Send text to the agent's cmux workspace
     let send_result = Command::new("cmux")
-        .args(["send", "--workspace", agent, &message])
+        .args(["send", "--workspace", &ws_ref, &message])
         .output();
 
     match send_result {
         Ok(output) if output.status.success() => {
             // Send enter key to submit
             let _ = Command::new("cmux")
-                .args(["send-key", "--workspace", agent, "enter"])
+                .args(["send-key", "--workspace", &ws_ref, "enter"])
                 .output();
-            info!("WAKE (cmux): {} ← {} re: {}", agent, from, subject);
+            info!("WAKE (cmux): {} ({}) ← {} re: {}", agent, ws_ref, from, subject);
             true
         }
         Ok(output) => {
