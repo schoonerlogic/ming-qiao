@@ -622,9 +622,7 @@ pub async fn create_thread(
         EventPayload::Message(m) => (m.to.clone(), m.from.clone(), m.subject.clone(), m.intent.clone()),
         _ => unreachable!(),
     };
-    let (sse_to, sse_from, sse_subject, sse_intent) = (
-        msg_to.clone(), msg_from.clone(), msg_subject.clone(), format!("{:?}", msg_intent),
-    );
+    let sse_to = msg_to.clone();
     let event_for_js = event.clone();
 
     // Broadcast to WebSocket listeners
@@ -657,15 +655,10 @@ pub async fn create_thread(
         }
     }
 
-    // Push to connected Streamable HTTP agents via PushBroker → Peer notification
+    // Push lightweight wake signal to connected Streamable HTTP agents (claim check)
     state.push_broker().publish(
         &sse_to,
-        crate::mcp::streamable_http::PushEvent {
-            from: sse_from,
-            subject: sse_subject,
-            intent: sse_intent,
-            message_id: event_id.to_string(),
-        },
+        crate::mcp::streamable_http::PushEvent,
     ).await;
 
     // Thread ID = provided thread_id or event ID (indexer convention when thread_id is None)

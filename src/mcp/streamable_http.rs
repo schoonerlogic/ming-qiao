@@ -10,7 +10,7 @@ use std::collections::HashMap;
 use rmcp::{
     RoleServer, ServerHandler,
     handler::server::{router::tool::ToolRouter, tool::{Parameters, Extension}},
-    model::{ServerCapabilities, ServerInfo, LoggingLevel, LoggingMessageNotificationParam},
+    model::{ServerCapabilities, ServerInfo},
     schemars, tool, tool_router,
     transport::streamable_http_server::{
         StreamableHttpServerConfig,
@@ -28,14 +28,10 @@ use crate::state::AppState;
 // PushBroker — bridges JetStream messages to MCP SSE push
 // ============================================================================
 
-/// Event published to agents via broadcast channels.
+/// Lightweight wake signal — claim check pattern.
+/// Agents call `check_messages` to pull actual content from SurrealDB.
 #[derive(Clone, Debug)]
-pub struct PushEvent {
-    pub from: String,
-    pub subject: String,
-    pub intent: String,
-    pub message_id: String,
-}
+pub struct PushEvent;
 
 /// Manages per-agent broadcast channels and peer handles for push delivery.
 pub struct PushBroker {
@@ -73,6 +69,7 @@ impl PushBroker {
     }
 
     /// Register a peer handle for an agent. Starts the push listener task.
+    /// Sends one immediate wake signal on connect so the agent polls for missed messages.
     pub async fn register_peer(&self, agent_id: &str, peer: Peer<RoleServer>) {
         // Store the peer
         self.peers.write().await.insert(agent_id.to_string(), peer.clone());
@@ -84,36 +81,33 @@ impl PushBroker {
         // Spawn background task that forwards push events → peer notifications
         tokio::spawn(async move {
             info!("Push listener started for agent={}", agent);
+
+            // Immediate wake on connect — agent polls check_messages for anything missed
+            let resource_uri = format!("agent://{}/messages", agent);
+            if let Err(e) = peer.notify_resource_updated(
+                rmcp::model::ResourceUpdatedNotificationParam {
+                    uri: resource_uri.clone(),
+                }
+            ).await {
+                warn!("Initial wake notification failed for {}: {}", agent, e);
+                return;
+            }
+            info!("Initial wake signal sent to {} (poll for missed messages)", agent);
+
             loop {
                 match rx.recv().await {
-                    Ok(event) => {
-                        // Send resource_updated notification (MCP-spec for data changes)
-                        let resource_uri = format!("agent://{}/messages", agent);
+                    Ok(_event) => {
+                        // Lightweight wake signal — just notify resource changed
+                        // Agent calls check_messages to pull actual content (claim check)
                         if let Err(e) = peer.notify_resource_updated(
                             rmcp::model::ResourceUpdatedNotificationParam {
                                 uri: resource_uri.clone(),
                             }
                         ).await {
-                            warn!("Resource update notification failed for {}: {}", agent, e);
+                            warn!("Wake notification failed for {}: {}", agent, e);
                             break; // Peer disconnected
                         }
-
-                        // Also send logging notification with summary for kimi's
-                        // MoE routing — gives enough context to decide priority
-                        let _ = peer.notify_logging_message(
-                            rmcp::model::LoggingMessageNotificationParam {
-                                level: rmcp::model::LoggingLevel::Info,
-                                logger: Some("ming-qiao-push".into()),
-                                data: serde_json::json!({
-                                    "type": "new_message",
-                                    "priority": event.intent,
-                                    "uri": resource_uri,
-                                    "summary": format!("New message from {} regarding {}", event.from, event.subject),
-                                }),
-                            }
-                        ).await;
-
-                        info!("Push delivered to {}: {} re: {}", agent, event.from, event.subject);
+                        info!("Wake signal pushed to {}", agent);
                     }
                     Err(broadcast::error::RecvError::Lagged(n)) => {
                         warn!("Push listener lagged {} events for {}", n, agent);

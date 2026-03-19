@@ -86,3 +86,13 @@ runtime = "manual"
 headless_capable = false
 pending_file = true
 webhook_url = ""
+
+
+[agents.hypatia]
+worktree = "/Users/proteus/astralmaris/astral-forge/hypatia"
+all_worktrees = "/Users/proteus/astralmaris/astral-forge/hypatia /Users/proteus/astralmaris/ming-qiao/hypatia"
+runtime = "gemini"
+headless_capable = true
+pending_file = true
+webhook_url = ""
+agentapi_port = 3289
