@@ -13,3 +13,4 @@ logs/
 PENDING_MESSAGES.md
 docs/messages-to-relay.md
 __pycache__/
+config/council-keyring.json
