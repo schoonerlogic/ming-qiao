@@ -44,6 +44,12 @@ struct Args {
 
     #[arg(long, default_value = "ws://localhost:8000")]
     surrealdb_url: String,
+
+    #[arg(long, default_value = "root")]
+    surrealdb_user: String,
+
+    #[arg(long, env = "SURREALDB_PASS")]
+    surrealdb_pass: Option<String>,
 }
 
 #[derive(Subcommand, Debug)]
@@ -386,18 +392,20 @@ async fn query_message_counts(db: &Surreal<surrealdb::engine::any::Any>, today: 
     Ok(counts)
 }
 
-async fn connect_surrealdb(url: &str) -> Result<Surreal<surrealdb::engine::any::Any>> {
+async fn connect_surrealdb(url: &str, user: &str, pass: Option<&str>) -> Result<Surreal<surrealdb::engine::any::Any>> {
     let db = connect(url).await
         .with_context(|| format!("Failed to connect to SurrealDB at {}", url))?;
     
-    db.signin(Database {
-        namespace: "astralmaris".to_string(),
-        database: "mingqiao".to_string(),
-        username: "root".to_string(),
-        password: "root".to_string(),
-    })
-    .await
-    .with_context(|| "Failed to authenticate to SurrealDB")?;
+    if let Some(password) = pass {
+        db.signin(Database {
+            namespace: "astralmaris".to_string(),
+            database: "mingqiao".to_string(),
+            username: user.to_string(),
+            password: password.to_string(),
+        })
+        .await
+        .with_context(|| "Failed to authenticate to SurrealDB")?;
+    }
     
     db.use_ns("astralmaris")
         .use_db("mingqiao")
@@ -432,7 +440,7 @@ fn print_metrics_table(metrics: &FleetMetricsSnapshot) {
     println!();
     println!("  Infrastructure:");
     for infra in &metrics.infra_health {
-        let status = if infra.status == "ok" { "✅" } else { "🔴" };
+        let status = if infra.status == "healthy" { "✅" } else { "🔴" };
         println!("    {} {}: {}", status, infra.service, infra.message);
     }
     
@@ -560,7 +568,11 @@ async fn main() -> Result<()> {
             
             let mut agents = Vec::new();
             
-            let db = connect_surrealdb(&args.surrealdb_url).await.ok();
+            let db = connect_surrealdb(
+                &args.surrealdb_url,
+                &args.surrealdb_user,
+                args.surrealdb_pass.as_deref(),
+            ).await.ok();
             let message_counts = if let Some(ref db) = db {
                 query_message_counts(db, today).await.unwrap_or_default()
             } else {
