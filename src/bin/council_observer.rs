@@ -5,8 +5,12 @@
 //!
 //! Wake tiers:
 //!   Tier 1 (AgentAPI):    POST to localhost:{port}/message (not currently used)
-//!   Tier 2 (bare Enter):  cmux send-key enter (hypatia — triggers Gemini tool loop)
-//!   Tier 3 (text inject): cmux send + enter (luban, ogma, laozi-jung, mataya, meridian, aleph)
+//!   Tier 2 (bare Enter):  cmux send-key enter
+//!   Tier 3 (text inject): cmux send + enter (all agents)
+//!
+//! Auto-heal: after 5 consecutive cycles where an agent has unread messages
+//! that never clear, the Observer kills and relaunches the cmux session.
+//! This handles stale MCP sessions (e.g., Gemini CLI after ming-qiao restart).
 //!
 //! Replaces: astrallation/fleet/lib/council-observer.sh (333 lines)
 //!
@@ -122,6 +126,105 @@ impl CooldownTracker {
 
     fn mark_woken(&mut self, agent: &str) {
         self.last_wake.insert(agent.to_string(), Instant::now());
+    }
+}
+
+// ============================================================================
+// Stale session tracker — auto-heal for broken MCP sessions
+// ============================================================================
+
+/// After this many consecutive cycles where an agent has unread messages
+/// that never clear, assume the session is broken and restart it.
+const STALE_THRESHOLD: u32 = 5;
+
+struct StaleSessionTracker {
+    consecutive_unread: HashMap<String, u32>,
+}
+
+impl StaleSessionTracker {
+    fn new() -> Self {
+        Self {
+            consecutive_unread: HashMap::new(),
+        }
+    }
+
+    /// Record that an agent has unread messages this cycle.
+    /// Returns true if the stale threshold has been reached (needs auto-heal).
+    fn record_unread(&mut self, agent: &str) -> bool {
+        let count = self.consecutive_unread.entry(agent.to_string()).or_insert(0);
+        *count += 1;
+        *count >= STALE_THRESHOLD
+    }
+
+    /// Agent cleared their inbox — reset counter.
+    fn record_clear(&mut self, agent: &str) {
+        self.consecutive_unread.remove(agent);
+    }
+
+    /// Reset after an auto-heal so we give the new session time to start.
+    fn reset_after_heal(&mut self, agent: &str) {
+        self.consecutive_unread.remove(agent);
+    }
+
+    fn consecutive_count(&self, agent: &str) -> u32 {
+        self.consecutive_unread.get(agent).copied().unwrap_or(0)
+    }
+}
+
+/// Auto-heal: kill the agent's cmux session and re-launch.
+/// The launch script (in cmux) will restart the CLI process.
+fn auto_heal_session(
+    cmux_password: &Option<String>,
+    agent: &str,
+    ws_ref: &str,
+    dry_run: bool,
+) -> Result<(), String> {
+    if dry_run {
+        info!(agent, "DRY-RUN: would auto-heal (kill + restart cmux session)");
+        return Ok(());
+    }
+
+    warn!(agent, "AUTO-HEAL: killing stale session (cmux workspace {})", ws_ref);
+
+    // Kill the workspace — cmux will stop the process inside it
+    if let Err(e) = run_cmux_with_timeout(cmux_password, &["kill-workspace", "--workspace", ws_ref]) {
+        warn!(agent, error = %e, "cmux kill-workspace failed — trying kill-session");
+        // Fallback: try kill-session with the agent name
+        if let Err(e2) = run_cmux_with_timeout(cmux_password, &["kill-session", agent]) {
+            return Err(format!("auto-heal failed for {}: kill-workspace: {}, kill-session: {}", agent, e, e2));
+        }
+    }
+
+    // Brief pause for cleanup
+    std::thread::sleep(Duration::from_secs(2));
+
+    // Re-launch via am-fleet (which knows each agent's launch script)
+    info!(agent, "AUTO-HEAL: re-launching via am-fleet launch");
+    let fleet_script = "/Users/proteus/astralmaris/astrallation/fleet/am-fleet.sh";
+    match Command::new("bash")
+        .args([fleet_script, "launch", agent])
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+    {
+        Ok(mut child) => {
+            // Don't wait for it — launch scripts run the CLI process
+            // Give it a moment to start, then detach
+            std::thread::sleep(Duration::from_secs(1));
+            match child.try_wait() {
+                Ok(Some(status)) if !status.success() => {
+                    let stderr = child.stderr.take()
+                        .map(|mut s| { let mut buf = String::new(); std::io::Read::read_to_string(&mut s, &mut buf).ok(); buf })
+                        .unwrap_or_default();
+                    warn!(agent, "am-fleet launch exited with {}: {}", status, stderr.trim());
+                }
+                _ => {
+                    info!(agent, "AUTO-HEAL: re-launch initiated");
+                }
+            }
+            Ok(())
+        }
+        Err(e) => Err(format!("failed to spawn am-fleet launch {}: {}", agent, e)),
     }
 }
 
@@ -370,6 +473,7 @@ async fn poll_cycle(
     args: &Args,
     tracker: &mut CooldownTracker,
     ws_cache: &mut WorkspaceCache,
+    stale_tracker: &mut StaleSessionTracker,
 ) {
     // Refresh workspace cache once per cycle
     ws_cache.refresh(&args.cmux_password);
@@ -388,7 +492,39 @@ async fn poll_cycle(
         debug!(agent, unread, "inbox check");
 
         if unread == 0 {
+            stale_tracker.record_clear(agent);
             continue;
+        }
+
+        // Track consecutive unread cycles — auto-heal if stale
+        if stale_tracker.record_unread(agent) {
+            let consecutive = stale_tracker.consecutive_count(agent);
+            warn!(
+                agent,
+                consecutive,
+                unread,
+                "session appears stale ({} consecutive cycles with unread) — initiating auto-heal",
+                consecutive
+            );
+
+            if let Some(ws_ref) = ws_cache.get(agent) {
+                let ws_ref_owned = ws_ref.to_string();
+                match auto_heal_session(&args.cmux_password, agent, &ws_ref_owned, args.dry_run) {
+                    Ok(()) => {
+                        info!(agent, "auto-heal complete — will re-check next cycle");
+                        stale_tracker.reset_after_heal(agent);
+                        // Skip the normal wake — give the new session time to start
+                        tracker.mark_woken(agent);
+                        continue;
+                    }
+                    Err(e) => {
+                        warn!(agent, error = %e, "auto-heal failed — falling through to normal wake");
+                        // Don't reset — will retry next cycle
+                    }
+                }
+            } else {
+                warn!(agent, "auto-heal skipped — no cmux workspace found");
+            }
         }
 
         let tier_label = match fleet_agent.tier {
@@ -503,10 +639,13 @@ async fn main() -> anyhow::Result<()> {
 
     let mut tracker = CooldownTracker::new(poll_interval);
     let mut ws_cache = WorkspaceCache::new();
+    let mut stale_tracker = StaleSessionTracker::new();
+
+    info!("  Auto-heal: after {} consecutive stale cycles", STALE_THRESHOLD);
 
     loop {
         debug!("--- poll cycle start ---");
-        poll_cycle(&http_client, &args, &mut tracker, &mut ws_cache).await;
+        poll_cycle(&http_client, &args, &mut tracker, &mut ws_cache, &mut stale_tracker).await;
         sleep(poll_interval).await;
     }
 }
