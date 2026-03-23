@@ -527,6 +527,52 @@ fn wake_text_inject(
 }
 
 // ============================================================================
+// Stale session alert — notify merlin (Proteus) via ming-qiao
+// ============================================================================
+
+async fn alert_merlin(
+    http_client: &reqwest::Client,
+    mingqiao_url: &str,
+    agent: &str,
+    consecutive: u32,
+    unread: usize,
+) {
+    let body = serde_json::json!({
+        "from_agent": "council-observer",
+        "to_agent": "merlin",
+        "subject": format!("am.observer.stale-session — {}", agent),
+        "content": format!(
+            "STALE SESSION ALERT: **{}** has had {} unread message(s) for {} consecutive poll cycles (~{} minutes) without clearing them.\n\n\
+             The agent's session may be broken (stale MCP connection, hung process, or unresponsive runtime).\n\n\
+             **Action required:** Check the agent's cmux workspace and restart if needed.\n\n\
+             — council-observer (automated)",
+            agent, unread, consecutive, consecutive
+        ),
+        "intent": "request",
+        "priority": "high"
+    });
+
+    let url = format!("{}/api/threads", mingqiao_url);
+    match http_client
+        .post(&url)
+        .json(&body)
+        .timeout(HTTP_TIMEOUT)
+        .send()
+        .await
+    {
+        Ok(resp) if resp.status().is_success() => {
+            info!(agent, "stale session alert sent to merlin");
+        }
+        Ok(resp) => {
+            warn!(agent, "failed to alert merlin (HTTP {})", resp.status());
+        }
+        Err(e) => {
+            warn!(agent, error = %e, "failed to alert merlin");
+        }
+    }
+}
+
+// ============================================================================
 // Poll cycle
 // ============================================================================
 
@@ -564,34 +610,19 @@ async fn poll_cycle(
 
         match heal_phase {
             HealPhase::ForceHealed => {
-                // Phase 2 DISABLED — force-kill destroyed sessions when relaunch failed.
-                // Only re-send the graceful signal. Manual intervention required if agent
-                // doesn't respond to graceful heal.
-                warn!(
-                    agent, consecutive, unread,
-                    "PHASE 2 DISABLED: agent still stale after {} cycles — re-sending graceful signal. Manual restart required if unresponsive.",
-                    consecutive
-                );
-                if let Some(ws_ref) = ws_cache.get(agent) {
-                    let ws_ref_owned = ws_ref.to_string();
-                    let _ = graceful_heal_signal(&args.cmux_password, agent, &ws_ref_owned, args.dry_run);
-                }
-                // Reset counter to GRACEFUL_THRESHOLD so we don't spam every cycle
-                // but do re-signal every 2 cycles
+                // Re-alert merlin every FORCE_THRESHOLD cycles
+                warn!(agent, consecutive, unread, "STALE SESSION: still unresponsive after {} cycles — re-alerting merlin", consecutive);
+                alert_merlin(http_client, &args.mingqiao_url, agent, consecutive, unread).await;
                 stale_tracker.reset_after_heal(agent);
             }
             HealPhase::GracefulPending if consecutive == GRACEFUL_THRESHOLD => {
-                // Phase 1 trigger: first cycle at threshold — send graceful signal
-                info!(agent, consecutive, unread, "PHASE 1: sending graceful shutdown signal");
-                if let Some(ws_ref) = ws_cache.get(agent) {
-                    let ws_ref_owned = ws_ref.to_string();
-                    let _ = graceful_heal_signal(&args.cmux_password, agent, &ws_ref_owned, args.dry_run);
-                }
-                // Still do the normal wake below — agent might respond
+                // First detection: alert merlin, do NOT touch the agent's session
+                warn!(agent, consecutive, unread, "STALE SESSION DETECTED: {} consecutive cycles with unread messages — alerting merlin", consecutive);
+                alert_merlin(http_client, &args.mingqiao_url, agent, consecutive, unread).await;
             }
             HealPhase::GracefulPending => {
-                // Cycles 6: waiting for agent to exit gracefully
-                debug!(agent, consecutive, "waiting for graceful exit ({}/{} cycles before force)", consecutive, FORCE_THRESHOLD);
+                // Between thresholds — just log
+                debug!(agent, consecutive, "stale session — merlin alerted, waiting for manual intervention");
             }
             HealPhase::Healthy => {
                 // Not stale yet — normal wake
