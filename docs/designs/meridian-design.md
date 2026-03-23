@@ -1,459 +1,359 @@
 # Meridian (子午線) — Design Document
 
-**Author:** Thales, Architecture Team  
-**Reviewed by:** Hypatia (Architecture Team), Ogma (Security Team)  
-**Date:** 2026-03-19 (v1.0), 2026-03-23 (v2.0)  
-**Status:** APPROVED — Architecture Team + Proteus  
-**Version:** 2.0
+**Author:** Thales (Lead Architect), with Hypatia (Architecture Team)
+**Security Review:** Ogma (Security Team)
+**Date:** 2026-03-19 (v1.0), 2026-03-23 (v2.0, v3.0)
+**Status:** DRAFT — v3.0, pending Proteus review
+**Version:** 3.0
+
+**Related documents:**
+- Model selection assessment: `astral-forge/hypatia/MERIDIAN-MODEL-ASSESSMENT.md`
+- Config-Driven Orchestrator spec: `astrallation/designs/PROPOSAL-AGENT-HOST.md`
+- Curation cluster analysis: `inference-kitchen/luban/output/cluster-review.md`
 
 ---
 
 ## 1. Identity
 
-**Name:** Meridian  
-**Origin:** The prime meridian — the reference line from which navigators take their sighting. Not the destination, but the bearing that makes navigation possible.  
-**Agent ID:** `meridian`  
-**Role:** Field intelligence — reads the horizon and feeds the Council's collective memory  
-**Principle:** A navigator selects by bearing. Meridian's job is not to collect everything mentioning "fine-tuning" — it is to ask: *What would change how the Council sails?*
+**Name:** Meridian
+**Origin:** The prime meridian — the reference line from which navigators take their sighting. Not the destination, but the bearing that makes navigation possible.
+**Agent ID:** `meridian`
+**Role:** Data capture and preparation pipeline — the setup model for training data curation
+**Principle:** A navigator selects by bearing. Meridian's job is not to collect everything — it is to ask: *What would change how the Council sails?*
 
 ---
 
-## 2. Purpose
+## 2. Purpose and Strategic Context
 
-AstralMaris is becoming a business. The Council needs systematic awareness of:
+Meridian is a **training data pipeline**, not a permanent production agent. Its primary role is the reliable capture, preparation, and structuring of external intelligence data. The long-term trajectory:
 
-- Research that changes our technical approach (papers, preprints, benchmarks)
-- Competitive positioning (who else is building what we build, and how)
-- Tool and platform changes (model releases, API updates, framework shifts)
-- Emerging patterns (what the field is converging on, what's diverging)
+1. **Setup phase (current):** Meridian captures data with minimal processing to learn how to capture the data flow effectively
+2. **Training phase:** The data Meridian captures becomes a training set for a purpose-tuned model (LoRA, QLoRA, distillation, RL, or other fine-tuning approaches)
+3. **Replacement phase:** The tuned model replaces Meridian as the production agent, achieving higher reliability at greater efficiency
 
-Currently this intelligence arrives ad hoc — Proteus sends papers to Gmail, agents stumble on relevant findings during other work. No systematic scanning, no curation pipeline, no competitive map.
+This pipeline is **dataset-agnostic** — it is designed to be reusable for any dataset Proteus points it towards, not only the current arXiv/blog intelligence use case.
 
-Meridian fills this gap as the ninth Council member.
+The Council needs systematic awareness of research, competitive positioning, ecosystem changes, and emerging patterns. Currently this intelligence arrives ad hoc. Meridian fills this gap while simultaneously building the infrastructure for model development.
 
 ---
 
-## 3. Three Domains
+## 3. Intelligence Domains
 
 ### 3.1 Research Intelligence
 
-Daily scan of sources where practitioners share techniques before formal publication:
+Daily scan of high-signal sources where practitioners share techniques before formal publication: arXiv (matching AstralMaris research interests), lab blogs, individual researchers, podcast transcripts, and community discussions.
 
-- **arXiv** — papers matching: small model fine-tuning, LoRA/QLoRA techniques, knowledge distillation, evaluation methods, agentic architectures, multi-agent coordination, singular learning theory, Bayesian statistics, measure theory
-- **Lab blogs** — Hugging Face, Anthropic Research, Google DeepMind, OpenAI, Moonshot AI, Z.ai
-- **Individual researchers** — practitioners who publish findings before they paper
-- **Podcasts** — Latent Space, Gradient Dissent, The Cognitive Revolution, Practical AI, TWIML (transcript scanning)
-- **Community** — Hacker News ML, Reddit r/MachineLearning, r/LocalLLaMA
-
-**Output:** Curated findings, not raw feeds. Each item includes: source, date, relevance assessment, key insight, and how it relates to AstralMaris work.
+**Initial sources (Phase 1):** arXiv and lab blogs only. Community sources (HN, Reddit) deferred until token cost and hallucination rates are baselined.
 
 ### 3.2 Competitive Intelligence
 
-- Track fine-tuning-as-a-service offerings (pricing, capabilities, differentiators)
-- Monitor neocloud pricing and GPU availability changes
-- Watch for techniques we're developing that get published by others
-- Alert when AstralMaris Method assumptions are challenged or confirmed by new research
+Track fine-tuning-as-a-service offerings, neocloud pricing, GPU availability. Alert when AstralMaris assumptions are challenged or confirmed.
 
 ### 3.3 Ecosystem Monitoring
 
-- New model releases — track when base models drop that could become candidates for the AstralMaris Method (Qwen, DeepSeek, Llama, GLM updates)
-- Framework shifts — new tools, libraries, training approaches
-- API changes — provider pricing, rate limits, new capabilities
+New model releases (base model candidates), framework shifts, API changes (pricing, rate limits, capabilities).
 
-**Output cadence:** Daily intelligence report to the Council via ming-qiao. Weekly synthesis with trends and recommendations.
+**Output cadence:** Daily intelligence report to the Council via ming-qiao. Weekly synthesis by Laozi-Jung.
 
 ---
 
-## 4. Two-Agent Split
+## 4. Runtime Architecture
 
-Proteus decided (March 13, 2026): Meridian and Jikimi are separate agents.
+Meridian handles external intelligence; Jikimi handles internal operations monitoring. These are architecturally separate agents — see `fleet-manifest.toml`.
 
-| Property | Meridian | Jikimi |
-|----------|----------|--------|
-| **Domain** | External intelligence | Internal operations |
-| **Model** | Configurable via Orchestrator (see §5) | qwen3:8b via Ollama (local) |
-| **Runtime** | Managed by am-agent-host Orchestrator | Bash daemons (launchd) |
-| **Network** | External read (fetch service) + localhost (reasoning) | Localhost only |
-| **Cadence** | Daily curated | Continuous monitoring |
-| **Cost** | API tokens per invocation | Free (local inference) |
-| **Authority** | inform/discuss only | inform only |
+Meridian's runtime is managed by the **Config-Driven Orchestrator** (`am-agent-host`). Model selection is a runtime configuration, not a design decision. See `astrallation/designs/PROPOSAL-AGENT-HOST.md` for the full Orchestrator specification. Model candidate research is in `astral-forge/hypatia/MERIDIAN-MODEL-ASSESSMENT.md`.
 
-**Why separate:** Different models, different schedules, different security postures. The Orchestrator pattern means you can swap Meridian's model without touching ops monitoring. The ops agent never touches external content; Meridian never touches infrastructure metrics.
+| Property | Value |
+|----------|-------|
+| **Model** | `PRIMARY_MODEL` via Orchestrator config (swappable) |
+| **Fallback** | `FALLBACK_MODEL` defined in `fleet-manifest.toml` (immutable) |
+| **Runtime** | Managed by `am-agent-host` Orchestrator |
+| **Worktree** | `/Users/proteus/astralmaris/ming-qiao/meridian` |
+| **Cadence** | Daily |
+| **Wake** | Interactive cmux + Observer polling |
+| **MCP config** | Generated by Orchestrator (ephemeral, 0600 permissions, git-ignored) |
+| **Authority** | `inform` and `discuss` intents only |
 
 ---
 
-## 5. Model Abstraction Layer (v2.0 — March 23, 2026)
+## 5. Pipeline Architecture
 
-### 5.1 Design Principle: Config-Driven Orchestrator
+The pipeline is modular and dataset-agnostic. Each module is independently configurable for different source types and output formats.
 
-Meridian is the **reference implementation** for AstralMaris's Model Abstraction Layer (MAL). Rather than hard-coupling to any specific model, Meridian runs through the `am-agent-host` Config-Driven Orchestrator — a Rust binary that reads per-agent configuration and manages the runtime lifecycle.
+### 5.1 Module Breakdown
 
-**Key properties:**
-- **Hot-swappable models:** Switch between providers via `AGENT-CONFIG.toml` without code changes
-- **Hot-swappable prompts:** Swap system prompts and persona independently of the model
-- **Handoff Fallback:** If primary model fails, Orchestrator restarts with fallback model and injects last handoff JSON for context continuity
-- **Uniform interface:** All agents interact with ming-qiao MCP regardless of underlying provider
-- **Fleet manifest as registry:** `fleet-manifest.toml` specifies primary + fallback models per agent
+| Module | Responsibility | Tooling |
+|--------|---------------|---------|
+| **Fetch** | HTTP client, rate limiter, provenance logger | Rust CLI, launchd scheduled |
+| **Parse** | Document type handlers — extensible per source | docling (PDFs), markdown parser (blogs), API handler (arXiv) |
+| **Sanitize** | HTML stripping, script removal, content hashing | Rust, deterministic |
+| **Embed** | Vector embeddings for semantic search and clustering | nomic-embed-text via Ollama (768-dim, local, free) |
+| **Reason** | LLM analysis, relevance scoring, structured output | `PRIMARY_MODEL` via Orchestrator |
+| **Stage** | Schema validation, duplicate detection, artifact writing | Rust CLI |
 
-### 5.2 Model Candidates (Architecture Team Research — March 23, 2026)
+### 5.2 Quarantine and State Tracking
 
-Two independent assessments were conducted:
+Fetched content passes through a quarantine directory before the reasoning agent can access it. This is the sole interface between the fetch service and the reasoning agent.
 
-**Hypatia's Assessment (Synthesis Priority):**
+**Document lifecycle states:** `fetched → parsed → sanitized → quarantined → processed → staged`
 
-| Model | Provider | Context | Pricing (input/output per 1M) | Strength |
-|-------|----------|---------|-------------------------------|----------|
-| Gemini 1.5 Pro | Google | 2M tokens | $1.25 / $10.00 | Unparalleled context window for holistic daily feed synthesis |
-| Claude 3.5 Sonnet | Anthropic | 200K tokens | $3.00 / $15.00 | Best-in-class tool orchestration and instruction following |
-| DeepSeek-V3 | DeepSeek | 128K tokens | $0.27 / $1.10 | Extreme cost-effectiveness for continuous operation |
+State tracking uses **DuckDB** (`fetch_state.db`) to support exhaustive querying across the full dataset for training data curation, failure rate analysis, and pipeline health monitoring.
 
-**Thales's Assessment (Execution Priority):**
+**Quarantine failures:** Items that fail sanitization or parsing are moved to `quarantine/failed/{date}/` with logged failure reason and source URL. Failed items remain queryable in DuckDB for debugging and pipeline improvement.
 
-| Model | Provider | Context | Pricing (input/output per 1M) | Strength |
-|-------|----------|---------|-------------------------------|----------|
-| GLM-5 | Z.ai | 128K+ tokens | $0.80 / $2.56 | BrowseComp leader, proven in fleet (Luban), cost-effective |
-| GLM-5-Turbo | Z.ai | 202K tokens | $0.96 / $3.20 | Faster variant, tuned for information search/gathering |
-| Qwen 3.5 | Alibaba (self-host) | Variable | Free (Ollama) | Self-hostable, excellent instruction following, zero cost |
+### 5.3 Two-Stage Fetch/Reason Separation (MANDATORY INVARIANT)
 
-### 5.3 Model Selection Decision
+The process that fetches external content must NOT be the same process that has ming-qiao write access. These are mechanically separate executables with no shared tool surface.
 
-**Decision:** The model choice is a **runtime configuration**, not a permanent architectural decision.
+**Stage 1: Fetch Service (launchd — NOT part of Meridian agent)**
+- Scheduled launchd service (Rust CLI) running on a timer (every 6 hours)
+- Has internet access: pulls from arXiv API, RSS feeds, blog URLs
+- Sanitizes and parses content via the Parse and Sanitize modules
+- Writes sanitized artifacts to quarantine directory: `ming-qiao/meridian/quarantine/{date}/`
+- Logs provenance: source URL, timestamps, content hashes
+- Updates DuckDB state tracker
+- Has NO ming-qiao access, NO NATS access, NO localhost service access
+- OS-enforced via macOS `sandbox-exec` profile: `(allow network-outbound)`, `(deny network* localhost)`
 
-Thanks to the Config-Driven Orchestrator, Meridian launches with whatever model is specified in the fleet manifest. The implementation path:
+**Stage 2: Meridian Agent (reasoning only)**
+- Reads from `quarantine/` directory (read-only filesystem access)
+- Runs the Reason module: LLM analysis, relevance scoring against cluster-definitions.json
+- Embeds artifacts via the Embed module (nomic-embed-text, local Ollama)
+- Writes structured artifacts to `staging/` directory
+- Sends daily report via ming-qiao (localhost only)
+- Has ZERO internet egress
+- OS-enforced via macOS `sandbox-exec` profile: `(deny network-outbound)`, `(allow network* localhost)`
 
-1. **Baseline:** Launch with GLM-5 via OpenCode to establish operational telemetry (proven runtime, low cost)
-2. **Evaluate:** Run comparative tests with Gemini 1.5 Pro for synthesis quality (Hypatia's recommendation for the 2M context window advantage)
-3. **Optimize:** Based on telemetry, select the best cost/quality balance and set as primary with the other as fallback
+**The quarantine directory is the sole interface between the two stages.**
 
-```toml
-# fleet-manifest.toml (target state)
-[agents.meridian]
-primary_model = "glm-5"          # baseline, swap to gemini-1.5-pro after evaluation
-fallback_model = "deepseek-v3"   # cost-effective backup
-agent_config = "ming-qiao/meridian/AGENT-CONFIG.toml"
+### 5.4 Embedding and Search
+
+All staged artifacts are embedded with nomic-embed-text (768-dim vectors) and stored in ASTROLABE with vector indices. This supports semantic search, clustering, similarity analysis, and training data curation.
+
+Search is available via ASTROLABE CLI or MCP tools. Access is restricted to Council agents and Proteus via standard authentication.
+
+### 5.5 Daily Reports and Insight Reuse
+
+Daily intelligence reports are sent as ming-qiao messages (subject: `am.intel.daily`) and also stored as structured artifacts in `staging/reports/`. Reports are ingested into ASTROLABE via the standard staging pipeline.
+
+Methodology insights — effective tool patterns, processing techniques, relevance scoring improvements — are tagged with `methodology_insight` in the artifact schema and routed to the Architecture Team. Laozi-Jung builds weekly synthesis from daily reports, strengthening the institutional memory graph.
+
+### 5.6 Structured Artifact Schema
+
+```json
+{
+  "source_url": "https://...",
+  "source_type": "arxiv|blog|podcast|hn|reddit",
+  "fetched_at": "2026-03-19T10:00:00Z",
+  "content_hash": "sha256:...",
+  "sanitized_hash": "sha256:...",
+  "title": "...",
+  "summary": "2-3 sentence summary",
+  "relevance": "high|medium|low",
+  "relevance_rationale": "Why this matters",
+  "domains": ["research", "competitive", "ecosystem"],
+  "tags": ["..."],
+  "embedding": [768-dim vector],
+  "source_model": "dynamic — set by Orchestrator",
+  "agent_id": "meridian",
+  "methodology_insight": null | "description of reusable pattern"
+}
 ```
 
-### 5.4 Runtime Configuration (via Orchestrator)
+### 5.7 Staging and Ingestion Gate
 
-| Property | Value | Notes |
-|----------|-------|-------|
-| **Primary model** | GLM-5 via Z.ai API (baseline) | Swappable via config |
-| **Fallback model** | DeepSeek-V3 (cost backup) | Auto-switch on primary failure |
-| **Runtime** | OpenCode (managed by am-agent-host) | Orchestrator generates runtime configs |
-| **Worktree** | `/Users/proteus/astralmaris/ming-qiao/meridian` | Within ming-qiao for Council integration |
-| **Cadence** | Daily | Curated report, not real-time monitoring |
-| **Wake** | Interactive cmux + Observer polling | Standard non-Claude pattern |
-| **MCP config** | Generated by Orchestrator (ephemeral, 0600 permissions) | Never committed to git |
+Staged artifacts are NOT automatically ingested into ASTROLABE. They require: deterministic validation (schema check, duplicate detection), human review (Proteus) or Architect approval (Thales/Hypatia) for high-relevance items, and ASTROLABE ontology commitment. This prevents hallucinated relationships from permanently corrupting institutional memory.
 
 ---
 
 ## 6. Security Architecture
 
-Based on Ogma's security assessments: original review (2026-03-11, 9 requirements) and Config-Driven Orchestrator review (2026-03-23, 5 additional gates). All requirements are mandatory.
+All major changes to this design require Ogma (Security Team) review. See Security Findings Log below.
 
-### v2.0 Security Gates (Ogma Review — March 23, 2026)
+### 6.1 Security Gates (Ogma Review — March 23, 2026)
 
-These five gates must be satisfied before Meridian Phase 2 (fetch/reason activation) proceeds:
+Five gates must be satisfied before Phase 2 (fetch/reason activation):
 
-1. **CRITICAL: Ephemeral generated configs.** MCP configs generated by the Orchestrator must NEVER persist in repos. Write to git-ignored `.run/` or `/tmp/` with `0600` permissions. Delete on process exit. Live bearer tokens were found committed in `ming-qiao/meridian/opencode.json` — this must be scrubbed.
+1. **CRITICAL: Ephemeral generated configs.** MCP configs generated by the Orchestrator must NEVER persist in repos. Write to git-ignored `.run/` or `/tmp/` with `0600` permissions. Delete on process exit.
 
-2. **HIGH: OS-enforced network boundary.** The two-process fetch/reason split must be mechanically enforced by the OS, not just config flags. Use macOS `sandbox-exec` with custom `.sb` profiles: fetch process gets `(allow network-outbound)` but no localhost; reasoning process gets localhost only with `(deny network-outbound)`.
+2. **HIGH: OS-enforced network boundary.** The two-process fetch/reason split must be mechanically enforced by macOS `sandbox-exec` with custom `.sb` profiles — not just config flags.
 
-3. **HIGH: Server-side per-agent messaging authorization.** Meridian's `inform`/`discuss`-only scope must be enforced in ming-qiao's write-path handlers via a declarative policy config (`agent-policies.json`), not just documented constraints. Identity is not authority.
+3. **HIGH: Server-side per-agent messaging authorization.** Meridian's `inform`/`discuss`-only scope must be enforced in ming-qiao's write-path handlers via declarative `agent-policies.json`. **Current state (March 23):** ming-qiao only validates identity — subject/intent restrictions are NOT YET ENFORCED.
 
-4. **HIGH: No shell-string concatenation in Orchestrator.** `AGENT-CONFIG.toml` parsed with typed Rust structs (`serde`), launched via `std::process::Command` argv/env. TOML values must never become shell arguments.
+4. **HIGH: No shell-string concatenation in Orchestrator.** `AGENT-CONFIG.toml` parsed with typed Rust structs (`serde`), launched via `std::process::Command` argv/env.
 
-5. **MEDIUM: Immutable fallback profiles.** Fallback model selection defined in `fleet-manifest.toml` (immutable fleet policy), not in agent-writable `AGENT-CONFIG.toml`. Handoff JSON treated as untrusted input: sanitized, size-limited, injected into a strictly defined prompt block.
+5. **MEDIUM: Immutable fallback profiles.** Fallback model selection in `fleet-manifest.toml` (immutable fleet policy), not in agent-writable config. Handoff JSON treated as untrusted input.
 
-### v1.0 Security Requirements (Ogma Review — March 11, 2026)
+### 6.2 Additional Security Requirements (Ogma Review — March 11, 2026)
 
-### 6.1 Two-Stage Fetch/Reason Separation (MANDATORY INVARIANT)
+- **Content provenance logging:** Every external fetch logged with source URL, timestamp, content hash, sanitized hash
+- **Rate limiting on external fetches:** Prevents use as a scanner or beacon
+- **No directive authority:** `inform` and `discuss` intents only — NOT YET ENFORCED (pending gate #3)
+- **Content quarantine sandbox:** No direct URL-to-model pipeline
+- **Message tagging:** `source_model` field set dynamically by the Orchestrator on every message
 
-The process that fetches external content must NOT be the same process that has ming-qiao write access. These are mechanically separate executables with no shared tool surface.
+### 6.3 Security Findings Log
 
-**Stage 1: Fetch Service (launchd — NOT part of Meridian agent)**
-- A scheduled launchd service (Rust CLI or shell script) running on a timer (e.g., every 6 hours)
-- Has internet access: pulls from arXiv API, RSS feeds, blog URLs
-- Sanitizes content: strips HTML, scripts, non-text content, extracts text
-- Writes sanitized artifacts to quarantine directory: `ming-qiao/meridian/quarantine/`
-- Logs provenance: source URL, timestamps, content hashes
-- Has NO ming-qiao access, NO NATS access, NO localhost service access
-- Runs as a separate process entirely outside Meridian's agent context
+| Date | Severity | Finding (Ogma's wording) | Status | Resolution |
+|------|----------|--------------------------|--------|------------|
+| 2026-03-11 | HIGH | Fetch/reason processes must be mechanically separate executables with no shared tool surface | OPEN | Pending Phase 2 implementation |
+| 2026-03-23 | CRITICAL | Live bearer tokens found committed in `ming-qiao/meridian/opencode.json` | RESOLVED (2026-03-23) | Token scrubbed, `.mcp.json` removed from git tracking, Orchestrator generates ephemeral configs |
+| 2026-03-23 | HIGH | Server-side per-agent messaging authorization does not exist — identity is not authority | OPEN | Pending `agent-policies.json` middleware implementation |
+| 2026-03-23 | HIGH | OS-enforced network boundary not implemented — config flags are insufficient | OPEN | Pending `sandbox-exec` profile implementation |
+| 2026-03-23 | HIGH | No shell-string concatenation in Orchestrator — TOML values must never become shell arguments | OPEN | Pending `am-agent-host` typed Rust implementation |
+| 2026-03-23 | MEDIUM | Fallback profiles must be in immutable fleet-manifest.toml, not agent-writable config | RESOLVED (2026-03-23) | Aleph updated PROPOSAL-AGENT-HOST.md: fallback removed from AGENT-CONFIG.toml |
 
-**Stage 2: Meridian Agent (OpenCode in cmux — reasoning only)**
-- Reads from `quarantine/` directory (read-only filesystem access)
-- Analyzes, curates, produces structured intel artifacts
-- Writes to `staging/` directory
-- Sends daily report via ming-qiao (localhost only)
-- Has ZERO internet egress — no web fetch tools in MCP config
-- Cannot reach external URLs under any circumstance
-
-**The quarantine directory is the sole interface between the two stages.**
-
-This achieves true process-level isolation: the fetch service has no way to reach ming-qiao, and the Meridian agent has no way to reach the internet. Prompt injection from compromised external content cannot bridge to the Council's communication infrastructure. (Hypatia review: APPROVED 2026-03-19)
-
-### 6.2 Content Provenance Logging
-
-Every external fetch is logged: source URL, timestamp, hash of fetched content, hash of sanitized content. Audit trail for tracing compromised ingestion.
-
-### 6.3 Rate Limiting on External Fetches
-
-Prevents a compromised agent from using the fetch mechanism as a scanner or beacon.
-
-### 6.4 Ming-Qiao Write Scope (NOT YET ENFORCED)
-
-Meridian's messaging authority must be restricted to specific subjects and intents. **Current state (March 23):** ming-qiao only validates agent identity via bearer token — it does NOT enforce subject or intent restrictions. Any agent with a valid token can currently send any message type to any subject. This is a design-time policy, not a runtime enforcement.
-
-**Target policy (requires v2.0 gate #3 — server-side `agent-policies.json`):**
-- Subjects: `am.council.meridian.*` and `am.intel.*` only
-- Intents: `inform` and `discuss` only — NEVER `request` or `comply`
-- Cannot impersonate other agents
-- Cannot write to arbitrary subjects
-
-**This policy will not be enforced until ming-qiao implements per-agent authorization middleware. Phase 2 is blocked on this gate.**
-
-### 6.5 Message Tagging (source_model provenance)
-
-All Meridian messages carry a `source_model` field set dynamically by the Orchestrator (e.g., `"glm-5"`, `"gemini-1.5-pro"`, `"deepseek-v3"`). Recipients calibrate trust — different models warrant different confidence levels.
-
-### 6.6 No Directive Authority (NOT YET ENFORCED)
-
-Meridian reports; it does not direct. `inform` and `discuss` intents only. **Current state (March 23):** This is a documented policy, NOT a runtime enforcement. The current `agent-tokens.json` provides identity authentication only — it does NOT enforce authorization-level intent restrictions. Any authenticated agent can currently send messages with any intent.
-
-**This restriction will be mechanically enforced when ming-qiao implements the per-agent `agent-policies.json` middleware (§6 v2.0 gate #3). Phase 2 is blocked on this gate.**
-
-### 6.7 Inference/Fetch Network Boundary
-
-Two mechanically separate processes with distinct network permissions:
-
-1. **Fetch service (launchd):** Has outbound internet access (ports 80/443). Blocked from ALL internal services: localhost, 127.0.0.1, NATS admin, SurrealDB HTTP, ming-qiao API. Cannot communicate with any Council infrastructure.
-
-2. **Meridian agent (OpenCode):** Has localhost access only (ming-qiao MCP, quarantine directory read). ZERO outbound internet access. No web-fetch, no HTTP client, no curl — these tools are NOT in Meridian's MCP config. Belt-and-suspenders: the OpenCode process should be launched with proxy/firewall rules blocking outbound ports 80/443.
-
-Enforcement is structural: the fetch service has no ming-qiao MCP tools in its config, and the Meridian agent has no web-fetch tools in its config. There is no tool surface shared between the two processes. (Hypatia review: APPROVED 2026-03-19)
-
-### 6.8 Content Quarantine Sandbox
-
-External content is fetched, cleaned, and staged in a quarantine directory before Meridian processes it. No direct URL-to-model pipeline.
-
-### 6.9 Metrics Retention Policy
-
-Operational metrics in NATS/DuckDB have 30-day retention. Limits blast radius of any data access compromise.
+**Release policy:** No phase gate may proceed while any CRITICAL or HIGH finding has status OPEN. Proteus may mark findings as ACCEPTED-RISK with rationale.
 
 ---
 
-## 7. Staging Layer (ASTROLABE Interface)
+## 7. Training Data Pipeline
 
-**Per Hypatia's architectural review:** Meridian must NEVER have direct write access to FalkorDB or the Graphiti ingestion API. Instead:
+Meridian's output is structured for downstream model development. This is the core strategic purpose — Meridian is infrastructure for building purpose-tuned models, not just a news scanner.
 
-### 7.1 Structured Intel Artifacts
+### 7.1 Output Formats
 
-Meridian outputs structured JSON artifacts to a staging directory:
+Staged artifacts are designed for consumption by training pipelines:
+- **JSONL pairs:** Instruction/response format for supervised fine-tuning
+- **Preference data:** Ranked pairs for RLHF/DPO training
+- **Quality metrics:** Relevance scores, cluster proximity, human review labels
+- **Raw + processed:** Both sanitized source text and Meridian's structured analysis are preserved
 
-```
-/Users/proteus/astralmaris/ming-qiao/meridian/staging/
-├── 2026-03-19/
-│   ├── arxiv-2403.12345-summary.json
-│   ├── blog-huggingface-lora-update.json
-│   └── daily-report.json
-```
+### 7.2 Dataset Versioning
 
-Each artifact follows a schema:
+Each day's output is a versioned snapshot. DuckDB tracks the complete lineage: source → fetch → parse → sanitize → embed → reason → stage. This supports reproducible dataset construction and ablation studies.
 
-```json
-{
-  "source_url": "https://arxiv.org/abs/2403.12345",
-  "source_type": "arxiv|blog|podcast|hn|reddit",
-  "fetched_at": "2026-03-19T10:00:00Z",
-  "content_hash": "sha256:...",
-  "sanitized_hash": "sha256:...",
-  "title": "Paper title",
-  "summary": "2-3 sentence summary in Meridian's own words",
-  "relevance": "high|medium|low",
-  "relevance_rationale": "Why this matters to AstralMaris",
-  "domains": ["research", "competitive", "ecosystem"],
-  "tags": ["lora", "fine-tuning", "qwen"],
-  "source_model": "glm-5",
-  "agent_id": "meridian"
-}
-```
+### 7.3 Feedback Loop
 
-### 7.2 Ingestion Gate
+The tuned model's performance informs Meridian's capture strategy. If the tuned model excels on research papers but struggles on blog posts, Meridian's pipeline modules are adjusted to improve blog processing quality. This creates a virtuous cycle between capture and training.
 
-Staged artifacts are NOT automatically ingested into ASTROLABE. They require:
-1. Deterministic validation (schema check, duplicate detection)
-2. Human review (Proteus) or Architect approval (Thales/Hypatia) for high-relevance items
-3. ASTROLABE ontology must be committed before any ingestion begins
+### 7.4 Reusability
 
-This prevents hallucinated relationships from permanently corrupting institutional memory.
-
-### 7.3 Daily Report Format
-
-The daily intelligence report is a ming-qiao message (not a staged artifact):
-
-```
-Subject: am.intel.daily — 2026-03-19
-To: council
-Intent: inform
-Priority: normal
-
-## Field Intelligence — March 19, 2026
-
-### Research (3 items)
-1. [HIGH] Paper: "Title" — key insight, relevance to our work
-2. [MEDIUM] Blog: "Title" — brief note
-3. [LOW] HN discussion: topic — why it's worth noting
-
-### Competitive (1 item)
-1. [HIGH] Competitor X launched Y — impact assessment
-
-### Ecosystem (2 items)
-1. [MEDIUM] Qwen 3.5 released — evaluation candidate
-2. [LOW] Framework Z update — no action needed
-
-### Recommendation
-One actionable recommendation for the Council.
-```
+The pipeline is designed to be pointed at any data source. Swapping from arXiv/blogs to a different domain (e.g., legal filings, patent databases, clinical trials) requires only new Parse module handlers and updated source configurations — the Fetch, Sanitize, Embed, Reason, and Stage modules remain unchanged.
 
 ---
 
-## 8. Implementation Plan (Updated v2.0)
+## 8. Operational Metrics
+
+### 8.1 What's Tracked
+
+- **Pipeline metrics:** Fetch success/failure rates, parse errors, sanitization rejection rates, items per day
+- **Model metrics:** Token consumption per daily run, API latency, relevance score distribution
+- **Data quality metrics:** Duplicate rate, schema validation failures, human review acceptance rate
+- **Cost metrics:** API spend per provider per day, projected monthly cost
+
+### 8.2 Storage and Retention
+
+- **Granular metrics:** 30-day retention in DuckDB. Justification: balances diagnostic history for systemic failure tracking against minimizing blast radius of a data access compromise (Ogma §6.2)
+- **Aggregate metrics:** 90-day retention as daily summaries in SurrealDB, feeding the LLM Systems Metrics Dashboard
+- **Cost data:** Permanent retention (ties to fleet-wide budget tracking)
+
+### 8.3 Dashboard Integration
+
+Meridian metrics flow to the Fleet Metrics Dashboard via SurrealDB. Luban (Rust CLI) collects, Mataya (Svelte UI) displays.
+
+---
+
+## 9. Implementation Plan
 
 ### Phase 0: Prerequisites (gates all other phases)
 - [x] Design document committed and reviewed (v1.0: 2026-03-19)
 - [x] Meridian agent entry in fleet-manifest.toml
 - [x] NKey seed generated for NATS auth
-- [x] Bearer token in agent-tokens.json (Identity only — authorization boundary pending §6 v2.0 gate #3)
-- [x] ming-qiao worktree created: `/Users/proteus/astralmaris/ming-qiao/meridian`
-- [ ] OpenCode config generated by am-agent-host Orchestrator (replaces manual config)
-- [ ] Scrub live bearer token from `ming-qiao/meridian/opencode.json` (Ogma finding #1)
+- [x] Bearer token in agent-tokens.json (identity only — authorization pending §6.1 gate #3)
+- [x] ming-qiao worktree created
+- [ ] Orchestrator generates ephemeral MCP config (replaces manual config)
+- [ ] Scrub live bearer token from `ming-qiao/meridian/opencode.json` (Ogma finding)
 
 ### Phase 0.5: Curation Calibration (parallel, non-blocking)
 - [ ] Luban's cluster analysis reviewed by Proteus (cluster-review.md pending)
-- [ ] cluster-definitions.json produced for Meridian relevance scoring
+- [ ] cluster-definitions.json produced for relevance scoring
 
 ### Phase 1: Agent Shell + Orchestrator (Aleph builds)
-- [ ] am-agent-host Orchestrator binary (Rust) — reference implementation
-- [ ] AGENT-CONFIG.toml for Meridian (model selection, MCP, security constraints)
-- [ ] Orchestrator generates ephemeral runtime config at launch (0600 permissions, git-ignored)
-- [ ] Launch script generated by Orchestrator (replaces hand-written launch-meridian.sh)
+- [ ] am-agent-host Orchestrator binary (Rust) — Meridian as reference implementation
+- [ ] AGENT-CONFIG.toml for Meridian
+- [ ] Ephemeral runtime config generation (0600 permissions, git-ignored)
 - [ ] `am-fleet agent meridian up` works end-to-end
 - [ ] Meridian can send/receive ming-qiao messages
 - [ ] Identity confirmed on Council roll call
-- [ ] Baseline with GLM-5 via OpenCode — establish operational telemetry
+- [ ] DuckDB state tracker initialized
 
-### Phase 2: Fetch Service — launchd (Aleph builds, Ogma reviews)
-- [ ] **BLOCKED** until Ogma's 5 security gates are satisfied (§6 v2.0 gates)
-- [ ] Fetch CLI binary (Rust per tech stack directive)
-- [ ] arXiv API integration, RSS reader, blog scraper (sanitizing)
+### Phase 2: Fetch Service (Aleph builds, Ogma reviews)
+- [ ] **BLOCKED** until Ogma's security gates 1-4 are RESOLVED (§6.3)
+- [ ] Fetch CLI binary (Rust)
+- [ ] Parse module: docling (PDFs), markdown parser (blogs), arXiv API handler
+- [ ] Sanitize module: HTML stripping, script removal, content hashing
 - [ ] Quarantine directory: `ming-qiao/meridian/quarantine/{date}/`
-- [ ] Content provenance logging
-- [ ] Rate limiting on external fetches
-- [ ] launchd plist for scheduled execution (every 6 hours)
-- [ ] macOS sandbox-exec profile: `(allow network-outbound)`, `(deny network* localhost)`
-- [ ] Network enforcement verified: NO ming-qiao tools, NO localhost access
-- [ ] Ogma security review: PASS required before activation
+- [ ] Provenance logging and rate limiting
+- [ ] launchd plist (every 6 hours)
+- [ ] macOS sandbox-exec profile enforced
+- [ ] Ogma security review: PASS required
 
-### Phase 3: Meridian Agent — Reasoning Pipeline (Aleph builds)
-- [ ] OpenCode config via Orchestrator — ming-qiao MCP tools ONLY, NO web-fetch
-- [ ] macOS sandbox-exec profile: `(deny network-outbound)`, `(allow network* localhost)`
-- [ ] Reads from quarantine directory (read-only)
-- [ ] Produces structured intel artifacts (JSON schema from §7)
-- [ ] Writes daily report to ming-qiao
-- [ ] `source_model` field on every message (dynamic — set by Orchestrator based on active model)
-- [ ] AGENT.md with Session Start Protocol
+### Phase 3: Reasoning Pipeline (Aleph builds)
+- [ ] Embed module: nomic-embed-text via Ollama
+- [ ] Reason module: relevance scoring against cluster-definitions.json
+- [ ] Structured artifact output (§5.6 schema)
+- [ ] Daily report via ming-qiao
+- [ ] macOS sandbox-exec profile enforced (no internet)
+- [ ] `source_model` field set dynamically by Orchestrator
 
-### Phase 4: Staging and Review (Aleph builds, Thales/Hypatia review)
+### Phase 4: Staging, Review, and Training Data (Aleph builds, Thales/Hypatia review)
 - [ ] Staging directory with date-based organization
-- [ ] Schema validation on staged artifacts
-- [ ] Duplicate detection
-- [ ] Review workflow: human or architect approval before ASTROLABE ingestion
-- [ ] ASTROLABE ingestion blocked until ontology is committed
+- [ ] Schema validation, duplicate detection
+- [ ] Review workflow for ASTROLABE ingestion
+- [ ] JSONL export for fine-tuning datasets
+- [ ] Dataset versioning in DuckDB
 
 ### Phase 5: Integration Testing + Model Evaluation
-- [ ] End-to-end: fetch → sanitize → reason → stage → report
-- [ ] Security: verify network boundaries (sandbox-exec enforced)
-- [ ] Comms: Meridian auto-polls, ACKs, participates in Council
-- [ ] Volume: daily run produces 5-10 curated items
-- [ ] **Model comparison:** Run GLM-5 baseline vs Gemini 1.5 Pro on same day's feed, compare synthesis quality
-- [ ] **Cost analysis:** Actual token burn per daily run, project monthly cost per model
+- [ ] End-to-end: fetch → parse → sanitize → embed → reason → stage
+- [ ] Security: sandbox-exec boundaries verified
+- [ ] Comms: auto-polls, ACKs, participates in Council
+- [ ] Volume: 5-10 curated items per daily run
+- [ ] Model comparison: PRIMARY_MODEL baseline vs alternatives on same feed
+- [ ] Cost analysis: actual token burn, projected monthly cost
 - [ ] Set primary/fallback in fleet manifest based on results
 
 ---
 
-## 9. Decisions (Proteus — Finalized 2026-03-19)
+## 10. Decisions (Proteus — Finalized)
 
-1. **Sources:** Start strictly with high-signal sources (arXiv, lab blogs). Do not attach Hacker News or Reddit until we baseline the token cost and hallucination rate of GLM-5.
-
-2. **Weekly synthesis:** Pass daily reports to Laozi-Jung. The witness builds the weekly synthesis — strengthens the institutional memory graph and keeps Meridian focused purely on daily observation.
-
-3. **Model evaluation:** We are building a dedicated training infrastructure agent (or sub-system) later given its complexity. Meridian is strictly focused on data gathering. It flags new models in its report but has no authority over evaluations or the future training pipeline. Meridian is an observer, not a commander.
-
-4. **Cost budget:** TBD — baseline after first week of operation with arXiv + lab blogs only.
+1. **Sources:** Start with arXiv and lab blogs only. Community sources deferred until baseline costs established.
+2. **Weekly synthesis:** Laozi-Jung builds weekly synthesis from daily reports.
+3. **Meridian is the setup model:** Data capture and preparation for training a purpose-tuned replacement. Meridian is an observer and data curator, not a commander.
+4. **Cost budget:** TBD after first week of operation.
+5. **DuckDB for state tracking:** Supports exhaustive search over the training dataset (Proteus decision, 2026-03-23).
+6. **Pipeline reusability:** Modules are dataset-agnostic, configurable for any source (Proteus directive, 2026-03-23).
 
 ---
 
-## 10. Acceptance Criteria
+## 11. Acceptance Criteria
 
 1. `am-fleet agent meridian up` launches Meridian in cmux, auto-polls, ACKs
 2. Daily intelligence report appears in ming-qiao by 09:00 UTC
-3. Structured intel artifacts land in staging directory with valid schema
+3. Structured artifacts land in staging directory with valid schema
 4. No direct ASTROLABE writes — all output goes through staging
-5. Security boundaries verified: fetch can't reach ming-qiao, reason can't reach internet
-6. `source_model: "glm-5"` on every message and artifact
-7. Ogma security review: PASS
+5. Security boundaries verified: fetch can't reach ming-qiao, reason can't reach internet (sandbox-exec)
+6. `source_model` set dynamically by Orchestrator on every message and artifact
+7. All CRITICAL and HIGH security findings in §6.3 are RESOLVED or ACCEPTED-RISK
+8. DuckDB state tracker captures complete document lifecycle
+9. Embedding vectors stored alongside all staged artifacts
+10. JSONL export produces valid fine-tuning format
 
 ---
 
-*This document is the authoritative specification for the Meridian agent. No implementation proceeds without this document committed and reviewed by the Architecture Team.*
+## Appendix A: Curation Analysis Pipeline (Phase 0.5)
 
-
----
-
-## 10.5 Curation Analysis Pipeline (Phase 0.5 — Calibration)
-
-**Proposed by:** Hypatia (Architecture Team)  
+**Proposed by:** Hypatia (Architecture Team)
 **Purpose:** Quantify Proteus's intuitive curation into a cluster map that calibrates Meridian's relevance scoring.
 
-### Rationale
+Proteus has been curating papers, articles, and notes by intuition for months. By vectorizing and clustering this collection (Obsidian vault + Gmail), we extract the 3-5 core themes that matter to AstralMaris and use them as Meridian's relevance bearings.
 
-Proteus has been curating papers, articles, and notes by intuition for months. This collection implicitly encodes what matters to AstralMaris. By vectorizing and clustering this collection, we can extract the signal — the 3-5 core themes Proteus gravitates toward — and use those as Meridian's relevance bearings.
+**Pipeline:** Extract text → Embed (nomic-embed-text, 768d, local Ollama) → Reduce (UMAP) → Cluster (HDBSCAN) → Label (Proteus names the clusters)
 
-### Data Sources
+**Output:** `cluster-definitions.json` — cluster centroids, representative documents, Proteus-assigned labels. Meridian scores new items by proximity to established clusters. Items far from all clusters are flagged as emerging signal.
 
-1. **Obsidian vault** — local markdown files from last year (notes, links, paper references)
-2. **Gmail** — recently forwarded articles and papers
+**Builder:** Luban. **Reviewer:** Hypatia (pipeline design), Proteus (cluster labeling). **Status:** Phase 0.5 complete, pending Proteus review of `cluster-review.md`.
 
-Both should eventually flow into ASTROLABE, but the analysis can run independently.
+---
 
-### Pipeline Architecture (Hypatia design, Luban implements)
-
-```
-Obsidian vault (markdown) ─┐
-                           ├─→ Extract text ─→ Embed (nomic-embed-text, 768d) ─→ HDBSCAN cluster ─→ Cluster map
-Gmail (forwarded articles) ─┘
-```
-
-1. **Extract:** Parse Obsidian markdown files (strip formatting, isolate text + links). Pull Gmail messages tagged/forwarded by Proteus (body text + resolved link abstracts).
-2. **Embed:** nomic-embed-text via local Ollama (768-dim vectors). Local, free, fast.
-3. **Reduce:** UMAP for visualization (preserves local cluster structure better than PCA for text).
-4. **Cluster:** HDBSCAN (density-based, no pre-specified K). Reveals implicit structure.
-5. **Visualize:** Scatter plot of reduced dimensions, colored by cluster.
-6. **Label:** Proteus names the clusters based on what he sees.
-
-### Output
-
-A `cluster-definitions.json` file containing:
-- Cluster centroids in embedding space
-- Representative documents per cluster
-- Proteus-assigned labels (e.g., "agent architecture", "parameter-efficient fine-tuning", "evaluation methods")
-
-Meridian references this file to score new items by proximity to established clusters. Items near known clusters = high relevance. Items far from all clusters = noise or emerging signal (worth flagging separately).
-
-### Implementation
-
-- **Builder:** Luban (has ASTROLABE toolkit, Ollama embedding infrastructure)
-- **Reviewer:** Hypatia (pipeline design), Proteus (cluster labeling)
-- **Dependency:** None — runs independently of Meridian build
-- **Tech stack note:** Extraction script uses Python (exception to Rust-first directive — data science tooling requires pandas/sklearn/umap-learn). The cluster definition output is JSON consumed by Meridian's Rust/OpenCode process.
-
+*This document is the authoritative specification for the Meridian agent. No implementation proceeds without Architecture Team consensus and Ogma security review. All major design changes require a Security Findings Log entry.*
