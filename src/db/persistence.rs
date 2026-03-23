@@ -560,6 +560,7 @@ mod tests {
                 intent: MessageIntent::Inform,
                 expected_response: ExpectedResponse::None,
                 require_ack: false,
+                cc: vec![],
             }),
         }
     }

@@ -507,6 +507,7 @@ mod tests {
                 intent,
                 expected_response: crate::events::ExpectedResponse::None,
                 require_ack: false,
+                cc: vec![],
             }),
         }
     }
@@ -698,6 +699,7 @@ mod tests {
                     intent,
                     expected_response: crate::events::ExpectedResponse::None,
                     require_ack: false,
+                cc: vec![],
                 }),
             };
             let mut indexer = tools.state().indexer_mut().await;

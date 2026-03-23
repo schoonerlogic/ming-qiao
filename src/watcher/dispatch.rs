@@ -243,6 +243,7 @@ mod tests {
                 intent: MessageIntent::Inform,
                 expected_response: ExpectedResponse::None,
                 require_ack: false,
+                cc: vec![],
             }),
         }
     }
@@ -382,6 +383,7 @@ mod tests {
                 intent: MessageIntent::Request,
                 expected_response: ExpectedResponse::Reply,
                 require_ack: false,
+                cc: vec![],
             }),
         }
     }

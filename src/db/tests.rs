@@ -72,6 +72,7 @@ mod tests {
             intent: crate::events::MessageIntent::Inform,
             expected_response: crate::events::ExpectedResponse::None,
             require_ack: false,
+                cc: vec![],
             created_at: Utc::now(),
             read_by: vec!["aleph".to_string()],
         };
@@ -106,6 +107,7 @@ mod tests {
                 intent: crate::events::MessageIntent::Inform,
                 expected_response: crate::events::ExpectedResponse::None,
                 require_ack: false,
+                cc: vec![],
                 created_at: Utc::now(),
                 read_by: vec![],
             };
@@ -321,6 +323,7 @@ mod tests {
             intent: crate::events::MessageIntent::Inform,
             expected_response: crate::events::ExpectedResponse::None,
             require_ack: false,
+                cc: vec![],
             created_at: Utc::now(),
             read_by: vec![],
         };
@@ -366,6 +369,7 @@ mod tests {
                 intent: crate::events::MessageIntent::Inform,
                 expected_response: crate::events::ExpectedResponse::None,
                 require_ack: false,
+                cc: vec![],
             }),
         };
 
@@ -472,6 +476,7 @@ mod tests {
                     intent: crate::events::MessageIntent::Inform,
                     expected_response: crate::events::ExpectedResponse::None,
                     require_ack: false,
+                cc: vec![],
                 }),
             },
             EventEnvelope {
@@ -518,6 +523,7 @@ mod tests {
                     intent: crate::events::MessageIntent::Inform,
                     expected_response: crate::events::ExpectedResponse::None,
                     require_ack: false,
+                cc: vec![],
                 }),
             },
             EventEnvelope {
@@ -535,6 +541,7 @@ mod tests {
                     intent: crate::events::MessageIntent::Inform,
                     expected_response: crate::events::ExpectedResponse::None,
                     require_ack: false,
+                cc: vec![],
                 }),
             },
             EventEnvelope {
@@ -552,6 +559,7 @@ mod tests {
                     intent: crate::events::MessageIntent::Inform,
                     expected_response: crate::events::ExpectedResponse::None,
                     require_ack: false,
+                cc: vec![],
                 }),
             },
         ];
@@ -643,6 +651,7 @@ mod tests {
                     intent: crate::events::MessageIntent::Inform,
                     expected_response: crate::events::ExpectedResponse::None,
                     require_ack: false,
+                cc: vec![],
                 }),
             },
             EventEnvelope {
@@ -660,6 +669,7 @@ mod tests {
                     intent: crate::events::MessageIntent::Inform,
                     expected_response: crate::events::ExpectedResponse::None,
                     require_ack: false,
+                cc: vec![],
                 }),
             },
         ];
@@ -691,6 +701,7 @@ mod tests {
                 intent: crate::events::MessageIntent::Inform,
                 expected_response: crate::events::ExpectedResponse::None,
                 require_ack: false,
+                cc: vec![],
             }),
         };
 
@@ -777,6 +788,7 @@ mod tests {
                 intent: crate::events::MessageIntent::Inform,
                 expected_response: crate::events::ExpectedResponse::None,
                 require_ack: false,
+                cc: vec![],
             }),
         };
 
@@ -847,6 +859,7 @@ mod tests {
                 intent: crate::events::MessageIntent::Inform,
                 expected_response: crate::events::ExpectedResponse::None,
                 require_ack: false,
+                cc: vec![],
             }),
         };
 
@@ -866,6 +879,7 @@ mod tests {
                 intent: crate::events::MessageIntent::Inform,
                 expected_response: crate::events::ExpectedResponse::None,
                 require_ack: false,
+                cc: vec![],
             }),
         };
 
@@ -885,6 +899,7 @@ mod tests {
                 intent: crate::events::MessageIntent::Inform,
                 expected_response: crate::events::ExpectedResponse::None,
                 require_ack: false,
+                cc: vec![],
             }),
         };
 
@@ -904,6 +919,7 @@ mod tests {
                 intent: crate::events::MessageIntent::Inform,
                 expected_response: crate::events::ExpectedResponse::None,
                 require_ack: false,
+                cc: vec![],
             }),
         };
 

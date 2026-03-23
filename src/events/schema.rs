@@ -271,6 +271,10 @@ pub struct MessageEvent {
     /// Whether the system should track receipt acknowledgment
     #[serde(default, skip_serializing_if = "is_false")]
     pub require_ack: bool,
+
+    /// CC recipients — additional agents who should see this message
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub cc: Vec<String>,
 }
 
 /// Data for artifact sharing events

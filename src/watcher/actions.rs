@@ -343,6 +343,7 @@ mod tests {
                 intent: MessageIntent::Inform,
                 expected_response: ExpectedResponse::None,
                 require_ack: false,
+                cc: vec![],
             }),
         }
     }
@@ -404,6 +405,7 @@ mod tests {
                 intent: MessageIntent::Inform,
                 expected_response: ExpectedResponse::None,
                 require_ack: false,
+                cc: vec![],
             }),
         };
         let line = EventLine::from_envelope(&event);

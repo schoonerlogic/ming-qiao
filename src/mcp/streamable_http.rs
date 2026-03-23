@@ -161,8 +161,9 @@ pub struct CheckMessagesParams {
     /// Only return unread messages
     #[serde(default = "default_true")]
     pub unread_only: bool,
-    /// Filter by sender agent ID
-    pub from_agent: Option<String>,
+    /// Optional filter: only show messages sent by this agent ID. Omit to see all messages in your inbox.
+    #[serde(alias = "from_agent")]
+    pub sent_by: Option<String>,
     /// Maximum messages to return
     #[serde(default = "default_limit")]
     pub limit: usize,
@@ -194,10 +195,98 @@ pub struct ReplyToThreadParams {
     pub priority: String,
 }
 
+/// Read a single message by ID
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct ReadMessageParams {
+    /// Message ID to read
+    pub message_id: String,
+    /// Mark message as read
+    #[serde(default = "default_true")]
+    pub mark_read: bool,
+}
+
+/// Request a review from Thales
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct RequestReviewParams {
+    /// Path to artifact to review
+    pub artifact_path: String,
+    /// Specific question or focus area for review
+    pub question: String,
+    /// Additional context for the reviewer
+    pub context: Option<String>,
+    /// Priority: low, normal, high, critical
+    #[serde(default = "default_normal")]
+    pub priority: String,
+}
+
+/// Share a file for other agents to access
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct ShareArtifactParams {
+    /// Local path to file to share
+    pub source_path: String,
+    /// Brief description of the artifact
+    pub description: Option<String>,
+    /// Name in artifacts directory (optional)
+    pub target_name: Option<String>,
+}
+
+/// Retrieve a past decision by ID or query
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct GetDecisionParams {
+    /// Specific decision ID
+    pub decision_id: Option<String>,
+    /// Search query (if no decision_id)
+    pub query: Option<String>,
+    /// Max results for query
+    #[serde(default = "default_limit_5")]
+    pub limit: usize,
+}
+
+/// Record a decision from the current conversation
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct RecordDecisionParams {
+    /// Thread where decision was made
+    pub thread_id: String,
+    /// What was being decided
+    pub question: String,
+    /// What was decided
+    pub resolution: String,
+    /// Why this option was chosen
+    pub rationale: String,
+    /// Alternatives that were evaluated
+    #[serde(default)]
+    pub options_considered: Vec<String>,
+}
+
+/// Create a new conversation thread between agents
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct CreateThreadParams {
+    /// Receiving agent identifier
+    pub to_agent: String,
+    /// Thread subject
+    pub subject: String,
+    /// Message body (markdown supported)
+    pub content: String,
+    /// Message priority
+    #[serde(default = "default_normal")]
+    pub priority: String,
+    /// Message intent
+    #[serde(default = "default_inform")]
+    pub intent: String,
+}
+
+/// Read pending messages for an agent (legacy — prefer check_messages)
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct ReadInboxParams {
+    /// Agent whose inbox to read (defaults to caller)
+    pub agent: Option<String>,
+}
+
 fn default_inform() -> String { "inform".to_string() }
 fn default_normal() -> String { "normal".to_string() }
 fn default_true() -> bool { true }
 fn default_limit() -> usize { 10 }
+fn default_limit_5() -> usize { 5 }
 
 // ============================================================================
 // Helpers
@@ -236,7 +325,8 @@ async fn call_tool(state: &AppState, tool_name: &str, args: serde_json::Value, a
 #[derive(Clone)]
 pub struct MingQiaoMcpHandler {
     state: AppState,
-    agent_id: String,
+    /// Resolved from auth token on first request; starts as "unknown"
+    agent_id: Arc<std::sync::RwLock<String>>,
     /// Whether we've captured the peer for push delivery
     peer_registered: Arc<tokio::sync::Mutex<bool>>,
     tool_router: ToolRouter<Self>,
@@ -245,7 +335,7 @@ pub struct MingQiaoMcpHandler {
 impl std::fmt::Debug for MingQiaoMcpHandler {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("MingQiaoMcpHandler")
-            .field("agent_id", &self.agent_id)
+            .field("agent_id", &*self.agent_id.read().unwrap())
             .finish()
     }
 }
@@ -254,19 +344,33 @@ impl MingQiaoMcpHandler {
     pub fn new(state: AppState) -> Self {
         Self {
             state,
-            agent_id: "unknown".to_string(),
+            agent_id: Arc::new(std::sync::RwLock::new("unknown".to_string())),
             peer_registered: Arc::new(tokio::sync::Mutex::new(false)),
             tool_router: Self::tool_router(),
         }
     }
 
+    /// Resolve agent identity from HTTP request parts (auth token).
+    /// Caches the result so list_resources/get_prompt can use it without request context.
     fn resolve_agent(&self, parts: Option<&http::request::Parts>) -> String {
         if let Some(parts) = parts {
             if let Some(agent) = resolve_agent_from_parts(parts) {
+                // Cache on first successful resolution
+                let current = self.agent_id.read().unwrap().clone();
+                if current == "unknown" {
+                    if let Ok(mut id) = self.agent_id.write() {
+                        *id = agent.clone();
+                    }
+                }
                 return agent;
             }
         }
-        self.agent_id.clone()
+        self.agent_id.read().unwrap().clone()
+    }
+
+    /// Get cached agent_id (may be "unknown" before first request)
+    fn cached_agent_id(&self) -> String {
+        self.agent_id.read().unwrap().clone()
     }
 
     /// Capture the Peer handle on first tool call for push delivery.
@@ -310,7 +414,7 @@ impl MingQiaoMcpHandler {
         let agent = self.resolve_agent(Some(&parts));
         self.maybe_register_peer(&agent, &peer).await;
         call_tool(&self.state, "check_messages", serde_json::json!({
-            "unread_only": p.unread_only, "from_agent": p.from_agent, "limit": p.limit,
+            "unread_only": p.unread_only, "sent_by": p.sent_by, "limit": p.limit,
         }), &agent).await
     }
 
@@ -367,6 +471,111 @@ impl MingQiaoMcpHandler {
         self.maybe_register_peer(&agent, &peer).await;
         call_tool(&self.state, "list_threads", serde_json::json!({}), &agent).await
     }
+
+    #[tool(description = "Read full content of a specific message")]
+    async fn read_message(
+        &self,
+        peer: Peer<RoleServer>,
+        Extension(parts): Extension<http::request::Parts>,
+        Parameters(p): Parameters<ReadMessageParams>,
+    ) -> String {
+        let agent = self.resolve_agent(Some(&parts));
+        self.maybe_register_peer(&agent, &peer).await;
+        call_tool(&self.state, "read_message", serde_json::json!({
+            "message_id": p.message_id, "mark_read": p.mark_read,
+        }), &agent).await
+    }
+
+    #[tool(description = "Ask Thales to review an artifact")]
+    async fn request_review(
+        &self,
+        peer: Peer<RoleServer>,
+        Extension(parts): Extension<http::request::Parts>,
+        Parameters(p): Parameters<RequestReviewParams>,
+    ) -> String {
+        let agent = self.resolve_agent(Some(&parts));
+        self.maybe_register_peer(&agent, &peer).await;
+        call_tool(&self.state, "request_review", serde_json::json!({
+            "artifact_path": p.artifact_path, "question": p.question,
+            "context": p.context, "priority": p.priority,
+        }), &agent).await
+    }
+
+    #[tool(description = "Share a file for other agents to access")]
+    async fn share_artifact(
+        &self,
+        peer: Peer<RoleServer>,
+        Extension(parts): Extension<http::request::Parts>,
+        Parameters(p): Parameters<ShareArtifactParams>,
+    ) -> String {
+        let agent = self.resolve_agent(Some(&parts));
+        self.maybe_register_peer(&agent, &peer).await;
+        call_tool(&self.state, "share_artifact", serde_json::json!({
+            "source_path": p.source_path, "description": p.description,
+            "target_name": p.target_name,
+        }), &agent).await
+    }
+
+    #[tool(description = "Retrieve a past decision by ID or query")]
+    async fn get_decision(
+        &self,
+        peer: Peer<RoleServer>,
+        Extension(parts): Extension<http::request::Parts>,
+        Parameters(p): Parameters<GetDecisionParams>,
+    ) -> String {
+        let agent = self.resolve_agent(Some(&parts));
+        self.maybe_register_peer(&agent, &peer).await;
+        call_tool(&self.state, "get_decision", serde_json::json!({
+            "decision_id": p.decision_id, "query": p.query, "limit": p.limit,
+        }), &agent).await
+    }
+
+    #[tool(description = "Record a decision from the current conversation")]
+    async fn record_decision(
+        &self,
+        peer: Peer<RoleServer>,
+        Extension(parts): Extension<http::request::Parts>,
+        Parameters(p): Parameters<RecordDecisionParams>,
+    ) -> String {
+        let agent = self.resolve_agent(Some(&parts));
+        self.maybe_register_peer(&agent, &peer).await;
+        call_tool(&self.state, "record_decision", serde_json::json!({
+            "thread_id": p.thread_id, "question": p.question,
+            "resolution": p.resolution, "rationale": p.rationale,
+            "options_considered": p.options_considered,
+        }), &agent).await
+    }
+
+    #[tool(description = "Create a new conversation thread between agents")]
+    async fn create_thread(
+        &self,
+        peer: Peer<RoleServer>,
+        Extension(parts): Extension<http::request::Parts>,
+        Parameters(p): Parameters<CreateThreadParams>,
+    ) -> String {
+        let agent = self.resolve_agent(Some(&parts));
+        self.maybe_register_peer(&agent, &peer).await;
+        call_tool(&self.state, "create_thread", serde_json::json!({
+            "from_agent": agent, "to_agent": p.to_agent,
+            "subject": p.subject, "content": p.content,
+            "priority": p.priority, "intent": p.intent,
+        }), &agent).await
+    }
+
+    #[tool(description = "Read pending messages for an agent")]
+    async fn read_inbox(
+        &self,
+        peer: Peer<RoleServer>,
+        Extension(parts): Extension<http::request::Parts>,
+        Parameters(p): Parameters<ReadInboxParams>,
+    ) -> String {
+        let agent = self.resolve_agent(Some(&parts));
+        self.maybe_register_peer(&agent, &peer).await;
+        let inbox_agent = p.agent.unwrap_or_else(|| agent.clone());
+        call_tool(&self.state, "read_inbox", serde_json::json!({
+            "agent": inbox_agent,
+        }), &agent).await
+    }
 }
 
 impl ServerHandler for MingQiaoMcpHandler {
@@ -403,14 +612,11 @@ impl ServerHandler for MingQiaoMcpHandler {
     ) -> impl Future<Output = Result<rmcp::model::GetPromptResult, rmcp::Error>> + Send + '_ {
         use rmcp::model::{GetPromptResult, PromptMessage, PromptMessageRole};
         let state = self.state.clone();
-        let agent_id = self.agent_id.clone();
+        let agent = self.cached_agent_id();
         async move {
             if request.name != "inbox_status" {
                 return Err(rmcp::Error::invalid_params("Unknown prompt", None));
             }
-
-            // Check for unread messages
-            let agent = if agent_id != "unknown" { agent_id } else { "aleph".to_string() };
             let inbox_url = format!("http://localhost:7777/api/inbox/{}?unread_only=true&peek=true&limit=5", agent);
             let messages = match reqwest::Client::new()
                 .get(&inbox_url)
@@ -491,7 +697,7 @@ impl ServerHandler for MingQiaoMcpHandler {
         _context: rmcp::service::RequestContext<RoleServer>,
     ) -> impl Future<Output = Result<rmcp::model::ListResourcesResult, rmcp::Error>> + Send + '_ {
         use rmcp::model::ListResourcesResult;
-        let agent = if self.agent_id != "unknown" { self.agent_id.clone() } else { "aleph".to_string() };
+        let agent = self.cached_agent_id();
         let resource = rmcp::model::RawResource {
             uri: format!("agent://{}/messages", agent),
             name: "Inbox Messages".to_string(),
@@ -522,7 +728,7 @@ impl ServerHandler for MingQiaoMcpHandler {
     ) -> impl Future<Output = Result<rmcp::model::ReadResourceResult, rmcp::Error>> + Send + '_ {
         use rmcp::model::{ReadResourceResult, ResourceContents};
         let state = self.state.clone();
-        let agent = if self.agent_id != "unknown" { self.agent_id.clone() } else { "aleph".to_string() };
+        let agent = self.cached_agent_id();
         async move {
             let expected_uri = format!("agent://{}/messages", agent);
             let self_uri = "agent://self/messages";
@@ -577,14 +783,14 @@ impl ServerHandler for MingQiaoMcpHandler {
         context: rmcp::service::RequestContext<RoleServer>,
     ) -> impl Future<Output = Result<(), rmcp::Error>> + Send + '_ {
         let state = self.state.clone();
-        let agent_id = self.agent_id.clone();
+        let agent_id = self.cached_agent_id();
 
         async move {
             let uri = request.uri.to_string();
 
             // Resolve "self" in agent://self/messages to actual agent ID
             let resolved_agent = if uri.contains("self") {
-                if agent_id != "unknown" { agent_id.clone() } else { "aleph".to_string() }
+                agent_id.clone()
             } else {
                 uri.strip_prefix("agent://")
                     .and_then(|s| s.split('/').next())

@@ -21,6 +21,38 @@ path = "src/bin/wake_daemon.rs"
 name = "mcp-test-harness"
 path = "src/bin/mcp_test_harness.rs"
 
+[[bin]]
+name = "daily-handover"
+path = "src/bin/daily_handover.rs"
+
+[[bin]]
+name = "cve-sweep"
+path = "src/bin/cve_sweep.rs"
+
+[[bin]]
+name = "generate-streamable-http-configs"
+path = "src/bin/generate_streamable_http_configs.rs"
+
+[[bin]]
+name = "kimi-preflight-auth"
+path = "src/bin/kimi_preflight_auth.rs"
+
+[[bin]]
+name = "colloquium-daemon"
+path = "src/bin/colloquium_daemon.rs"
+
+[[bin]]
+name = "council-observer"
+path = "src/bin/council_observer.rs"
+
+[[bin]]
+name = "am-comms"
+path = "src/bin/am_comms.rs"
+
+[[bin]]
+name = "oracle-ingest"
+path = "src/bin/oracle_ingest.rs"
+
 [lib]
 name = "ming_qiao"
 path = "src/lib.rs"
@@ -53,7 +85,7 @@ async-nats = "0.38"
 surrealdb = { version = "3", default-features = false, features = ["kv-mem", "protocol-ws", "rustls"] }
 
 # HTTP client (watcher webhooks)
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "blocking"] }
 
 # MCP protocol SDK (Streamable HTTP server transport)
 rmcp = { version = "0.2", features = ["server", "transport-streamable-http-server", "transport-worker", "macros"] }
@@ -64,8 +96,20 @@ http = "1"
 async-stream = "0.3"
 
 # CLI + error handling (mcp-test-harness, fleet-orchestrator)
-clap = { version = "4", features = ["derive"] }
+clap = { version = "4", features = ["derive", "env"] }
 anyhow = "1"
+
+# XML parsing (RustSec feed in CVE sweep)
+quick-xml = "0.37"
+
+# Regex (CVE sweep keyword matching)
+regex = "1"
+
+# URL encoding
+urlencoding = "2"
+
+# Interactive line editor (am-comms human CLI)
+rustyline = "15"
 
 # Cryptographic signing — Security P0 (Ed25519 signed-event envelopes)
 ed25519-dalek = { version = "2", features = ["rand_core"] }

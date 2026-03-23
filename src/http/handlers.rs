@@ -309,10 +309,12 @@ pub async fn get_inbox(
                 "id": msg.id,
                 "thread_id": msg.thread_id,
                 "from": msg.from,
+                "to": msg.to,
                 "subject": msg.subject,
                 "content": msg.content,
                 "intent": msg.intent,
                 "priority": msg.priority,
+                "cc": msg.cc,
                 "timestamp": msg.created_at
             })
         })
@@ -512,6 +514,21 @@ pub struct CreateThreadRequest {
     pub expected_response: String,
     #[serde(default)]
     pub require_ack: bool,
+    /// CC recipients — additional agents who should see this message
+    #[serde(default)]
+    pub cc: Vec<String>,
+}
+
+/// Adjutant mirroring rules — auto-inject CC for tiered agents
+fn apply_adjutant_mirroring(to: &str, cc: &mut Vec<String>) {
+    // If addressed to hypatia, auto-CC hypatia-adjutant
+    if to == "hypatia" && !cc.contains(&"hypatia-adjutant".to_string()) {
+        cc.push("hypatia-adjutant".to_string());
+    }
+    // If addressed to hypatia-adjutant, auto-CC hypatia
+    if to == "hypatia-adjutant" && !cc.contains(&"hypatia".to_string()) {
+        cc.push("hypatia".to_string());
+    }
 }
 
 fn default_normal() -> String {
@@ -581,6 +598,10 @@ pub async fn create_thread(
     let priority = parse_priority(&req.priority);
     let intent = parse_intent(&req.intent);
 
+    // Apply adjutant mirroring rules
+    let mut cc = req.cc;
+    apply_adjutant_mirroring(&req.to_agent, &mut cc);
+
     let event = EventEnvelope {
         id: event_id,
         timestamp: now,
@@ -596,6 +617,7 @@ pub async fn create_thread(
             intent,
             expected_response: parse_expected_response(&req.expected_response),
             require_ack: req.require_ack,
+            cc,
         }),
     };
 
@@ -716,6 +738,9 @@ pub struct ReplyRequest {
     pub expected_response: String,
     #[serde(default)]
     pub require_ack: bool,
+    /// CC recipients for the reply
+    #[serde(default)]
+    pub cc: Option<Vec<String>>,
 }
 
 /// Reply to a thread
@@ -813,6 +838,10 @@ pub async fn reply_to_thread(
     let priority = parse_priority(&req.priority);
     let intent = parse_intent(&req.intent);
 
+    // Apply adjutant mirroring rules for replies
+    let mut cc = req.cc.clone().unwrap_or_default();
+    apply_adjutant_mirroring(&to_agent, &mut cc);
+
     let event = EventEnvelope {
         id: event_id,
         timestamp: now,
@@ -828,6 +857,7 @@ pub async fn reply_to_thread(
             intent,
             expected_response: parse_expected_response(&req.expected_response),
             require_ack: req.require_ack,
+            cc,
         }),
     };
 
@@ -1337,6 +1367,7 @@ pub async fn submit_observation(
             intent: MessageIntent::Inform,
             expected_response: ExpectedResponse::None,
             require_ack: false,
+            cc: vec![],
         }),
     };
 

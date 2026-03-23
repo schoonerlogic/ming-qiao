@@ -123,6 +123,10 @@ pub struct Message {
     /// Whether the system should track receipt acknowledgment
     pub require_ack: bool,
 
+    /// CC recipients — additional agents who should see this message
+    #[serde(default)]
+    pub cc: Vec<String>,
+
     /// When this message was sent
     pub created_at: DateTime<Utc>,
 

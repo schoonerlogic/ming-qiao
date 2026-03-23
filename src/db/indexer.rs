@@ -128,6 +128,7 @@ impl Indexer {
             intent: msg.intent.clone(),
             expected_response: msg.expected_response.clone(),
             require_ack: msg.require_ack,
+            cc: msg.cc.clone(),
             created_at: event.timestamp,
             read_by: vec![],
         };
@@ -135,6 +136,9 @@ impl Indexer {
 
         self.ensure_agent_exists(&msg.from, event.timestamp)?;
         self.ensure_agent_exists(&msg.to, event.timestamp)?;
+        for cc_agent in &msg.cc {
+            self.ensure_agent_exists(cc_agent, event.timestamp)?;
+        }
 
         Ok(())
     }
@@ -276,7 +280,12 @@ impl Indexer {
     pub fn get_messages_to_agent(&self, agent_id: &str) -> Vec<&Message> {
         self.messages
             .values()
-            .filter(|m| m.to == agent_id || m.to == "all" || m.to == "council")
+            .filter(|m| {
+                m.to == agent_id
+                    || m.to == "all"
+                    || m.to == "council"
+                    || m.cc.iter().any(|cc| cc == agent_id)
+            })
             .collect()
     }
 

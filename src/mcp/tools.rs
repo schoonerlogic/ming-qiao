@@ -184,7 +184,7 @@ impl ToolRegistry {
     fn def_check_messages() -> ToolDefinition {
         ToolDefinition {
             name: "check_messages".to_string(),
-            description: "Check inbox for new messages".to_string(),
+            description: "Check inbox for new messages. Your inbox is identified by your auth token — do NOT pass your own agent ID. Use sent_by only to filter by a specific sender.".to_string(),
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -193,9 +193,10 @@ impl ToolRegistry {
                         "default": true,
                         "description": "Only return unread messages"
                     },
-                    "from_agent": {
+                    "sent_by": {
                         "type": "string",
-                        "description": "Filter by sender agent ID"
+                        "nullable": true,
+                        "description": "Optional filter: only show messages sent by this agent ID. Omit to see all messages in your inbox."
                     },
                     "limit": {
                         "type": "integer",
@@ -447,7 +448,7 @@ impl ToolRegistry {
                     },
                     "from_agent": {
                         "type": "string",
-                        "description": "Sending agent identifier"
+                        "description": "Sending agent identifier. Optional if your identity is resolved from auth token (Streamable HTTP). Required for stdio transport."
                     },
                     "content": {
                         "type": "string",
@@ -466,7 +467,7 @@ impl ToolRegistry {
                         "description": "Message intent: discuss (respond when ready), request (action needed), inform (FYI)"
                     }
                 },
-                "required": ["thread_id", "from_agent", "content"]
+                "required": ["thread_id", "content"]
             }),
         }
     }
@@ -650,6 +651,7 @@ impl ToolRegistry {
                 intent,
                 expected_response,
                 require_ack,
+                cc: vec![],
             }),
         };
 
@@ -670,7 +672,10 @@ impl ToolRegistry {
             .get("unread_only")
             .and_then(|v| v.as_bool())
             .unwrap_or(true);
-        let from_agent = args.get("from_agent").and_then(|v| v.as_str());
+        // Accept both "sent_by" (new) and "from_agent" (legacy) for backwards compat
+        let from_agent = args.get("sent_by")
+            .or_else(|| args.get("from_agent"))
+            .and_then(|v| v.as_str());
         let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(10) as usize;
 
         // Get server-side read cursor for unread filtering
@@ -842,6 +847,7 @@ impl ToolRegistry {
                 intent: MessageIntent::Request,
                 expected_response: ExpectedResponse::Reply,
                 require_ack: false,
+                cc: vec![],
             }),
         };
 
@@ -1132,6 +1138,7 @@ impl ToolRegistry {
                 intent,
                 expected_response: Self::parse_expected_response(args.get("expected_response").and_then(|v| v.as_str())),
                 require_ack: args.get("require_ack").and_then(|v| v.as_bool()).unwrap_or(false),
+                cc: vec![],
             }),
         };
 
@@ -1193,16 +1200,22 @@ impl ToolRegistry {
     async fn tool_reply_to_thread(
         &self,
         args: Value,
-        _agent_id: &str,
+        agent_id: &str,
     ) -> Result<CallToolResult, McpError> {
         let thread_id = args
             .get("thread_id")
             .and_then(|v| v.as_str())
             .ok_or_else(|| McpError::InvalidInput("'thread_id' is required".to_string()))?;
-        let from_agent = args
-            .get("from_agent")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| McpError::InvalidInput("'from_agent' is required".to_string()))?;
+        // from_agent in args (stdio path) or fall back to agent_id (streamable HTTP path,
+        // resolved from auth token)
+        let from_agent_owned;
+        let from_agent = match args.get("from_agent").and_then(|v| v.as_str()) {
+            Some(fa) => fa,
+            None => {
+                from_agent_owned = agent_id.to_string();
+                &from_agent_owned
+            }
+        };
         let content = args
             .get("content")
             .and_then(|v| v.as_str())
@@ -1286,6 +1299,7 @@ impl ToolRegistry {
                                             intent: MessageIntent::Inform,
                                             expected_response: ExpectedResponse::None,
                                             require_ack: false,
+                cc: vec![],
                                         }),
                                     };
                                     let _ = indexer.process_event(&synth);
@@ -1345,6 +1359,7 @@ impl ToolRegistry {
                 intent,
                 expected_response: Self::parse_expected_response(args.get("expected_response").and_then(|v| v.as_str())),
                 require_ack: args.get("require_ack").and_then(|v| v.as_bool()).unwrap_or(false),
+                cc: vec![],
             }),
         };
 

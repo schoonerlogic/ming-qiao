@@ -50,23 +50,20 @@ while [ $# -gt 0 ]; do
     esac
 done
 
-# Build JSON payload using python3 for safe escaping
-PAYLOAD=$(python3 -c "
-import json, sys
-print(json.dumps({
-    'from': sys.argv[1],
-    'to': sys.argv[2],
-    'subject': sys.argv[3],
-    'content': sys.argv[4],
-    'intent': sys.argv[5]
-}))
-" "$MQ_AGENT" "$TO" "$SUBJECT" "$MESSAGE" "$INTENT")
+# Build JSON payload using jq for safe escaping
+PAYLOAD=$(jq -n \
+    --arg from "$MQ_AGENT" \
+    --arg to "$TO" \
+    --arg subject "$SUBJECT" \
+    --arg content "$MESSAGE" \
+    --arg intent "$INTENT" \
+    '{from_agent: $from, to_agent: $to, subject: $subject, content: $content, intent: $intent}')
 
 # Auto-load bearer token from token file if MQ_TOKEN not set
 if [ -z "${MQ_TOKEN:-}" ]; then
     TOKENS_FILE="$(cd "$(dirname "$0")/.." && pwd)/config/agent-tokens.json"
     if [ -f "$TOKENS_FILE" ]; then
-        MQ_TOKEN=$(python3 -c "import json; d=json.load(open('$TOKENS_FILE')); print(d['tokens'].get('$MQ_AGENT',''))" 2>/dev/null || true)
+        MQ_TOKEN=$(jq -r --arg agent "$MQ_AGENT" '.tokens[$agent] // ""' "$TOKENS_FILE" 2>/dev/null || true)
     fi
 fi
 
@@ -83,7 +80,7 @@ BODY=$(echo "$RESPONSE" | sed '$d')
 
 if [ "$HTTP_CODE" -ge 200 ] && [ "$HTTP_CODE" -lt 300 ]; then
     echo "Sent to $TO: $SUBJECT"
-    echo "$BODY" | python3 -m json.tool 2>/dev/null || echo "$BODY"
+    echo "$BODY" | jq '.' 2>/dev/null || echo "$BODY"
 else
     echo "ERROR ($HTTP_CODE): Failed to send message" >&2
     echo "$BODY" >&2
