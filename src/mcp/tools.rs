@@ -174,6 +174,11 @@ impl ToolRegistry {
                         "type": "boolean",
                         "default": false,
                         "description": "Whether to track receipt acknowledgment for this message"
+                    },
+                    "cc": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "description": "CC recipients — receive the message in their inbox marked as CC"
                     }
                 },
                 "required": ["to", "subject", "content"]
@@ -635,6 +640,11 @@ impl ToolRegistry {
         let intent = Self::parse_intent(args.get("intent").and_then(|v| v.as_str()));
         let expected_response = Self::parse_expected_response(args.get("expected_response").and_then(|v| v.as_str()));
         let require_ack = args.get("require_ack").and_then(|v| v.as_bool()).unwrap_or(false);
+        let cc: Vec<String> = args
+            .get("cc")
+            .and_then(|v| v.as_array())
+            .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+            .unwrap_or_default();
 
         let event = EventEnvelope {
             id: Uuid::now_v7(),
@@ -651,7 +661,7 @@ impl ToolRegistry {
                 intent,
                 expected_response,
                 require_ack,
-                cc: vec![],
+                cc,
             }),
         };
 

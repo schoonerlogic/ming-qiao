@@ -640,8 +640,8 @@ pub async fn create_thread(
     }
 
     // Extract message fields — clone for NATS and SSE push
-    let (msg_to, msg_from, msg_subject, msg_intent) = match &event.payload {
-        EventPayload::Message(m) => (m.to.clone(), m.from.clone(), m.subject.clone(), m.intent.clone()),
+    let (msg_to, msg_from, msg_subject, msg_intent, msg_cc) = match &event.payload {
+        EventPayload::Message(m) => (m.to.clone(), m.from.clone(), m.subject.clone(), m.intent.clone(), m.cc.clone()),
         _ => unreachable!(),
     };
     let (sse_to, sse_from, sse_subject, sse_intent) = (
@@ -670,7 +670,7 @@ pub async fn create_thread(
                 event_id: event_id.to_string(),
                 from: msg_from,
                 subject: msg_subject,
-                intent: msg_intent,
+                intent: msg_intent.clone(),
                 timestamp: now,
             };
             if let Err(e) = client.publish_message_notification(&msg_to, &notification).await {
@@ -683,12 +683,51 @@ pub async fn create_thread(
     state.push_broker().publish(
         &sse_to,
         crate::mcp::streamable_http::PushEvent {
-            from: sse_from,
-            subject: sse_subject,
-            intent: sse_intent,
+            from: sse_from.clone(),
+            subject: sse_subject.clone(),
+            intent: sse_intent.clone(),
             message_id: event_id.to_string(),
         },
     ).await;
+
+    // Notify CC'd agents (JetStream + NATS + PushBroker)
+    for cc_agent in &msg_cc {
+        // JetStream durable
+        {
+            let nats_guard = state.nats_client_mut().await;
+            if let Some(ref client) = *nats_guard {
+                if let Err(e) = client.publish_message_event(cc_agent, &event_for_js).await {
+                    warn!("JetStream CC publish to {} failed: {}", cc_agent, e);
+                }
+            }
+        }
+        // NATS ephemeral notification
+        {
+            let nats_guard = state.nats_client_mut().await;
+            if let Some(ref client) = *nats_guard {
+                let notification = MessageNotification {
+                    event_id: event_id.to_string(),
+                    from: sse_from.clone(),
+                    subject: sse_subject.clone(),
+                    intent: msg_intent.clone(),
+                    timestamp: now,
+                };
+                if let Err(e) = client.publish_message_notification(cc_agent, &notification).await {
+                    warn!("NATS CC notification to {} failed: {}", cc_agent, e);
+                }
+            }
+        }
+        // PushBroker SSE
+        state.push_broker().publish(
+            cc_agent,
+            crate::mcp::streamable_http::PushEvent {
+                from: sse_from.clone(),
+                subject: format!("[CC] {}", sse_subject),
+                intent: sse_intent.clone(),
+                message_id: event_id.to_string(),
+            },
+        ).await;
+    }
 
     // Thread ID = provided thread_id or event ID (indexer convention when thread_id is None)
     let thread_id = req.thread_id.unwrap_or_else(|| event_id.to_string());

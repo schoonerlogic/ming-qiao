@@ -154,6 +154,9 @@ pub struct SendMessageParams {
     pub priority: String,
     /// Optional thread ID to reply to
     pub thread_id: Option<String>,
+    /// CC recipients — receive the message in their inbox marked as CC
+    #[serde(default)]
+    pub cc: Vec<String>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -401,6 +404,7 @@ impl MingQiaoMcpHandler {
         call_tool(&self.state, "send_message", serde_json::json!({
             "to": p.to, "subject": p.subject, "content": p.content,
             "intent": p.intent, "priority": p.priority, "thread_id": p.thread_id,
+            "cc": p.cc,
         }), &agent).await
     }
 
