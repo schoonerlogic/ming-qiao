@@ -53,6 +53,10 @@ path = "src/bin/am_comms.rs"
 name = "oracle-ingest"
 path = "src/bin/oracle_ingest.rs"
 
+[[bin]]
+name = "am-fleet-metrics"
+path = "src/bin/fleet_metrics.rs"
+
 [lib]
 name = "ming_qiao"
 path = "src/lib.rs"
