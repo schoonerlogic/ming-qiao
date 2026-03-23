@@ -231,14 +231,32 @@ fn force_heal_session(
         return Ok(());
     }
 
-    warn!(agent, "AUTO-HEAL PHASE 2: force-killing stale session (cmux workspace {})", ws_ref);
+    warn!(agent, "AUTO-HEAL PHASE 2: respawning stale session (cmux workspace {})", ws_ref);
 
-    // Kill the workspace — cmux will stop the process inside it
-    if let Err(e) = run_cmux_with_timeout(cmux_password, &["kill-workspace", "--workspace", ws_ref]) {
-        warn!(agent, error = %e, "cmux kill-workspace failed — trying kill-session");
-        if let Err(e2) = run_cmux_with_timeout(cmux_password, &["kill-session", agent]) {
-            return Err(format!("force-heal failed for {}: kill-workspace: {}, kill-session: {}", agent, e, e2));
+    // Use respawn-pane to restart the process inside the existing workspace.
+    // This preserves the workspace but kills the old process and starts the launch script.
+    let launch_script = format!(
+        "/Users/proteus/astralmaris/astrallation/fleet/launch-{}.sh",
+        agent
+    );
+
+    match run_cmux_with_timeout(
+        cmux_password,
+        &["respawn-pane", "--workspace", ws_ref, "--command", &launch_script],
+    ) {
+        Ok(_) => {
+            info!(agent, "AUTO-HEAL PHASE 2: respawn-pane succeeded — new session starting");
+            return Ok(());
         }
+        Err(e) => {
+            warn!(agent, error = %e, "respawn-pane failed — falling back to close + am-fleet launch");
+        }
+    }
+
+    // Fallback: close workspace and relaunch via am-fleet
+    if let Err(e) = run_cmux_with_timeout(cmux_password, &["close-workspace", "--workspace", ws_ref]) {
+        warn!(agent, error = %e, "cmux close-workspace also failed");
+        return Err(format!("force-heal failed for {}: close-workspace: {}", agent, e));
     }
 
     // Brief pause for cleanup
