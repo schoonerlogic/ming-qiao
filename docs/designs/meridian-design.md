@@ -2,10 +2,9 @@
 
 **Author:** Thales, Architecture Team  
 **Reviewed by:** Hypatia (Architecture Team), Ogma (Security Team)  
-**Date:** 2026-03-19  
+**Date:** 2026-03-19 (v1.0), 2026-03-23 (v2.0)  
 **Status:** APPROVED — Architecture Team + Proteus  
-**Version:** 1.0 (final)  
-**Version:** 1.0
+**Version:** 2.0
 
 ---
 
@@ -72,32 +71,101 @@ Proteus decided (March 13, 2026): Meridian and Jikimi are separate agents.
 | Property | Meridian | Jikimi |
 |----------|----------|--------|
 | **Domain** | External intelligence | Internal operations |
-| **Model** | GLM-5 via Z.ai API | qwen3:8b via Ollama (local) |
-| **Runtime** | OpenCode | OpenCode |
-| **Network** | External read (fetch) + localhost | Localhost only |
+| **Model** | Configurable via Orchestrator (see §5) | qwen3:8b via Ollama (local) |
+| **Runtime** | Managed by am-agent-host Orchestrator | Bash daemons (launchd) |
+| **Network** | External read (fetch service) + localhost (reasoning) | Localhost only |
 | **Cadence** | Daily curated | Continuous monitoring |
 | **Cost** | API tokens per invocation | Free (local inference) |
 | **Authority** | inform/discuss only | inform only |
 
-**Why separate:** Different models, different schedules, different security postures. You can swap Meridian's model (test DeepSeek vs GLM-5 vs Sonnet) without touching ops monitoring. The ops agent never touches external content; Meridian never touches infrastructure metrics.
+**Why separate:** Different models, different schedules, different security postures. The Orchestrator pattern means you can swap Meridian's model without touching ops monitoring. The ops agent never touches external content; Meridian never touches infrastructure metrics.
 
 ---
 
-## 5. Runtime Configuration
+## 5. Model Abstraction Layer (v2.0 — March 23, 2026)
 
-| Property | Value | Rationale |
-|----------|-------|-----------|
-| **Model** | GLM-5 via Z.ai API | Frontier-class reasoning for nuanced field analysis. Cost-effective. |
-| **Runtime** | OpenCode | Same as Luban. Proven MCP integration. Multi-model config. |
+### 5.1 Design Principle: Config-Driven Orchestrator
+
+Meridian is the **reference implementation** for AstralMaris's Model Abstraction Layer (MAL). Rather than hard-coupling to any specific model, Meridian runs through the `am-agent-host` Config-Driven Orchestrator — a Rust binary that reads per-agent configuration and manages the runtime lifecycle.
+
+**Key properties:**
+- **Hot-swappable models:** Switch between providers via `AGENT-CONFIG.toml` without code changes
+- **Hot-swappable prompts:** Swap system prompts and persona independently of the model
+- **Handoff Fallback:** If primary model fails, Orchestrator restarts with fallback model and injects last handoff JSON for context continuity
+- **Uniform interface:** All agents interact with ming-qiao MCP regardless of underlying provider
+- **Fleet manifest as registry:** `fleet-manifest.toml` specifies primary + fallback models per agent
+
+### 5.2 Model Candidates (Architecture Team Research — March 23, 2026)
+
+Two independent assessments were conducted:
+
+**Hypatia's Assessment (Synthesis Priority):**
+
+| Model | Provider | Context | Pricing (input/output per 1M) | Strength |
+|-------|----------|---------|-------------------------------|----------|
+| Gemini 1.5 Pro | Google | 2M tokens | $1.25 / $10.00 | Unparalleled context window for holistic daily feed synthesis |
+| Claude 3.5 Sonnet | Anthropic | 200K tokens | $3.00 / $15.00 | Best-in-class tool orchestration and instruction following |
+| DeepSeek-V3 | DeepSeek | 128K tokens | $0.27 / $1.10 | Extreme cost-effectiveness for continuous operation |
+
+**Thales's Assessment (Execution Priority):**
+
+| Model | Provider | Context | Pricing (input/output per 1M) | Strength |
+|-------|----------|---------|-------------------------------|----------|
+| GLM-5 | Z.ai | 128K+ tokens | $0.80 / $2.56 | BrowseComp leader, proven in fleet (Luban), cost-effective |
+| GLM-5-Turbo | Z.ai | 202K tokens | $0.96 / $3.20 | Faster variant, tuned for information search/gathering |
+| Qwen 3.5 | Alibaba (self-host) | Variable | Free (Ollama) | Self-hostable, excellent instruction following, zero cost |
+
+### 5.3 Model Selection Decision
+
+**Decision:** The model choice is a **runtime configuration**, not a permanent architectural decision.
+
+Thanks to the Config-Driven Orchestrator, Meridian launches with whatever model is specified in the fleet manifest. The implementation path:
+
+1. **Baseline:** Launch with GLM-5 via OpenCode to establish operational telemetry (proven runtime, low cost)
+2. **Evaluate:** Run comparative tests with Gemini 1.5 Pro for synthesis quality (Hypatia's recommendation for the 2M context window advantage)
+3. **Optimize:** Based on telemetry, select the best cost/quality balance and set as primary with the other as fallback
+
+```toml
+# fleet-manifest.toml (target state)
+[agents.meridian]
+primary_model = "glm-5"          # baseline, swap to gemini-1.5-pro after evaluation
+fallback_model = "deepseek-v3"   # cost-effective backup
+agent_config = "ming-qiao/meridian/AGENT-CONFIG.toml"
+```
+
+### 5.4 Runtime Configuration (via Orchestrator)
+
+| Property | Value | Notes |
+|----------|-------|-------|
+| **Primary model** | GLM-5 via Z.ai API (baseline) | Swappable via config |
+| **Fallback model** | DeepSeek-V3 (cost backup) | Auto-switch on primary failure |
+| **Runtime** | OpenCode (managed by am-agent-host) | Orchestrator generates runtime configs |
 | **Worktree** | `/Users/proteus/astralmaris/ming-qiao/meridian` | Within ming-qiao for Council integration |
 | **Cadence** | Daily | Curated report, not real-time monitoring |
-| **Wake port** | None | Interactive cmux + 60-second polling (standard non-Claude pattern) |
+| **Wake** | Interactive cmux + Observer polling | Standard non-Claude pattern |
+| **MCP config** | Generated by Orchestrator (ephemeral, 0600 permissions) | Never committed to git |
 
 ---
 
-## 6. Security Architecture (Ogma Review — 9 Requirements)
+## 6. Security Architecture
 
-Based on Ogma's security assessment (2026-03-11). All requirements are mandatory.
+Based on Ogma's security assessments: original review (2026-03-11, 9 requirements) and Config-Driven Orchestrator review (2026-03-23, 5 additional gates). All requirements are mandatory.
+
+### v2.0 Security Gates (Ogma Review — March 23, 2026)
+
+These five gates must be satisfied before Meridian Phase 2 (fetch/reason activation) proceeds:
+
+1. **CRITICAL: Ephemeral generated configs.** MCP configs generated by the Orchestrator must NEVER persist in repos. Write to git-ignored `.run/` or `/tmp/` with `0600` permissions. Delete on process exit. Live bearer tokens were found committed in `ming-qiao/meridian/opencode.json` — this must be scrubbed.
+
+2. **HIGH: OS-enforced network boundary.** The two-process fetch/reason split must be mechanically enforced by the OS, not just config flags. Use macOS `sandbox-exec` with custom `.sb` profiles: fetch process gets `(allow network-outbound)` but no localhost; reasoning process gets localhost only with `(deny network-outbound)`.
+
+3. **HIGH: Server-side per-agent messaging authorization.** Meridian's `inform`/`discuss`-only scope must be enforced in ming-qiao's write-path handlers via a declarative policy config (`agent-policies.json`), not just documented constraints. Identity is not authority.
+
+4. **HIGH: No shell-string concatenation in Orchestrator.** `AGENT-CONFIG.toml` parsed with typed Rust structs (`serde`), launched via `std::process::Command` argv/env. TOML values must never become shell arguments.
+
+5. **MEDIUM: Immutable fallback profiles.** Fallback model selection defined in `fleet-manifest.toml` (immutable fleet policy), not in agent-writable `AGENT-CONFIG.toml`. Handoff JSON treated as untrusted input: sanitized, size-limited, injected into a strictly defined prompt block.
+
+### v1.0 Security Requirements (Ogma Review — March 11, 2026)
 
 ### 6.1 Two-Stage Fetch/Reason Separation (MANDATORY INVARIANT)
 
@@ -142,7 +210,7 @@ Meridian's ming-qiao token is scoped to:
 
 ### 6.5 Message Tagging (source_model provenance)
 
-All Meridian messages carry `source_model: "glm-5"` field. Recipients calibrate trust — a local-model or mid-tier report warrants different confidence than an Opus-generated analysis.
+All Meridian messages carry a `source_model` field set dynamically by the Orchestrator (e.g., `"glm-5"`, `"gemini-1.5-pro"`, `"deepseek-v3"`). Recipients calibrate trust — different models warrant different confidence levels.
 
 ### 6.6 No Directive Authority
 
@@ -243,42 +311,51 @@ One actionable recommendation for the Council.
 
 ---
 
-## 8. Implementation Plan
+## 8. Implementation Plan (Updated v2.0)
 
 ### Phase 0: Prerequisites (gates all other phases)
-- [ ] This design document committed and reviewed
-- [ ] Meridian agent entry added to fleet-manifest.toml
-- [ ] NKey seed generated for NATS auth
-- [ ] Bearer token created in agent-tokens.json (scoped: inform/discuss only, meridian subjects)
-- [ ] ming-qiao worktree created: `/Users/proteus/astralmaris/ming-qiao/meridian`
-- [ ] OpenCode config with Z.ai provider and ming-qiao MCP
+- [x] Design document committed and reviewed (v1.0: 2026-03-19)
+- [x] Meridian agent entry in fleet-manifest.toml
+- [x] NKey seed generated for NATS auth
+- [x] Bearer token in agent-tokens.json (scoped: inform/discuss only)
+- [x] ming-qiao worktree created: `/Users/proteus/astralmaris/ming-qiao/meridian`
+- [ ] OpenCode config generated by am-agent-host Orchestrator (replaces manual config)
+- [ ] Scrub live bearer token from `ming-qiao/meridian/opencode.json` (Ogma finding #1)
 
-### Phase 1: Agent Shell (Aleph builds)
-- [ ] Worktree setup with AGENT.md (Session Start Protocol, 60s polling, ACK)
-- [ ] Launch script: `launch-meridian.sh` (OpenCode, no AgentAPI wrapper)
+### Phase 0.5: Curation Calibration (parallel, non-blocking)
+- [ ] Luban's cluster analysis reviewed by Proteus (cluster-review.md pending)
+- [ ] cluster-definitions.json produced for Meridian relevance scoring
+
+### Phase 1: Agent Shell + Orchestrator (Aleph builds)
+- [ ] am-agent-host Orchestrator binary (Rust) — reference implementation
+- [ ] AGENT-CONFIG.toml for Meridian (model selection, MCP, security constraints)
+- [ ] Orchestrator generates ephemeral runtime config at launch (0600 permissions, git-ignored)
+- [ ] Launch script generated by Orchestrator (replaces hand-written launch-meridian.sh)
 - [ ] `am-fleet agent meridian up` works end-to-end
 - [ ] Meridian can send/receive ming-qiao messages
 - [ ] Identity confirmed on Council roll call
+- [ ] Baseline with GLM-5 via OpenCode — establish operational telemetry
 
 ### Phase 2: Fetch Service — launchd (Aleph builds, Ogma reviews)
-- [ ] Fetch CLI binary or shell script (Rust preferred per tech stack directive)
+- [ ] **BLOCKED** until Ogma's 5 security gates are satisfied (§6 v2.0 gates)
+- [ ] Fetch CLI binary (Rust per tech stack directive)
 - [ ] arXiv API integration, RSS reader, blog scraper (sanitizing)
-- [ ] Quarantine directory structure: `ming-qiao/meridian/quarantine/{date}/`
-- [ ] Content provenance logging (source URL, timestamps, content hashes)
+- [ ] Quarantine directory: `ming-qiao/meridian/quarantine/{date}/`
+- [ ] Content provenance logging
 - [ ] Rate limiting on external fetches
-- [ ] launchd plist for scheduled execution (e.g., every 6 hours)
-- [ ] Network enforcement: NO ming-qiao tools, NO localhost service access
+- [ ] launchd plist for scheduled execution (every 6 hours)
+- [ ] macOS sandbox-exec profile: `(allow network-outbound)`, `(deny network* localhost)`
+- [ ] Network enforcement verified: NO ming-qiao tools, NO localhost access
 - [ ] Ogma security review: PASS required before activation
-- [ ] NOTE: This is infrastructure, NOT an agent capability. Runs independently.
 
 ### Phase 3: Meridian Agent — Reasoning Pipeline (Aleph builds)
-- [ ] OpenCode config with ming-qiao MCP tools ONLY — NO web-fetch tools
+- [ ] OpenCode config via Orchestrator — ming-qiao MCP tools ONLY, NO web-fetch
+- [ ] macOS sandbox-exec profile: `(deny network-outbound)`, `(allow network* localhost)`
 - [ ] Reads from quarantine directory (read-only)
-- [ ] Produces structured intel artifacts (JSON schema from Section 7)
+- [ ] Produces structured intel artifacts (JSON schema from §7)
 - [ ] Writes daily report to ming-qiao
-- [ ] Network enforcement: ZERO internet egress, localhost only
-- [ ] `source_model: "glm-5"` field on every message and artifact
-- [ ] AGENT.md with Session Start Protocol (60s polling, ACK, from_agent)
+- [ ] `source_model` field on every message (dynamic — set by Orchestrator based on active model)
+- [ ] AGENT.md with Session Start Protocol
 
 ### Phase 4: Staging and Review (Aleph builds, Thales/Hypatia review)
 - [ ] Staging directory with date-based organization
@@ -287,11 +364,14 @@ One actionable recommendation for the Council.
 - [ ] Review workflow: human or architect approval before ASTROLABE ingestion
 - [ ] ASTROLABE ingestion blocked until ontology is committed
 
-### Phase 5: Integration Testing
+### Phase 5: Integration Testing + Model Evaluation
 - [ ] End-to-end: fetch → sanitize → reason → stage → report
-- [ ] Security: verify network boundaries (fetch can't reach ming-qiao, reason can't reach internet)
+- [ ] Security: verify network boundaries (sandbox-exec enforced)
 - [ ] Comms: Meridian auto-polls, ACKs, participates in Council
-- [ ] Volume: daily run produces 5-10 curated items, not hundreds
+- [ ] Volume: daily run produces 5-10 curated items
+- [ ] **Model comparison:** Run GLM-5 baseline vs Gemini 1.5 Pro on same day's feed, compare synthesis quality
+- [ ] **Cost analysis:** Actual token burn per daily run, project monthly cost per model
+- [ ] Set primary/fallback in fleet manifest based on results
 
 ---
 
