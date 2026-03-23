@@ -564,23 +564,21 @@ async fn poll_cycle(
 
         match heal_phase {
             HealPhase::ForceHealed => {
-                // Phase 2: agent didn't exit after graceful signal — force kill + relaunch
-                warn!(agent, consecutive, unread, "PHASE 2: agent did not exit after graceful signal — force healing");
+                // Phase 2 DISABLED — force-kill destroyed sessions when relaunch failed.
+                // Only re-send the graceful signal. Manual intervention required if agent
+                // doesn't respond to graceful heal.
+                warn!(
+                    agent, consecutive, unread,
+                    "PHASE 2 DISABLED: agent still stale after {} cycles — re-sending graceful signal. Manual restart required if unresponsive.",
+                    consecutive
+                );
                 if let Some(ws_ref) = ws_cache.get(agent) {
                     let ws_ref_owned = ws_ref.to_string();
-                    match force_heal_session(&args.cmux_password, agent, &ws_ref_owned, args.dry_run) {
-                        Ok(()) => {
-                            stale_tracker.reset_after_heal(agent);
-                            tracker.mark_woken(agent);
-                            continue;
-                        }
-                        Err(e) => {
-                            warn!(agent, error = %e, "force-heal failed — will retry next cycle");
-                        }
-                    }
-                } else {
-                    warn!(agent, "force-heal skipped — no cmux workspace found");
+                    let _ = graceful_heal_signal(&args.cmux_password, agent, &ws_ref_owned, args.dry_run);
                 }
+                // Reset counter to GRACEFUL_THRESHOLD so we don't spam every cycle
+                // but do re-signal every 2 cycles
+                stale_tracker.reset_after_heal(agent);
             }
             HealPhase::GracefulPending if consecutive == GRACEFUL_THRESHOLD => {
                 // Phase 1 trigger: first cycle at threshold — send graceful signal
