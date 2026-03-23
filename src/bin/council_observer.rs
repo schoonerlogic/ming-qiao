@@ -219,7 +219,33 @@ fn graceful_heal_signal(
     Ok(())
 }
 
-/// Phase 2: Force — kill the agent's cmux session and re-launch.
+/// Resolve the terminal surface ref for a workspace.
+/// Runs: cmux list-pane-surfaces --workspace <ref> --id-format both
+/// and picks the first [terminal] surface.
+fn resolve_terminal_surface(
+    cmux_password: &Option<String>,
+    ws_ref: &str,
+) -> Option<String> {
+    let output = run_cmux_with_timeout(
+        cmux_password,
+        &["list-pane-surfaces", "--workspace", ws_ref, "--id-format", "both"],
+    ).ok()?;
+
+    // Parse output: lines like "* surface:76  Kimi Code  [selected]"
+    // or "  surface:70  OC | Luban agent...  [selected]"
+    for line in output.lines() {
+        let trimmed = line.trim().trim_start_matches('*').trim();
+        if trimmed.starts_with("surface:") {
+            if let Some(ref_part) = trimmed.split_whitespace().next() {
+                return Some(ref_part.to_string());
+            }
+        }
+    }
+    None
+}
+
+/// Phase 2: Force restart — respawn the terminal surface in the existing workspace.
+/// Fallback: am-fleet agent <name> restart (close + relaunch).
 fn force_heal_session(
     cmux_password: &Option<String>,
     agent: &str,
@@ -227,66 +253,66 @@ fn force_heal_session(
     dry_run: bool,
 ) -> Result<(), String> {
     if dry_run {
-        info!(agent, "DRY-RUN: would force-heal (kill + restart cmux session)");
+        info!(agent, "DRY-RUN: would force-heal (respawn terminal surface in workspace)");
         return Ok(());
     }
 
     warn!(agent, "AUTO-HEAL PHASE 2: respawning stale session (cmux workspace {})", ws_ref);
 
-    // Use respawn-pane to restart the process inside the existing workspace.
-    // This preserves the workspace but kills the old process and starts the launch script.
+    // Step 1: Resolve the terminal surface ref (avoids "Surface is not a terminal" error)
+    let surface_ref = resolve_terminal_surface(cmux_password, ws_ref);
+
+    // Step 2: respawn-pane with explicit --surface targeting the terminal
     let launch_script = format!(
         "/Users/proteus/astralmaris/astrallation/fleet/launch-{}.sh",
         agent
     );
 
-    match run_cmux_with_timeout(
-        cmux_password,
-        &["respawn-pane", "--workspace", ws_ref, "--command", &launch_script],
-    ) {
+    let respawn_result = if let Some(ref sref) = surface_ref {
+        info!(agent, surface = %sref, "targeting terminal surface for respawn");
+        run_cmux_with_timeout(cmux_password, &[
+            "respawn-pane", "--workspace", ws_ref, "--surface", sref, "--command", &launch_script,
+        ])
+    } else {
+        warn!(agent, "could not resolve terminal surface — trying respawn without --surface");
+        run_cmux_with_timeout(cmux_password, &[
+            "respawn-pane", "--workspace", ws_ref, "--command", &launch_script,
+        ])
+    };
+
+    match respawn_result {
         Ok(_) => {
             info!(agent, "AUTO-HEAL PHASE 2: respawn-pane succeeded — new session starting");
             return Ok(());
         }
         Err(e) => {
-            warn!(agent, error = %e, "respawn-pane failed — falling back to close + am-fleet launch");
+            warn!(agent, error = %e, "respawn-pane failed — falling back to am-fleet agent restart");
         }
     }
 
-    // Fallback: close workspace and relaunch via am-fleet
-    if let Err(e) = run_cmux_with_timeout(cmux_password, &["close-workspace", "--workspace", ws_ref]) {
-        warn!(agent, error = %e, "cmux close-workspace also failed");
-        return Err(format!("force-heal failed for {}: close-workspace: {}", agent, e));
-    }
-
-    // Brief pause for cleanup
-    std::thread::sleep(Duration::from_secs(2));
-
-    // Re-launch via am-fleet
-    info!(agent, "AUTO-HEAL PHASE 2: re-launching via am-fleet launch");
+    // Fallback: am-fleet agent <name> restart (does close-workspace + full relaunch)
+    info!(agent, "AUTO-HEAL PHASE 2: falling back to am-fleet agent {} restart", agent);
     let fleet_script = "/Users/proteus/astralmaris/astrallation/fleet/am-fleet.sh";
     match Command::new("bash")
-        .args([fleet_script, "launch", agent])
+        .args([fleet_script, "agent", agent, "restart"])
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
-        .spawn()
+        .output()
     {
-        Ok(mut child) => {
-            std::thread::sleep(Duration::from_secs(1));
-            match child.try_wait() {
-                Ok(Some(status)) if !status.success() => {
-                    let stderr = child.stderr.take()
-                        .map(|mut s| { let mut buf = String::new(); std::io::Read::read_to_string(&mut s, &mut buf).ok(); buf })
-                        .unwrap_or_default();
-                    warn!(agent, "am-fleet launch exited with {}: {}", status, stderr.trim());
-                }
-                _ => {
-                    info!(agent, "AUTO-HEAL PHASE 2: force re-launch initiated");
-                }
+        Ok(output) => {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            if output.status.success() {
+                info!(agent, "AUTO-HEAL PHASE 2: am-fleet agent restart succeeded");
+                if !stdout.is_empty() { info!(agent, stdout = %stdout.trim(), "am-fleet output"); }
+                Ok(())
+            } else {
+                warn!(agent, code = output.status.code(), stdout = %stdout.trim(), stderr = %stderr.trim(),
+                    "am-fleet agent restart failed");
+                Err(format!("am-fleet agent {} restart failed (exit {}): {}", agent, output.status, stderr.trim()))
             }
-            Ok(())
         }
-        Err(e) => Err(format!("failed to spawn am-fleet launch {}: {}", agent, e)),
+        Err(e) => Err(format!("failed to run am-fleet agent {} restart: {}", agent, e)),
     }
 }
 
