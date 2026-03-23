@@ -130,12 +130,23 @@ impl CooldownTracker {
 }
 
 // ============================================================================
-// Stale session tracker — auto-heal for broken MCP sessions
+// Stale session tracker — two-phase auto-heal for broken MCP sessions
 // ============================================================================
 
-/// After this many consecutive cycles where an agent has unread messages
-/// that never clear, assume the session is broken and restart it.
-const STALE_THRESHOLD: u32 = 5;
+/// Phase 1: after this many consecutive stale cycles, send graceful shutdown signal
+const GRACEFUL_THRESHOLD: u32 = 5;
+/// Phase 2: after this many total consecutive stale cycles, force kill + relaunch
+const FORCE_THRESHOLD: u32 = 7;
+
+#[derive(Debug, Clone, PartialEq)]
+enum HealPhase {
+    /// Not stale yet
+    Healthy,
+    /// Graceful signal sent, waiting for agent to exit
+    GracefulPending,
+    /// Force kill + relaunch executed
+    ForceHealed,
+}
 
 struct StaleSessionTracker {
     consecutive_unread: HashMap<String, u32>,
@@ -149,11 +160,17 @@ impl StaleSessionTracker {
     }
 
     /// Record that an agent has unread messages this cycle.
-    /// Returns true if the stale threshold has been reached (needs auto-heal).
-    fn record_unread(&mut self, agent: &str) -> bool {
+    /// Returns the appropriate heal phase.
+    fn record_unread(&mut self, agent: &str) -> HealPhase {
         let count = self.consecutive_unread.entry(agent.to_string()).or_insert(0);
         *count += 1;
-        *count >= STALE_THRESHOLD
+        if *count >= FORCE_THRESHOLD {
+            HealPhase::ForceHealed
+        } else if *count >= GRACEFUL_THRESHOLD {
+            HealPhase::GracefulPending
+        } else {
+            HealPhase::Healthy
+        }
     }
 
     /// Agent cleared their inbox — reset counter.
@@ -161,7 +178,7 @@ impl StaleSessionTracker {
         self.consecutive_unread.remove(agent);
     }
 
-    /// Reset after an auto-heal so we give the new session time to start.
+    /// Reset after a force heal so we give the new session time to start.
     fn reset_after_heal(&mut self, agent: &str) {
         self.consecutive_unread.remove(agent);
     }
@@ -171,35 +188,64 @@ impl StaleSessionTracker {
     }
 }
 
-/// Auto-heal: kill the agent's cmux session and re-launch.
-/// The launch script (in cmux) will restart the CLI process.
-fn auto_heal_session(
+/// Phase 1: Graceful — inject text telling the agent to save state and exit.
+fn graceful_heal_signal(
+    cmux_password: &Option<String>,
+    agent: &str,
+    ws_ref: &str,
+    dry_run: bool,
+) -> Result<(), String> {
+    let msg = format!(
+        "OBSERVER AUTO-HEAL: Your MCP session appears broken ({} has had unread messages for 5+ minutes). \
+         Please save your work, write your handoff file via 'am-fleet handoff {}', then exit. \
+         You will be restarted automatically. If you do not exit within 2 minutes, your session will be force-killed.",
+        agent, agent
+    );
+
+    if dry_run {
+        info!(agent, "DRY-RUN: would send graceful heal signal");
+        return Ok(());
+    }
+
+    warn!(agent, "AUTO-HEAL PHASE 1: sending graceful shutdown signal");
+
+    // Inject the message
+    run_cmux_with_timeout(cmux_password, &["send", "--workspace", ws_ref, &msg])
+        .map_err(|e| format!("cmux send failed: {}", e))?;
+    run_cmux_with_timeout(cmux_password, &["send-key", "--workspace", ws_ref, "enter"])
+        .map_err(|e| format!("cmux send-key enter failed: {}", e))?;
+
+    info!(agent, "AUTO-HEAL PHASE 1: graceful signal sent — waiting 2 cycles for agent to exit");
+    Ok(())
+}
+
+/// Phase 2: Force — kill the agent's cmux session and re-launch.
+fn force_heal_session(
     cmux_password: &Option<String>,
     agent: &str,
     ws_ref: &str,
     dry_run: bool,
 ) -> Result<(), String> {
     if dry_run {
-        info!(agent, "DRY-RUN: would auto-heal (kill + restart cmux session)");
+        info!(agent, "DRY-RUN: would force-heal (kill + restart cmux session)");
         return Ok(());
     }
 
-    warn!(agent, "AUTO-HEAL: killing stale session (cmux workspace {})", ws_ref);
+    warn!(agent, "AUTO-HEAL PHASE 2: force-killing stale session (cmux workspace {})", ws_ref);
 
     // Kill the workspace — cmux will stop the process inside it
     if let Err(e) = run_cmux_with_timeout(cmux_password, &["kill-workspace", "--workspace", ws_ref]) {
         warn!(agent, error = %e, "cmux kill-workspace failed — trying kill-session");
-        // Fallback: try kill-session with the agent name
         if let Err(e2) = run_cmux_with_timeout(cmux_password, &["kill-session", agent]) {
-            return Err(format!("auto-heal failed for {}: kill-workspace: {}, kill-session: {}", agent, e, e2));
+            return Err(format!("force-heal failed for {}: kill-workspace: {}, kill-session: {}", agent, e, e2));
         }
     }
 
     // Brief pause for cleanup
     std::thread::sleep(Duration::from_secs(2));
 
-    // Re-launch via am-fleet (which knows each agent's launch script)
-    info!(agent, "AUTO-HEAL: re-launching via am-fleet launch");
+    // Re-launch via am-fleet
+    info!(agent, "AUTO-HEAL PHASE 2: re-launching via am-fleet launch");
     let fleet_script = "/Users/proteus/astralmaris/astrallation/fleet/am-fleet.sh";
     match Command::new("bash")
         .args([fleet_script, "launch", agent])
@@ -208,8 +254,6 @@ fn auto_heal_session(
         .spawn()
     {
         Ok(mut child) => {
-            // Don't wait for it — launch scripts run the CLI process
-            // Give it a moment to start, then detach
             std::thread::sleep(Duration::from_secs(1));
             match child.try_wait() {
                 Ok(Some(status)) if !status.success() => {
@@ -219,7 +263,7 @@ fn auto_heal_session(
                     warn!(agent, "am-fleet launch exited with {}: {}", status, stderr.trim());
                 }
                 _ => {
-                    info!(agent, "AUTO-HEAL: re-launch initiated");
+                    info!(agent, "AUTO-HEAL PHASE 2: force re-launch initiated");
                 }
             }
             Ok(())
@@ -496,34 +540,45 @@ async fn poll_cycle(
             continue;
         }
 
-        // Track consecutive unread cycles — auto-heal if stale
-        if stale_tracker.record_unread(agent) {
-            let consecutive = stale_tracker.consecutive_count(agent);
-            warn!(
-                agent,
-                consecutive,
-                unread,
-                "session appears stale ({} consecutive cycles with unread) — initiating auto-heal",
-                consecutive
-            );
+        // Track consecutive unread cycles — two-phase auto-heal
+        let heal_phase = stale_tracker.record_unread(agent);
+        let consecutive = stale_tracker.consecutive_count(agent);
 
-            if let Some(ws_ref) = ws_cache.get(agent) {
-                let ws_ref_owned = ws_ref.to_string();
-                match auto_heal_session(&args.cmux_password, agent, &ws_ref_owned, args.dry_run) {
-                    Ok(()) => {
-                        info!(agent, "auto-heal complete — will re-check next cycle");
-                        stale_tracker.reset_after_heal(agent);
-                        // Skip the normal wake — give the new session time to start
-                        tracker.mark_woken(agent);
-                        continue;
+        match heal_phase {
+            HealPhase::ForceHealed => {
+                // Phase 2: agent didn't exit after graceful signal — force kill + relaunch
+                warn!(agent, consecutive, unread, "PHASE 2: agent did not exit after graceful signal — force healing");
+                if let Some(ws_ref) = ws_cache.get(agent) {
+                    let ws_ref_owned = ws_ref.to_string();
+                    match force_heal_session(&args.cmux_password, agent, &ws_ref_owned, args.dry_run) {
+                        Ok(()) => {
+                            stale_tracker.reset_after_heal(agent);
+                            tracker.mark_woken(agent);
+                            continue;
+                        }
+                        Err(e) => {
+                            warn!(agent, error = %e, "force-heal failed — will retry next cycle");
+                        }
                     }
-                    Err(e) => {
-                        warn!(agent, error = %e, "auto-heal failed — falling through to normal wake");
-                        // Don't reset — will retry next cycle
-                    }
+                } else {
+                    warn!(agent, "force-heal skipped — no cmux workspace found");
                 }
-            } else {
-                warn!(agent, "auto-heal skipped — no cmux workspace found");
+            }
+            HealPhase::GracefulPending if consecutive == GRACEFUL_THRESHOLD => {
+                // Phase 1 trigger: first cycle at threshold — send graceful signal
+                info!(agent, consecutive, unread, "PHASE 1: sending graceful shutdown signal");
+                if let Some(ws_ref) = ws_cache.get(agent) {
+                    let ws_ref_owned = ws_ref.to_string();
+                    let _ = graceful_heal_signal(&args.cmux_password, agent, &ws_ref_owned, args.dry_run);
+                }
+                // Still do the normal wake below — agent might respond
+            }
+            HealPhase::GracefulPending => {
+                // Cycles 6: waiting for agent to exit gracefully
+                debug!(agent, consecutive, "waiting for graceful exit ({}/{} cycles before force)", consecutive, FORCE_THRESHOLD);
+            }
+            HealPhase::Healthy => {
+                // Not stale yet — normal wake
             }
         }
 
@@ -641,7 +696,7 @@ async fn main() -> anyhow::Result<()> {
     let mut ws_cache = WorkspaceCache::new();
     let mut stale_tracker = StaleSessionTracker::new();
 
-    info!("  Auto-heal: after {} consecutive stale cycles", STALE_THRESHOLD);
+    info!("  Auto-heal: graceful at {} cycles, force at {} cycles", GRACEFUL_THRESHOLD, FORCE_THRESHOLD);
 
     loop {
         debug!("--- poll cycle start ---");
