@@ -460,14 +460,15 @@ fn display_readiness_dashboard(roster: &FleetRoster, readiness: &HashMap<String,
     println!();
 }
 
-/// Interactive options: recheck, resend to missing, or quit
+/// Interactive options: recheck, resend, continue, or quit
 fn prompt_interactive() -> char {
     println!("  Options:");
     println!("    [r] Recheck — poll missing agents again");
     println!("    [s] Resend — resend notification to missing agents only");
-    println!("    [q] Quit — exit (default)");
+    println!("    [c] Continue — proceed with fleet restart for READY agents");
+    println!("    [q] Quit — exit without restart (default)");
     println!();
-    print!("  Choice [r/s/q]: ");
+    print!("  Choice [r/s/c/q]: ");
     let _ = io::stdout().flush();
 
     let mut input = String::new();
@@ -475,6 +476,7 @@ fn prompt_interactive() -> char {
         match input.trim().to_lowercase().chars().next() {
             Some('r') => 'r',
             Some('s') => 's',
+            Some('c') => 'c',
             _ => 'q',
         }
     } else {
@@ -728,6 +730,76 @@ async fn main() -> Result<()> {
                     readiness = wait_for_readiness(&agents, &http_client, &args, broadcast_time).await;
                     display_readiness_dashboard(&roster, &readiness);
                 }
+            }
+            'c' => {
+                // Continue: proceed with fleet restart
+                let missing_core: Vec<String> = roster.core
+                    .iter()
+                    .filter(|a| !readiness.get(a.as_str()).unwrap_or(&false))
+                    .cloned()
+                    .collect();
+
+                if !missing_core.is_empty() {
+                    println!();
+                    println!("  WARNING: {} core agent(s) still MISSING: {}",
+                        missing_core.len(),
+                        missing_core.join(", "));
+                    print!("  Proceed anyway? [y/N]: ");
+                    let _ = io::stdout().flush();
+                    let mut confirm = String::new();
+                    if io::stdin().read_line(&mut confirm).is_ok() {
+                        if confirm.trim().to_lowercase() != "y" {
+                            println!("  Aborted. Returning to menu.");
+                            continue;
+                        }
+                    } else {
+                        println!("  Aborted.");
+                        continue;
+                    }
+                }
+
+                println!();
+                println!("  Executing fleet restart via am-fleet...");
+                println!();
+
+                let fleet_script = "/Users/proteus/astralmaris/astrallation/fleet/am-fleet.sh";
+
+                // am-fleet down
+                info!("Running: am-fleet down");
+                let output = Command::new("bash")
+                    .args([fleet_script, "down"])
+                    .output()
+                    .context("Failed to run am-fleet down")?;
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                print!("{}", stdout);
+
+                if !output.status.success() {
+                    let stderr = String::from_utf8_lossy(&output.stderr);
+                    warn!("am-fleet down reported issues: {}", stderr.trim());
+                    // Continue anyway — down may warn but fleet restart should proceed
+                }
+
+                // Brief pause
+                std::thread::sleep(Duration::from_secs(3));
+
+                // am-fleet up
+                info!("Running: am-fleet up");
+                let output = Command::new("bash")
+                    .args([fleet_script, "up"])
+                    .output()
+                    .context("Failed to run am-fleet up")?;
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                print!("{}", stdout);
+
+                if output.status.success() {
+                    println!();
+                    println!("  Fleet restart complete.");
+                } else {
+                    let stderr = String::from_utf8_lossy(&output.stderr);
+                    eprintln!();
+                    eprintln!("  Fleet restart had errors: {}", stderr.trim());
+                }
+                break;
             }
             _ => {
                 println!("  Exiting. Handover data collected — restart manually when ready.");
