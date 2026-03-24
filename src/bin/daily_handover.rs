@@ -27,7 +27,7 @@ use chrono::Utc;
 use clap::Parser;
 use serde::Deserialize;
 use tokio::time::sleep;
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 
 // ============================================================================
 // CLI arguments
@@ -460,15 +460,16 @@ fn display_readiness_dashboard(roster: &FleetRoster, readiness: &HashMap<String,
     println!();
 }
 
-/// Interactive options: recheck, resend, continue, or quit
+/// Interactive options: recheck, resend, verify comms, continue, or quit
 fn prompt_interactive() -> char {
     println!("  Options:");
     println!("    [r] Recheck — poll missing agents again");
     println!("    [s] Resend — resend notification to missing agents only");
+    println!("    [v] Verify — round-trip comms check (ping each agent, wait for ACK)");
     println!("    [c] Continue — proceed with fleet restart for READY agents");
     println!("    [q] Quit — exit without restart (default)");
     println!();
-    print!("  Choice [r/s/c/q]: ");
+    print!("  Choice [r/s/v/c/q]: ");
     let _ = io::stdout().flush();
 
     let mut input = String::new();
@@ -476,12 +477,142 @@ fn prompt_interactive() -> char {
         match input.trim().to_lowercase().chars().next() {
             Some('r') => 'r',
             Some('s') => 's',
+            Some('v') => 'v',
             Some('c') => 'c',
             _ => 'q',
         }
     } else {
         'q'
     }
+}
+
+// ============================================================================
+// Comms verification — round-trip ping/ACK test
+// ============================================================================
+
+/// Send a COMMS-CHECK ping to each agent and verify they received it
+/// by checking if the message appears in their inbox.
+async fn verify_comms(
+    agents: &[String],
+    http_client: &reqwest::Client,
+    args: &Args,
+) -> HashMap<String, bool> {
+    let mut results: HashMap<String, bool> = HashMap::new();
+
+    println!();
+    println!("  Sending COMMS-CHECK ping to {} agents...", agents.len());
+    println!();
+
+    let ping_time = Utc::now();
+
+    // Send a ping to each agent
+    for agent in agents {
+        let body = serde_json::json!({
+            "from_agent": args.from_agent,
+            "to_agent": agent,
+            "subject": "COMMS-CHECK — verify round-trip delivery",
+            "content": format!("Automated comms verification ping at {}. If you receive this, your MCP session is functional.", ping_time),
+            "intent": "inform",
+            "priority": "low"
+        });
+
+        let mut req = http_client
+            .post(format!("{}/api/threads", args.api_url))
+            .header("Content-Type", "application/json");
+        if let Some(token) = &args.token {
+            req = req.header("Authorization", format!("Bearer {}", token));
+        }
+
+        match req.json(&body).send().await {
+            Ok(resp) if resp.status().is_success() => {
+                debug!("COMMS-CHECK ping sent to {}", agent);
+            }
+            Ok(resp) => {
+                warn!("COMMS-CHECK ping to {} failed (HTTP {})", agent, resp.status());
+                results.insert(agent.clone(), false);
+            }
+            Err(e) => {
+                warn!("COMMS-CHECK ping to {} failed: {}", agent, e);
+                results.insert(agent.clone(), false);
+            }
+        }
+    }
+
+    // Wait briefly for delivery
+    println!("  Waiting 5s for message delivery...");
+    sleep(Duration::from_secs(5)).await;
+
+    // Verify each agent received the ping by checking their inbox
+    for agent in agents {
+        if results.contains_key(agent) {
+            continue; // Already marked as failed (send error)
+        }
+
+        let url = format!(
+            "{}/api/inbox/{}?unread_only=false&limit=5",
+            args.api_url, agent
+        );
+        let mut req = http_client.get(&url);
+        if let Some(token) = &args.token {
+            req = req.header("Authorization", format!("Bearer {}", token));
+        }
+
+        let delivered = if let Ok(resp) = req.send().await {
+            if let Ok(body) = resp.json::<serde_json::Value>().await {
+                body["messages"]
+                    .as_array()
+                    .map(|msgs| {
+                        msgs.iter().any(|m| {
+                            m["subject"].as_str() == Some("COMMS-CHECK — verify round-trip delivery")
+                                && m["from"].as_str() == Some(&args.from_agent)
+                        })
+                    })
+                    .unwrap_or(false)
+            } else {
+                false
+            }
+        } else {
+            false
+        };
+
+        results.insert(agent.clone(), delivered);
+    }
+
+    // Display results
+    println!();
+    println!("  ════════════════════════════════════");
+    println!("  Comms Verification Results");
+    println!("  ════════════════════════════════════");
+    println!();
+
+    let mut pass_count = 0;
+    for agent in agents {
+        let passed = results.get(agent).copied().unwrap_or(false);
+        if passed {
+            pass_count += 1;
+        }
+        let marker = if passed { "+" } else { "!" };
+        let status = if passed { "DELIVERED" } else { "FAILED" };
+        println!("    [{}] {:18} {}", marker, agent, status);
+    }
+
+    println!();
+    println!("  Comms: {}/{} verified", pass_count, agents.len());
+
+    let failed: Vec<&String> = agents
+        .iter()
+        .filter(|a| !results.get(a.as_str()).copied().unwrap_or(false))
+        .collect();
+
+    if !failed.is_empty() {
+        println!();
+        println!("  WARNING: {} agent(s) have broken comms: {}", failed.len(),
+            failed.iter().map(|a| a.as_str()).collect::<Vec<_>>().join(", "));
+        println!("  These agents likely have stale MCP sessions and need manual restart.");
+    }
+    println!();
+
+    results
 }
 
 // ============================================================================
@@ -730,6 +861,10 @@ async fn main() -> Result<()> {
                     readiness = wait_for_readiness(&agents, &http_client, &args, broadcast_time).await;
                     display_readiness_dashboard(&roster, &readiness);
                 }
+            }
+            'v' => {
+                // Verify: round-trip comms check
+                let _ = verify_comms(&agents, &http_client, &args).await;
             }
             'c' => {
                 // Continue: proceed with fleet restart
