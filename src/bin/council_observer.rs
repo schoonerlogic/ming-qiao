@@ -201,12 +201,21 @@ enum HealPhase {
 
 struct StaleSessionTracker {
     consecutive_unread: HashMap<String, u32>,
+    /// Unread count at last wake — if next poll shows same or higher, wake didn't help
+    unread_at_wake: HashMap<String, usize>,
+    /// Number of wakes that didn't reduce unread count
+    ineffective_wakes: HashMap<String, u32>,
 }
+
+/// After this many wakes that don't reduce unread, escalate immediately
+const INEFFECTIVE_WAKE_THRESHOLD: u32 = 2;
 
 impl StaleSessionTracker {
     fn new() -> Self {
         Self {
             consecutive_unread: HashMap::new(),
+            unread_at_wake: HashMap::new(),
+            ineffective_wakes: HashMap::new(),
         }
     }
 
@@ -224,14 +233,42 @@ impl StaleSessionTracker {
         }
     }
 
-    /// Agent cleared their inbox — reset counter.
+    /// Agent cleared their inbox — reset everything.
     fn record_clear(&mut self, agent: &str) {
         self.consecutive_unread.remove(agent);
+        self.unread_at_wake.remove(agent);
+        self.ineffective_wakes.remove(agent);
     }
 
     /// Reset after a force heal so we give the new session time to start.
     fn reset_after_heal(&mut self, agent: &str) {
         self.consecutive_unread.remove(agent);
+        self.unread_at_wake.remove(agent);
+        self.ineffective_wakes.remove(agent);
+    }
+
+    /// Record unread count at the time of wake — for post-wake verification.
+    fn record_wake(&mut self, agent: &str, unread: usize) {
+        self.unread_at_wake.insert(agent.to_string(), unread);
+    }
+
+    /// Check if a wake was effective (unread decreased since wake).
+    /// Returns true if wake was INEFFECTIVE (unread same or higher).
+    fn check_wake_ineffective(&mut self, agent: &str, current_unread: usize) -> bool {
+        if let Some(prev) = self.unread_at_wake.remove(agent) {
+            if current_unread >= prev {
+                // Wake didn't help — agent didn't process messages
+                let count = self.ineffective_wakes.entry(agent.to_string()).or_insert(0);
+                *count += 1;
+                warn!(agent, prev_unread = prev, current_unread, ineffective_wakes = *count,
+                    "wake was ineffective — agent did not clear messages");
+                return *count >= INEFFECTIVE_WAKE_THRESHOLD;
+            } else {
+                // Wake worked — unread decreased
+                self.ineffective_wakes.remove(agent);
+            }
+        }
+        false
     }
 
     fn consecutive_count(&self, agent: &str) -> u32 {
@@ -691,6 +728,17 @@ async fn poll_cycle(
         let heal_phase = stale_tracker.record_unread(agent);
         let consecutive = stale_tracker.consecutive_count(agent);
 
+        // Post-wake verification: did the previous wake actually help?
+        if stale_tracker.check_wake_ineffective(agent, unread) {
+            warn!(agent, unread,
+                "ESCALATION: {} ineffective wakes — agent cannot process messages, alerting merlin",
+                INEFFECTIVE_WAKE_THRESHOLD);
+            alert_merlin(http_client, &args.mingqiao_url, agent, consecutive, unread, &args.mq_token).await;
+            tracker.increase_backoff(agent);
+            tracker.mark_woken(agent);
+            continue; // Skip further wake attempts
+        }
+
         // Circuit breaker: after threshold, STOP waking — just alert and back off
         if consecutive >= CIRCUIT_BREAKER_THRESHOLD {
             match heal_phase {
@@ -775,7 +823,8 @@ async fn poll_cycle(
 
         match result {
             Ok(true) => {
-                info!(agent, "woke successfully");
+                info!(agent, "woke successfully — will verify on next cycle");
+                stale_tracker.record_wake(agent, unread);
                 tracker.mark_woken(agent);
             }
             Ok(false) => {
