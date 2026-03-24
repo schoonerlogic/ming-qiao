@@ -116,6 +116,10 @@ const FLEET_ROSTER: &[FleetAgent] = &[
 /// Maximum backoff interval (15 minutes)
 const MAX_BACKOFF: Duration = Duration::from_secs(900);
 
+/// Minimum cooldown after a SUCCESSFUL wake — don't re-poke for 5 minutes
+/// This prevents the rapid-fire loop: wake → agent clears → new msg arrives → wake again
+const POST_WAKE_COOLDOWN: Duration = Duration::from_secs(300);
+
 /// After this many consecutive stale cycles, stop waking entirely (circuit breaker)
 const CIRCUIT_BREAKER_THRESHOLD: u32 = 5;
 
@@ -137,9 +141,14 @@ impl CooldownTracker {
 
     fn cooldown_for(&self, agent: &str) -> Duration {
         let level = self.backoff_level.get(agent).copied().unwrap_or(0);
-        let multiplier = 1u64 << level.min(6); // cap at 2^6 = 64x
-        let backoff = self.base_interval * multiplier as u32;
-        if backoff > MAX_BACKOFF { MAX_BACKOFF } else { backoff }
+        if level == 0 {
+            // No backoff — use post-wake minimum cooldown
+            POST_WAKE_COOLDOWN
+        } else {
+            let multiplier = 1u64 << level.min(6); // cap at 2^6 = 64x
+            let backoff = POST_WAKE_COOLDOWN * multiplier as u32;
+            if backoff > MAX_BACKOFF { MAX_BACKOFF } else { backoff }
+        }
     }
 
     fn is_cooling_down(&self, agent: &str) -> bool {
