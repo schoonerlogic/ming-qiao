@@ -113,28 +113,61 @@ const FLEET_ROSTER: &[FleetAgent] = &[
 // Cooldown tracker
 // ============================================================================
 
+/// Maximum backoff interval (15 minutes)
+const MAX_BACKOFF: Duration = Duration::from_secs(900);
+
+/// After this many consecutive stale cycles, stop waking entirely (circuit breaker)
+const CIRCUIT_BREAKER_THRESHOLD: u32 = 5;
+
 struct CooldownTracker {
     last_wake: HashMap<String, Instant>,
-    poll_interval: Duration,
+    /// Per-agent backoff multiplier (doubles on each consecutive unresponsive cycle)
+    backoff_level: HashMap<String, u32>,
+    base_interval: Duration,
 }
 
 impl CooldownTracker {
     fn new(poll_interval: Duration) -> Self {
         Self {
             last_wake: HashMap::new(),
-            poll_interval,
+            backoff_level: HashMap::new(),
+            base_interval: poll_interval,
         }
+    }
+
+    fn cooldown_for(&self, agent: &str) -> Duration {
+        let level = self.backoff_level.get(agent).copied().unwrap_or(0);
+        let multiplier = 1u64 << level.min(6); // cap at 2^6 = 64x
+        let backoff = self.base_interval * multiplier as u32;
+        if backoff > MAX_BACKOFF { MAX_BACKOFF } else { backoff }
     }
 
     fn is_cooling_down(&self, agent: &str) -> bool {
         self.last_wake
             .get(agent)
-            .map(|t| t.elapsed() < self.poll_interval)
+            .map(|t| t.elapsed() < self.cooldown_for(agent))
             .unwrap_or(false)
     }
 
     fn mark_woken(&mut self, agent: &str) {
         self.last_wake.insert(agent.to_string(), Instant::now());
+    }
+
+    /// Agent responded — reset backoff to zero
+    fn reset_backoff(&mut self, agent: &str) {
+        self.backoff_level.remove(agent);
+    }
+
+    /// Agent didn't respond — increase backoff
+    fn increase_backoff(&mut self, agent: &str) {
+        let level = self.backoff_level.entry(agent.to_string()).or_insert(0);
+        *level += 1;
+        let current_level = *level;
+        let multiplier = 1u64 << current_level.min(6);
+        let backoff = self.base_interval * multiplier as u32;
+        let cd = if backoff > MAX_BACKOFF { MAX_BACKOFF } else { backoff };
+        info!(agent, backoff_level = current_level, cooldown_secs = cd.as_secs(),
+            "backoff increased — next wake in {}s", cd.as_secs());
     }
 }
 
@@ -641,31 +674,48 @@ async fn poll_cycle(
 
         if unread == 0 {
             stale_tracker.record_clear(agent);
+            tracker.reset_backoff(agent);
             continue;
         }
 
-        // Track consecutive unread cycles — two-phase auto-heal
+        // Track consecutive unread cycles — circuit breaker + alert
         let heal_phase = stale_tracker.record_unread(agent);
         let consecutive = stale_tracker.consecutive_count(agent);
 
+        // Circuit breaker: after threshold, STOP waking — just alert and back off
+        if consecutive >= CIRCUIT_BREAKER_THRESHOLD {
+            match heal_phase {
+                HealPhase::GracefulPending if consecutive == GRACEFUL_THRESHOLD => {
+                    // First time hitting circuit breaker — alert merlin
+                    warn!(agent, consecutive, unread,
+                        "CIRCUIT BREAKER: {} consecutive stale cycles — STOPPING wake attempts, alerting merlin",
+                        consecutive);
+                    alert_merlin(http_client, &args.mingqiao_url, agent, consecutive, unread, &args.mq_token).await;
+                }
+                HealPhase::ForceHealed => {
+                    // Re-alert merlin periodically
+                    warn!(agent, consecutive, unread,
+                        "CIRCUIT BREAKER: still stale after {} cycles — re-alerting merlin", consecutive);
+                    alert_merlin(http_client, &args.mingqiao_url, agent, consecutive, unread, &args.mq_token).await;
+                    stale_tracker.reset_after_heal(agent);
+                }
+                _ => {
+                    debug!(agent, consecutive, "circuit breaker active — not waking");
+                }
+            }
+            tracker.increase_backoff(agent);
+            tracker.mark_woken(agent); // apply backoff cooldown
+            continue; // DO NOT wake — session is dead
+        }
+
+        // Below circuit breaker threshold — proceed with wake
         match heal_phase {
-            HealPhase::ForceHealed => {
-                // Re-alert merlin every FORCE_THRESHOLD cycles
-                warn!(agent, consecutive, unread, "STALE SESSION: still unresponsive after {} cycles — re-alerting merlin", consecutive);
-                alert_merlin(http_client, &args.mingqiao_url, agent, consecutive, unread, &args.mq_token).await;
-                stale_tracker.reset_after_heal(agent);
-            }
-            HealPhase::GracefulPending if consecutive == GRACEFUL_THRESHOLD => {
-                // First detection: alert merlin, do NOT touch the agent's session
-                warn!(agent, consecutive, unread, "STALE SESSION DETECTED: {} consecutive cycles with unread messages — alerting merlin", consecutive);
-                alert_merlin(http_client, &args.mingqiao_url, agent, consecutive, unread, &args.mq_token).await;
-            }
-            HealPhase::GracefulPending => {
-                // Between thresholds — just log
-                debug!(agent, consecutive, "stale session — merlin alerted, waiting for manual intervention");
-            }
             HealPhase::Healthy => {
                 // Not stale yet — normal wake
+            }
+            _ => {
+                // Should not reach here (circuit breaker catches >= GRACEFUL_THRESHOLD)
+                // but handle gracefully
             }
         }
 
