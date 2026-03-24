@@ -20,6 +20,7 @@
 //!   council-observer --dry-run
 
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::process::Command;
 use std::time::{Duration, Instant};
 
@@ -50,6 +51,14 @@ struct Args {
     /// cmux socket password (if set)
     #[arg(long, env = "CMUX_SOCKET_PASSWORD")]
     cmux_password: Option<String>,
+
+    /// Ming-qiao auth token for sending alerts (or set MQ_TOKEN env var)
+    #[arg(long, env = "MQ_TOKEN")]
+    mq_token: Option<String>,
+
+    /// Agent tokens file (auto-loads token for 'council-observer' or 'jikimi')
+    #[arg(long, default_value = "/Users/proteus/astralmaris/ming-qiao/main/config/agent-tokens.json")]
+    tokens_file: PathBuf,
 
     /// Log but don't actually wake agents
     #[arg(long)]
@@ -562,9 +571,10 @@ async fn alert_merlin(
     agent: &str,
     consecutive: u32,
     unread: usize,
+    mq_token: &Option<String>,
 ) {
     let body = serde_json::json!({
-        "from_agent": "council-observer",
+        "from_agent": "jikimi",
         "to_agent": "merlin",
         "subject": format!("am.observer.stale-session — {}", agent),
         "content": format!(
@@ -579,12 +589,16 @@ async fn alert_merlin(
     });
 
     let url = format!("{}/api/threads", mingqiao_url);
-    match http_client
+    let mut req = http_client
         .post(&url)
         .json(&body)
-        .timeout(HTTP_TIMEOUT)
-        .send()
-        .await
+        .timeout(HTTP_TIMEOUT);
+
+    if let Some(token) = mq_token {
+        req = req.header("Authorization", format!("Bearer {}", token));
+    }
+
+    match req.send().await
     {
         Ok(resp) if resp.status().is_success() => {
             info!(agent, "stale session alert sent to merlin");
@@ -638,13 +652,13 @@ async fn poll_cycle(
             HealPhase::ForceHealed => {
                 // Re-alert merlin every FORCE_THRESHOLD cycles
                 warn!(agent, consecutive, unread, "STALE SESSION: still unresponsive after {} cycles — re-alerting merlin", consecutive);
-                alert_merlin(http_client, &args.mingqiao_url, agent, consecutive, unread).await;
+                alert_merlin(http_client, &args.mingqiao_url, agent, consecutive, unread, &args.mq_token).await;
                 stale_tracker.reset_after_heal(agent);
             }
             HealPhase::GracefulPending if consecutive == GRACEFUL_THRESHOLD => {
                 // First detection: alert merlin, do NOT touch the agent's session
                 warn!(agent, consecutive, unread, "STALE SESSION DETECTED: {} consecutive cycles with unread messages — alerting merlin", consecutive);
-                alert_merlin(http_client, &args.mingqiao_url, agent, consecutive, unread).await;
+                alert_merlin(http_client, &args.mingqiao_url, agent, consecutive, unread, &args.mq_token).await;
             }
             HealPhase::GracefulPending => {
                 // Between thresholds — just log
@@ -728,8 +742,26 @@ async fn main() -> anyhow::Result<()> {
         )
         .init();
 
-    let args = Args::parse();
+    let mut args = Args::parse();
     let poll_interval = Duration::from_secs(args.poll_interval);
+
+    // Auto-load MQ token from tokens file (try jikimi, then merlin)
+    if args.mq_token.is_none() {
+        if let Ok(content) = std::fs::read_to_string(&args.tokens_file) {
+            if let Ok(data) = serde_json::from_str::<serde_json::Value>(&content) {
+                if let Some(t) = data["tokens"]["jikimi"].as_str() {
+                    args.mq_token = Some(t.to_string());
+                    info!("Loaded MQ token for 'jikimi' from {}", args.tokens_file.display());
+                } else if let Some(t) = data["tokens"]["merlin"].as_str() {
+                    args.mq_token = Some(t.to_string());
+                    info!("Loaded MQ token for 'merlin' from {}", args.tokens_file.display());
+                }
+            }
+        }
+        if args.mq_token.is_none() {
+            warn!("No MQ token found — alert_merlin calls will fail (401). Set --mq-token or MQ_TOKEN env.");
+        }
+    }
 
     info!("════════════════════════════════════════");
     info!("Council Observer (Rust)");
