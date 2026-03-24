@@ -57,6 +57,10 @@ path = "src/bin/oracle_ingest.rs"
 name = "am-fleet-metrics"
 path = "src/bin/fleet_metrics.rs"
 
+[[bin]]
+name = "am-avatar"
+path = "src/bin/am_avatar.rs"
+
 [lib]
 name = "ming_qiao"
 path = "src/lib.rs"
@@ -108,6 +112,9 @@ quick-xml = "0.37"
 
 # Regex (CVE sweep keyword matching)
 regex = "1"
+
+# Secure credential storage
+keyring = "3"
 
 # URL encoding
 urlencoding = "2"

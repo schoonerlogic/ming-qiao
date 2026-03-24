@@ -2,6 +2,7 @@
 //!
 //! Collects infrastructure metrics for the AstralMaris Council fleet.
 //! Phase 1: Infrastructure metrics (no API keys needed)
+//! Phase 2: API cost tracking (provider billing stubs)
 //!
 //! Data sources:
 //! 1. ming-qiao message activity (SurrealDB query)
@@ -10,6 +11,7 @@
 //! 4. Fleet manifest (fleet-manifest.toml)
 //! 5. Handoff file freshness (last-handoff-{agent}.json)
 //! 6. Process uptime (cmux/launchd)
+//! 7. Provider billing APIs (Phase 2 - stubbed)
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Duration, Local, NaiveDate, Utc};
@@ -50,6 +52,9 @@ struct Args {
 
     #[arg(long, env = "SURREALDB_PASS")]
     surrealdb_pass: Option<String>,
+
+    #[arg(long, default_value = "/Users/proteus/astralmaris/astrallation/config/pricing.toml")]
+    pricing_config: PathBuf,
 }
 
 #[derive(Subcommand, Debug)]
@@ -135,6 +140,9 @@ struct AgentMetrics {
     wake_successes: u32,
     handoff_ready: bool,
     handoff_date: Option<String>,
+    input_tokens: Option<u64>,
+    output_tokens: Option<u64>,
+    estimated_cost_usd: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -153,6 +161,110 @@ struct FleetMetricsSnapshot {
     total_active: u32,
     total_dormant: u32,
     total_error: u32,
+    daily_cost_usd: Option<f64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct PricingConfig {
+    anthropic: HashMap<String, ModelPricing>,
+    google: HashMap<String, ModelPricing>,
+    openai: HashMap<String, ModelPricing>,
+    zai: HashMap<String, ModelPricing>,
+    ollama: HashMap<String, ModelPricing>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct ModelPricing {
+    input: f64,
+    output: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct UsageReport {
+    provider: String,
+    model: String,
+    input_tokens: u64,
+    output_tokens: u64,
+    cost_usd: f64,
+    period_start: DateTime<Utc>,
+    period_end: DateTime<Utc>,
+}
+
+trait ProviderBilling: Send + Sync {
+    fn provider_name(&self) -> &'static str;
+    fn get_usage(&self, start: DateTime<Utc>, end: DateTime<Utc>) -> Result<UsageReport>;
+}
+
+struct AnthropicBilling;
+struct GoogleBilling;
+struct OpenAIBilling;
+
+impl ProviderBilling for AnthropicBilling {
+    fn provider_name(&self) -> &'static str {
+        "anthropic"
+    }
+
+    fn get_usage(&self, _start: DateTime<Utc>, _end: DateTime<Utc>) -> Result<UsageReport> {
+        Ok(UsageReport {
+            provider: "anthropic".to_string(),
+            model: "stub".to_string(),
+            input_tokens: 0,
+            output_tokens: 0,
+            cost_usd: 0.0,
+            period_start: _start,
+            period_end: _end,
+        })
+    }
+}
+
+impl ProviderBilling for GoogleBilling {
+    fn provider_name(&self) -> &'static str {
+        "google"
+    }
+
+    fn get_usage(&self, _start: DateTime<Utc>, _end: DateTime<Utc>) -> Result<UsageReport> {
+        Ok(UsageReport {
+            provider: "google".to_string(),
+            model: "stub".to_string(),
+            input_tokens: 0,
+            output_tokens: 0,
+            cost_usd: 0.0,
+            period_start: _start,
+            period_end: _end,
+        })
+    }
+}
+
+impl ProviderBilling for OpenAIBilling {
+    fn provider_name(&self) -> &'static str {
+        "openai"
+    }
+
+    fn get_usage(&self, _start: DateTime<Utc>, _end: DateTime<Utc>) -> Result<UsageReport> {
+        Ok(UsageReport {
+            provider: "openai".to_string(),
+            model: "stub".to_string(),
+            input_tokens: 0,
+            output_tokens: 0,
+            cost_usd: 0.0,
+            period_start: _start,
+            period_end: _end,
+        })
+    }
+}
+
+fn load_pricing_config(path: &Path) -> Result<PricingConfig> {
+    let content = fs::read_to_string(path)
+        .with_context(|| format!("Failed to read pricing config: {:?}", path))?;
+    let config: PricingConfig = toml::from_str(&content)
+        .with_context(|| "Failed to parse pricing config TOML")?;
+    Ok(config)
+}
+
+fn calculate_cost(pricing: &ModelPricing, input_tokens: u64, output_tokens: u64) -> f64 {
+    let input_cost = (input_tokens as f64 / 1_000_000.0) * pricing.input;
+    let output_cost = (output_tokens as f64 / 1_000_000.0) * pricing.output;
+    input_cost + output_cost
 }
 
 fn parse_fleet_manifest(path: &Path) -> Result<FleetManifest> {
@@ -621,6 +733,9 @@ async fn main() -> Result<()> {
                     wake_successes,
                     handoff_ready: handoff.map(|h| h.ready_for_restart).unwrap_or(false),
                     handoff_date: handoff.map(|h| h.session_date.clone()),
+                    input_tokens: None,
+                    output_tokens: None,
+                    estimated_cost_usd: None,
                 };
                 
                 agents.push(agent_metrics);
@@ -637,6 +752,7 @@ async fn main() -> Result<()> {
                 total_active,
                 total_dormant,
                 total_error,
+                daily_cost_usd: None,
             };
             
             if store {
