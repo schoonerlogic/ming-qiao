@@ -299,7 +299,17 @@ fn resolve_agent_from_parts(parts: &http::request::Parts) -> Option<String> {
     let auth = parts.headers.get("authorization")?.to_str().ok()?;
     let token = auth.strip_prefix("Bearer ")?;
     if token.starts_with("mq-") {
-        let rest = &token[3..];
+        // Token format: mq-{agent_id}-{hex_hash}
+        // Agent IDs can contain hyphens (e.g., laozi-jung, hypatia-adjutant)
+        // The hash is always 32 hex chars. Find the last dash that precedes 32 hex chars.
+        let rest = &token[3..]; // strip "mq-"
+        if let Some(last_dash) = rest.rfind('-') {
+            let maybe_hash = &rest[last_dash + 1..];
+            if maybe_hash.len() == 32 && maybe_hash.chars().all(|c| c.is_ascii_hexdigit()) {
+                return Some(rest[..last_dash].to_string());
+            }
+        }
+        // Fallback: first dash (old behavior, wrong for hyphenated agent IDs)
         if let Some(dash_pos) = rest.find('-') {
             return Some(rest[..dash_pos].to_string());
         }

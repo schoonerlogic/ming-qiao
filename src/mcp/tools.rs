@@ -1216,14 +1216,30 @@ impl ToolRegistry {
             .get("thread_id")
             .and_then(|v| v.as_str())
             .ok_or_else(|| McpError::InvalidInput("'thread_id' is required".to_string()))?;
-        // from_agent in args (stdio path) or fall back to agent_id (streamable HTTP path,
-        // resolved from auth token)
+        // Identity resolution: prefer auth-resolved agent_id over LLM-provided from_agent.
+        // LLMs may truncate hyphenated names (e.g., "laozi" instead of "laozi-jung").
+        // Only use from_agent if agent_id is "unknown" (no auth available).
         let from_agent_owned;
-        let from_agent = match args.get("from_agent").and_then(|v| v.as_str()) {
-            Some(fa) => fa,
-            None => {
-                from_agent_owned = agent_id.to_string();
-                &from_agent_owned
+        let from_agent = if agent_id != "unknown" {
+            // Auth-resolved identity — authoritative
+            if let Some(fa) = args.get("from_agent").and_then(|v| v.as_str()) {
+                if fa != agent_id {
+                    tracing::warn!(
+                        auth_id = agent_id, claimed_id = fa,
+                        "from_agent mismatch — using auth-resolved identity"
+                    );
+                }
+            }
+            from_agent_owned = agent_id.to_string();
+            &from_agent_owned
+        } else {
+            // No auth — fall back to LLM-provided from_agent
+            match args.get("from_agent").and_then(|v| v.as_str()) {
+                Some(fa) => fa,
+                None => {
+                    from_agent_owned = agent_id.to_string();
+                    &from_agent_owned
+                }
             }
         };
         let content = args
